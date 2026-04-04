@@ -7,9 +7,17 @@ Author: Based on the TELECOM TOWER POWER narrative (formerly Mapa das Torres).
 
 import math
 import json
-from dataclasses import dataclass
+import struct
+import os
+import logging
+import urllib.request
+import urllib.error
+from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict
 from enum import Enum
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------
 # Data models
@@ -118,15 +126,183 @@ class LinkEngine:
         return tx_power_dbm + tx_gain_dbi + rx_gain_dbi - fspl - extra_loss_db
 
 # ------------------------------------------------------------
+# Terrain Elevation Service
+# ------------------------------------------------------------
+
+class TerrainService:
+    """
+    Fetch real ground-elevation profiles for point-to-point links.
+
+    Sources (tried in order):
+      1. Local SRTM .hgt tiles  (fastest, offline)
+      2. Open-Elevation REST API (free, no API key)
+
+    Usage:
+        ts = TerrainService(srtm_dir="./srtm_tiles")
+        profile = ts.profile(lat1, lon1, lat2, lon2, num_points=50)
+        # profile -> list of elevation floats (metres AMSL)
+    """
+
+    OPEN_ELEVATION_URL = "https://api.open-elevation.com/api/v1/lookup"
+    SRTM1_SAMPLES = 3601   # 1-arc-second tiles (3601 x 3601)
+    SRTM3_SAMPLES = 1201   # 3-arc-second tiles (1201 x 1201)
+
+    def __init__(self, srtm_dir: Optional[str] = None, api_url: Optional[str] = None,
+                 timeout_s: float = 10.0):
+        self.srtm_dir = Path(srtm_dir) if srtm_dir else None
+        self.api_url = api_url or self.OPEN_ELEVATION_URL
+        self.timeout_s = timeout_s
+        self._hgt_cache: Dict[str, Optional[bytes]] = {}
+
+    # -- path interpolation --------------------------------------------------
+
+    @staticmethod
+    def interpolate_path(lat1: float, lon1: float,
+                         lat2: float, lon2: float,
+                         num_points: int = 50) -> List[Tuple[float, float]]:
+        """Return *num_points* equally-spaced (lat, lon) along the great-circle arc."""
+        phi1, lam1 = math.radians(lat1), math.radians(lon1)
+        phi2, lam2 = math.radians(lat2), math.radians(lon2)
+
+        d = 2 * math.asin(math.sqrt(
+            math.sin((phi2 - phi1) / 2) ** 2 +
+            math.cos(phi1) * math.cos(phi2) * math.sin((lam2 - lam1) / 2) ** 2
+        ))
+        if d < 1e-12:
+            return [(lat1, lon1)] * num_points
+
+        points = []
+        for i in range(num_points):
+            f = i / (num_points - 1)
+            a = math.sin((1 - f) * d) / math.sin(d)
+            b = math.sin(f * d) / math.sin(d)
+            x = a * math.cos(phi1) * math.cos(lam1) + b * math.cos(phi2) * math.cos(lam2)
+            y = a * math.cos(phi1) * math.sin(lam1) + b * math.cos(phi2) * math.sin(lam2)
+            z = a * math.sin(phi1) + b * math.sin(phi2)
+            lat = math.degrees(math.atan2(z, math.sqrt(x ** 2 + y ** 2)))
+            lon = math.degrees(math.atan2(y, x))
+            points.append((lat, lon))
+        return points
+
+    # -- SRTM .hgt reader ----------------------------------------------------
+
+    def _hgt_filename(self, lat: float, lon: float) -> str:
+        """E.g. S16W048.hgt for lat=-15.78, lon=-47.93."""
+        ns = "N" if lat >= 0 else "S"
+        ew = "E" if lon >= 0 else "W"
+        return f"{ns}{abs(int(math.floor(lat))):02d}{ew}{abs(int(math.floor(lon))):03d}.hgt"
+
+    def _load_hgt(self, filename: str) -> Optional[bytes]:
+        if filename in self._hgt_cache:
+            return self._hgt_cache[filename]
+        if self.srtm_dir is None:
+            return None
+        path = self.srtm_dir / filename
+        if not path.is_file():
+            self._hgt_cache[filename] = None
+            return None
+        data = path.read_bytes()
+        self._hgt_cache[filename] = data
+        return data
+
+    def _read_hgt_elevation(self, lat: float, lon: float) -> Optional[float]:
+        """Read a single elevation from local SRTM .hgt tile."""
+        filename = self._hgt_filename(lat, lon)
+        data = self._load_hgt(filename)
+        if data is None:
+            return None
+
+        size = len(data)
+        if size == self.SRTM1_SAMPLES ** 2 * 2:
+            samples = self.SRTM1_SAMPLES
+        elif size == self.SRTM3_SAMPLES ** 2 * 2:
+            samples = self.SRTM3_SAMPLES
+        else:
+            logger.warning("Unexpected .hgt file size for %s: %d bytes", filename, size)
+            return None
+
+        lat_frac = lat - math.floor(lat)
+        lon_frac = lon - math.floor(lon)
+        row = int(round((1 - lat_frac) * (samples - 1)))
+        col = int(round(lon_frac * (samples - 1)))
+        row = max(0, min(samples - 1, row))
+        col = max(0, min(samples - 1, col))
+        offset = (row * samples + col) * 2
+        if offset + 2 > size:
+            return None
+        value = struct.unpack(">h", data[offset:offset + 2])[0]
+        if value == -32768:          # SRTM void
+            return None
+        return float(value)
+
+    def _elevations_from_srtm(self, points: List[Tuple[float, float]]) -> Optional[List[float]]:
+        """Try to resolve all points from local SRTM tiles; None if any tile is missing."""
+        elevations = []
+        for lat, lon in points:
+            h = self._read_hgt_elevation(lat, lon)
+            if h is None:
+                return None          # fall through to API
+            elevations.append(h)
+        return elevations
+
+    # -- Open-Elevation API ---------------------------------------------------
+
+    def _elevations_from_api(self, points: List[Tuple[float, float]]) -> List[float]:
+        """Query Open-Elevation (or compatible) for a batch of lat/lon points."""
+        locations = [{"latitude": lat, "longitude": lon} for lat, lon in points]
+        payload = json.dumps({"locations": locations}).encode("utf-8")
+
+        req = urllib.request.Request(
+            self.api_url,
+            data=payload,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
+            raise RuntimeError(f"Open-Elevation API request failed: {exc}") from exc
+
+        results = body.get("results")
+        if not results or len(results) != len(points):
+            raise RuntimeError("Unexpected response from Open-Elevation API")
+        return [r["elevation"] for r in results]
+
+    # -- public interface -----------------------------------------------------
+
+    def profile(self, lat1: float, lon1: float,
+                lat2: float, lon2: float,
+                num_points: int = 50) -> List[float]:
+        """
+        Return a terrain elevation profile (list of heights in metres AMSL)
+        along the straight line from (lat1, lon1) to (lat2, lon2).
+
+        Tries local SRTM tiles first, then falls back to the Open-Elevation API.
+        """
+        points = self.interpolate_path(lat1, lon1, lat2, lon2, num_points)
+
+        # Try local SRTM
+        elevations = self._elevations_from_srtm(points)
+        if elevations is not None:
+            logger.info("Terrain profile resolved from local SRTM tiles")
+            return elevations
+
+        # Fall back to API
+        logger.info("Fetching terrain profile from %s (%d points)", self.api_url, num_points)
+        return self._elevations_from_api(points)
+
+
+# ------------------------------------------------------------
 # Main Platform Class
 # ------------------------------------------------------------
 
 class TelecomTowerPower:
     """Main SaaS platform for cell tower coverage analysis and repeater planning."""
 
-    def __init__(self):
+    def __init__(self, srtm_dir: Optional[str] = None, elevation_api_url: Optional[str] = None):
         self.towers: Dict[str, Tower] = {}
-        self.dtm_cache = {}   # simple terrain cache (lat,lng) -> elevation
+        self.terrain = TerrainService(srtm_dir=srtm_dir, api_url=elevation_api_url)
 
     def add_tower(self, tower: Tower):
         self.towers[tower.id] = tower
@@ -148,10 +324,13 @@ class TelecomTowerPower:
         return [t for _, t in distances[:limit]]
 
     def analyze_link(self, tower: Tower, receiver: Receiver,
-                     terrain_profile: Optional[List[float]] = None) -> LinkResult:
+                     terrain_profile: Optional[List[float]] = None,
+                     terrain_points: int = 50) -> LinkResult:
         """
         Full point-to-point analysis including LOS, Fresnel clearance, and RSSI.
-        terrain_profile: list of ground heights (m) at equally spaced points along the path.
+
+        If *terrain_profile* is None the platform automatically fetches real
+        elevation data via SRTM tiles or the Open-Elevation API.
         """
         d_km = LinkEngine.haversine_km(tower.lat, tower.lon, receiver.lat, receiver.lon)
         f_hz = tower.bands[0].value  # use primary band
@@ -165,9 +344,25 @@ class TelecomTowerPower:
         # Terrain & LOS check
         los_ok = True
         fresnel_clear = 1.0
+
+        # Auto-fetch terrain if none supplied
+        if terrain_profile is None:
+            try:
+                terrain_profile = self.terrain.profile(
+                    tower.lat, tower.lon, receiver.lat, receiver.lon,
+                    num_points=terrain_points,
+                )
+            except RuntimeError as exc:
+                logger.warning("Could not fetch terrain: %s — assuming flat ground", exc)
+
         if terrain_profile:
+            # tower.height_m and receiver.height_m are above ground level (AGL).
+            # terrain_profile values are metres above mean sea level (AMSL).
+            # Convert antenna heights to AMSL for clearance calculation.
+            tx_h_amsl = terrain_profile[0] + tower.height_m
+            rx_h_amsl = terrain_profile[-1] + receiver.height_m
             fresnel_clear = LinkEngine.terrain_clearance(
-                terrain_profile, d_km, f_hz, tower.height_m, receiver.height_m
+                terrain_profile, d_km, f_hz, tx_h_amsl, rx_h_amsl
             )
             los_ok = fresnel_clear > 0.6   # rule of thumb: 60% clearance needed for reliable link
             if fresnel_clear < 0.6:
@@ -241,7 +436,8 @@ class TelecomTowerPower:
 # ------------------------------------------------------------
 
 if __name__ == "__main__":
-    platform = TelecomTowerPower()
+    # Point srtm_dir at a folder of .hgt tiles for offline use (optional).
+    platform = TelecomTowerPower(srtm_dir=os.environ.get("SRTM_DIR"))
 
     # Add a real tower (e.g., in rural Brazil)
     tower_agro = Tower(
@@ -261,13 +457,10 @@ if __name__ == "__main__":
         antenna_gain_dbi=15.0
     )
 
-    # Simulate terrain profile (heights in meters at 20 points along path)
-    # In reality, fetch from SRTM/GMTED. Here we create a mock profile with a hill.
-    terrain_profile = [850.0, 855.0, 860.0, 870.0, 880.0, 890.0, 900.0, 910.0, 905.0, 900.0,
-                       890.0, 880.0, 870.0, 860.0, 855.0, 850.0, 848.0, 845.0, 843.0, 840.0]
-
-    # Analyze link
-    result = platform.analyze_link(tower_agro, farm_receiver, terrain_profile)
+    # Terrain is now fetched automatically (SRTM tiles or Open-Elevation API).
+    # Pass terrain_profile=<list> to override with your own data.
+    print("Fetching real terrain elevation profile ...")
+    result = platform.analyze_link(tower_agro, farm_receiver)
 
     print("=== TELECOM TOWER POWER - Link Analysis ===")
     print(f"Distance: {result.distance_km:.2f} km")
