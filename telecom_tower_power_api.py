@@ -214,8 +214,11 @@ class TelecomTowerPower:
                 tower.lat, tower.lon, receiver.lat, receiver.lon
             )
         if terrain_profile:
+            # Convert AGL heights to ASL by adding ground elevation at each end
+            tx_h_asl = terrain_profile[0] + tower.height_m
+            rx_h_asl = terrain_profile[-1] + receiver.height_m
             fresnel_clear = LinkEngine.terrain_clearance(
-                terrain_profile, d_km, f_hz, tower.height_m, receiver.height_m
+                terrain_profile, d_km, f_hz, tx_h_asl, rx_h_asl
             )
             los_ok = fresnel_clear > 0.6   # 60% clearance needed for reliable link
             if fresnel_clear < 0.6:
