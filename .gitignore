@@ -3,6 +3,23 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Test/debug artifacts
+*.pdf
+*.png
+debug_*.png
+test_*.png
+test_*.pdf
+report*.pdf
+
+# Temp request/response JSON dumps
+body*.json
+post*.json
+get_*.json
+analyze*.json
+nearest*.json
+repeater*.json
+report_out.json
+
 # C extensions
 *.so
 

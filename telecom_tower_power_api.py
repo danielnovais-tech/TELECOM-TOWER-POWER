@@ -10,7 +10,6 @@ import math
 import json
 import asyncio
 import heapq
-import io
 import secrets
 from datetime import datetime, timezone
 
@@ -24,11 +23,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from pdf_generator import build_pdf_report
 
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
@@ -76,6 +71,9 @@ class LinkResult:
     los_ok: bool
     distance_km: float
     recommendation: str
+    terrain_profile: Optional[List[float]] = None
+    tx_height_asl: Optional[float] = None
+    rx_height_asl: Optional[float] = None
 
 # ------------------------------------------------------------
 # Propagation & Link Budget Engine
@@ -306,7 +304,10 @@ class TelecomTowerPower:
             fresnel_clearance=fresnel_clear,
             los_ok=los_ok,
             distance_km=d_km,
-            recommendation=recommendation
+            recommendation=recommendation,
+            terrain_profile=terrain_profile if terrain_profile else None,
+            tx_height_asl=tx_h_asl if terrain_profile else None,
+            rx_height_asl=rx_h_asl if terrain_profile else None,
         )
 
     async def plan_repeater_chain(self, start_tower: Tower, target_receiver: Receiver,
@@ -462,103 +463,6 @@ def require_tier(*allowed: Tier):
     return _check
 
 # ------------------------------------------------------------
-# PDF Report Generator
-# ------------------------------------------------------------
-
-class PDFReportGenerator:
-    @staticmethod
-    def generate(tower: Tower, receiver: Receiver, result: LinkResult) -> bytes:
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=A4,
-                                topMargin=20*mm, bottomMargin=20*mm,
-                                leftMargin=15*mm, rightMargin=15*mm)
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle('Title2', parent=styles['Title'], fontSize=20,
-                                     textColor=colors.HexColor('#1a237e'))
-        heading_style = ParagraphStyle('Heading', parent=styles['Heading2'],
-                                       textColor=colors.HexColor('#283593'))
-        elements = []
-
-        # Title
-        elements.append(Paragraph("TELECOM TOWER POWER", title_style))
-        elements.append(Paragraph("Engineering Link Analysis Report", styles['Heading3']))
-        elements.append(Spacer(1, 8*mm))
-
-        # Metadata
-        elements.append(Paragraph(
-            f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
-            styles['Normal']))
-        elements.append(Spacer(1, 6*mm))
-
-        table_base_style = TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a237e')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
-        ])
-
-        # Tower info table
-        elements.append(Paragraph("Tower Information", heading_style))
-        tower_data = [
-            ["Parameter", "Value"],
-            ["ID", tower.id],
-            ["Location", f"{tower.lat:.5f}, {tower.lon:.5f}"],
-            ["Height (AGL)", f"{tower.height_m:.1f} m"],
-            ["Operator", tower.operator],
-            ["Bands", ", ".join(b.value if hasattr(b, 'value') else str(b) for b in tower.bands)],
-            ["TX Power", f"{tower.power_dbm:.1f} dBm"],
-        ]
-        t1 = Table(tower_data, colWidths=[55*mm, 110*mm])
-        t1.setStyle(table_base_style)
-        elements.append(t1)
-        elements.append(Spacer(1, 6*mm))
-
-        # Receiver info table
-        elements.append(Paragraph("Receiver Information", heading_style))
-        rx_data = [
-            ["Parameter", "Value"],
-            ["Location", f"{receiver.lat:.5f}, {receiver.lon:.5f}"],
-            ["Height (AGL)", f"{receiver.height_m:.1f} m"],
-            ["Antenna Gain", f"{receiver.antenna_gain_dbi:.1f} dBi"],
-        ]
-        t2 = Table(rx_data, colWidths=[55*mm, 110*mm])
-        t2.setStyle(table_base_style)
-        elements.append(t2)
-        elements.append(Spacer(1, 6*mm))
-
-        # Analysis results table
-        elements.append(Paragraph("Link Analysis Results", heading_style))
-        status_color = '#2e7d32' if result.feasible else '#c62828'
-        analysis_data = [
-            ["Metric", "Value"],
-            ["Feasible", "YES" if result.feasible else "NO"],
-            ["Distance", f"{result.distance_km:.2f} km"],
-            ["Signal (RSSI)", f"{result.signal_dbm:.1f} dBm"],
-            ["Fresnel Clearance", f"{result.fresnel_clearance:.3f}"],
-            ["Line of Sight", "Clear" if result.los_ok else "Obstructed"],
-        ]
-        t3 = Table(analysis_data, colWidths=[55*mm, 110*mm])
-        t3.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a237e')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('TEXTCOLOR', (1, 1), (1, 1), colors.HexColor(status_color)),
-            ('FONTNAME', (1, 1), (1, 1), 'Helvetica-Bold'),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
-        ]))
-        elements.append(t3)
-        elements.append(Spacer(1, 6*mm))
-
-        # Recommendation
-        elements.append(Paragraph("Recommendation", heading_style))
-        elements.append(Paragraph(result.recommendation, styles['Normal']))
-
-        doc.build(elements)
-        return buf.getvalue()
-
-# ------------------------------------------------------------
 # FastAPI application
 # ------------------------------------------------------------
 
@@ -602,6 +506,9 @@ class LinkAnalysisResponse(BaseModel):
     los_ok: bool
     distance_km: float
     recommendation: str
+    terrain_profile: Optional[List[float]] = None
+    tx_height_asl: Optional[float] = None
+    rx_height_asl: Optional[float] = None
 
 @app.get("/")
 async def root():
@@ -679,20 +586,27 @@ async def plan_repeater(tower_id: str, receiver: ReceiverInput, max_hops: int = 
 
 @app.get("/export_report")
 async def export_report(tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(verify_api_key)):
-    """Generate a JSON engineering report for a given tower and receiver location."""
+    """Generate a professional PDF engineering report."""
     tower = platform.towers.get(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     rx = Receiver(lat=lat, lon=lon, height_m=height_m, antenna_gain_dbi=antenna_gain)
-    result = await platform.analyze_link(tower, rx)
-    report = {
-        "platform": "TELECOM TOWER POWER",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "tower": asdict(tower),
-        "receiver": asdict(rx),
-        "analysis": asdict(result)
-    }
-    return report
+
+    # Fetch real terrain profile (async)
+    terrain_profile = await platform.elevation.get_profile(tower.lat, tower.lon, rx.lat, rx.lon)
+    result = await platform.analyze_link(tower, rx, terrain_profile=terrain_profile)
+
+    # Get primary frequency in MHz
+    freq_mhz = tower.primary_freq_hz() / 1e6
+
+    # Build PDF
+    pdf_buffer = build_pdf_report(tower, rx, result, terrain_profile, freq_mhz)
+
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=report_{tower_id}.pdf"}
+    )
 
 @app.get("/export_report/pdf")
 async def export_report_pdf(tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
@@ -701,10 +615,14 @@ async def export_report_pdf(tower_id: str, lat: float, lon: float, height_m: flo
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     rx = Receiver(lat=lat, lon=lon, height_m=height_m, antenna_gain_dbi=antenna_gain)
-    result = await platform.analyze_link(tower, rx)
-    pdf_bytes = PDFReportGenerator.generate(tower, rx, result)
+
+    terrain_profile = await platform.elevation.get_profile(tower.lat, tower.lon, rx.lat, rx.lon)
+    result = await platform.analyze_link(tower, rx, terrain_profile=terrain_profile)
+    freq_mhz = tower.primary_freq_hz() / 1e6
+    pdf_buffer = build_pdf_report(tower, rx, result, terrain_profile, freq_mhz)
+
     return StreamingResponse(
-        io.BytesIO(pdf_bytes),
+        pdf_buffer,
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=report_{tower_id}.pdf"}
     )
