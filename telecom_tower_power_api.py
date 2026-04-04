@@ -21,6 +21,7 @@ from enum import Enum
 from fastapi import FastAPI, HTTPException, Query, Depends, Security
 from fastapi.security import APIKeyHeader
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 from reportlab.lib.pagesizes import A4
@@ -511,6 +512,14 @@ app = FastAPI(
     title="TELECOM TOWER POWER API",
     description="Cell tower coverage, link analysis, and repeater planning. "
                 "Requires an API key via the `X-API-Key` header.",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Global platform instance
