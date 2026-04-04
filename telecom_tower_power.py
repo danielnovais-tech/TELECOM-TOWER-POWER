@@ -81,7 +81,7 @@ class LinkEngine:
         d = d_km * 1000
         d1 = d1_km * 1000
         d2 = d2_km * 1000
-        return math.sqrt((f_hz * d1 * d2) / ((d1 + d2) * 299792458))  # simplified
+        return math.sqrt((299792458 * d1 * d2) / (f_hz * (d1 + d2)))  # r1 = sqrt(c*d1*d2 / (f*(d1+d2)))
 
     @staticmethod
     def terrain_clearance(terrain_profile: List[float], d_km: float, f_hz: float, tx_h: float, rx_h: float) -> float:
@@ -169,7 +169,7 @@ class TelecomTowerPower:
             fresnel_clear = LinkEngine.terrain_clearance(
                 terrain_profile, d_km, f_hz, tower.height_m, receiver.height_m
             )
-            los_ok = fresnel_clear > 0.3   # rule of thumb: 60% clearance needed for reliable link
+            los_ok = fresnel_clear > 0.6   # rule of thumb: 60% clearance needed for reliable link
             if fresnel_clear < 0.6:
                 rssi -= (0.6 - fresnel_clear) * 10  # empirical extra loss due to obstruction
 
