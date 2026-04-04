@@ -549,6 +549,16 @@ class LinkAnalysisResponse(BaseModel):
     distance_km: float
     recommendation: str
 
+@app.get("/")
+async def root():
+    """Health check and API overview."""
+    return {
+        "service": "TELECOM TOWER POWER API",
+        "status": "online",
+        "docs": "/docs",
+        "endpoints": ["/towers", "/towers/nearest", "/analyze", "/plan_repeater", "/export_report", "/export_report/pdf"],
+    }
+
 @app.on_event("startup")
 async def startup():
     # Optionally pre-load some towers from a file
