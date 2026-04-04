@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: telecom-tower-power-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.10"
+    plan: free
+
+  - type: web
+    name: telecom-tower-power-ui
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run frontend.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.10"
+      - key: API_BASE_URL
+        value: https://telecom-tower-power-api.onrender.com
+    plan: free

@@ -1,0 +1,481 @@
+"""
+telecom_tower_power.py
+Professional telecom engineering platform for cell tower coverage analysis.
+Focus: rural areas, fixed wireless access (FWA), repeater tower planning.
+Author: Based on the TELECOM TOWER POWER narrative (formerly Mapa das Torres).
+"""
+
+import math
+import json
+import struct
+import os
+import logging
+import urllib.request
+import urllib.error
+from dataclasses import dataclass, field
+from typing import List, Tuple, Optional, Dict
+from enum import Enum
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------
+# Data models
+# ------------------------------------------------------------
+
+class Band(Enum):
+    BAND_700 = 700e6   # 700 MHz - good range
+    BAND_1800 = 1.8e9  # 1800 MHz
+    BAND_2600 = 2.6e9  # 2600 MHz
+    BAND_3500 = 3.5e9  # 3.5 GHz - 5G
+
+@dataclass
+class Tower:
+    id: str
+    lat: float
+    lon: float
+    height_m: float          # antenna height above ground
+    operator: str            # Vivo, Claro, TIM, etc.
+    bands: List[Band]
+    power_dbm: float = 43.0  # typical eirp per band (dBm)
+    frequency_mhz: float = None  # auto-set from primary band
+
+    def __post_init__(self):
+        if self.frequency_mhz is None and self.bands:
+            self.frequency_mhz = self.bands[0].value / 1e6
+
+@dataclass
+class Receiver:
+    lat: float
+    lon: float
+    height_m: float = 10.0    # typical antenna mast height for rural
+    antenna_gain_dbi: float = 12.0
+
+@dataclass
+class LinkResult:
+    feasible: bool
+    signal_dbm: float         # received signal strength
+    fresnel_clearance: float  # fraction of first Fresnel zone cleared
+    los_ok: bool
+    distance_km: float
+    recommendation: str
+
+# ------------------------------------------------------------
+# Propagation & Link Budget Engine
+# ------------------------------------------------------------
+
+class LinkEngine:
+    """Calculate point-to-point link budget using ITU-R P.526 (LOS) and free-space + terrain."""
+
+    @staticmethod
+    def haversine_km(lat1, lon1, lat2, lon2):
+        R = 6371.0
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+        a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+    @staticmethod
+    def free_space_path_loss(d_km, f_hz):
+        """FSPL in dB."""
+        d_m = d_km * 1000
+        return 20 * math.log10(d_m) + 20 * math.log10(f_hz) - 147.55
+
+    @staticmethod
+    def fresnel_radius(d_km, f_hz, d1_km, d2_km):
+        """First Fresnel zone radius (meters) at a point along the path."""
+        d = d_km * 1000
+        d1 = d1_km * 1000
+        d2 = d2_km * 1000
+        return math.sqrt((299792458 * d1 * d2) / (f_hz * (d1 + d2)))  # r1 = sqrt(c*d1*d2 / (f*(d1+d2)))
+
+    @staticmethod
+    def terrain_clearance(terrain_profile: List[float], d_km: float, f_hz: float, tx_h: float, rx_h: float) -> float:
+        """
+        Simplified terrain clearance check.
+        Returns minimum fraction of first Fresnel zone clearance (0 to 1+).
+        Assumes terrain_profile is list of heights (m) at equally spaced points.
+        """
+        n = len(terrain_profile)
+        if n < 2:
+            return 1.0
+        step = d_km / (n - 1)
+        min_clearance = float('inf')
+        for i, ground_h in enumerate(terrain_profile):
+            d_i = i * step
+            # straight line height between tx and rx at distance d_i
+            line_h = tx_h + (rx_h - tx_h) * (d_i / d_km)
+            clearance = line_h - ground_h
+            # compute Fresnel radius at this point
+            d1 = d_i
+            d2 = d_km - d_i
+            if d1 <= 0 or d2 <= 0:
+                continue
+            fresnel_r = LinkEngine.fresnel_radius(d_km, f_hz, d1, d2)
+            if fresnel_r > 0:
+                min_clearance = min(min_clearance, clearance / fresnel_r)
+        return min_clearance if min_clearance != float('inf') else 1.0
+
+    @staticmethod
+    def estimate_signal(tx_power_dbm: float, tx_gain_dbi: float, rx_gain_dbi: float,
+                        f_hz: float, d_km: float, extra_loss_db: float = 0.0) -> float:
+        """Received signal power in dBm."""
+        fspl = LinkEngine.free_space_path_loss(d_km, f_hz)
+        return tx_power_dbm + tx_gain_dbi + rx_gain_dbi - fspl - extra_loss_db
+
+# ------------------------------------------------------------
+# Terrain Elevation Service
+# ------------------------------------------------------------
+
+class TerrainService:
+    """
+    Fetch real ground-elevation profiles for point-to-point links.
+
+    Sources (tried in order):
+      1. Local SRTM .hgt tiles  (fastest, offline)
+      2. Open-Elevation REST API (free, no API key)
+
+    Usage:
+        ts = TerrainService(srtm_dir="./srtm_tiles")
+        profile = ts.profile(lat1, lon1, lat2, lon2, num_points=50)
+        # profile -> list of elevation floats (metres AMSL)
+    """
+
+    OPEN_ELEVATION_URL = "https://api.open-elevation.com/api/v1/lookup"
+    SRTM1_SAMPLES = 3601   # 1-arc-second tiles (3601 x 3601)
+    SRTM3_SAMPLES = 1201   # 3-arc-second tiles (1201 x 1201)
+
+    def __init__(self, srtm_dir: Optional[str] = None, api_url: Optional[str] = None,
+                 timeout_s: float = 10.0):
+        self.srtm_dir = Path(srtm_dir) if srtm_dir else None
+        self.api_url = api_url or self.OPEN_ELEVATION_URL
+        self.timeout_s = timeout_s
+        self._hgt_cache: Dict[str, Optional[bytes]] = {}
+
+    # -- path interpolation --------------------------------------------------
+
+    @staticmethod
+    def interpolate_path(lat1: float, lon1: float,
+                         lat2: float, lon2: float,
+                         num_points: int = 50) -> List[Tuple[float, float]]:
+        """Return *num_points* equally-spaced (lat, lon) along the great-circle arc."""
+        phi1, lam1 = math.radians(lat1), math.radians(lon1)
+        phi2, lam2 = math.radians(lat2), math.radians(lon2)
+
+        d = 2 * math.asin(math.sqrt(
+            math.sin((phi2 - phi1) / 2) ** 2 +
+            math.cos(phi1) * math.cos(phi2) * math.sin((lam2 - lam1) / 2) ** 2
+        ))
+        if d < 1e-12:
+            return [(lat1, lon1)] * num_points
+
+        points = []
+        for i in range(num_points):
+            f = i / (num_points - 1)
+            a = math.sin((1 - f) * d) / math.sin(d)
+            b = math.sin(f * d) / math.sin(d)
+            x = a * math.cos(phi1) * math.cos(lam1) + b * math.cos(phi2) * math.cos(lam2)
+            y = a * math.cos(phi1) * math.sin(lam1) + b * math.cos(phi2) * math.sin(lam2)
+            z = a * math.sin(phi1) + b * math.sin(phi2)
+            lat = math.degrees(math.atan2(z, math.sqrt(x ** 2 + y ** 2)))
+            lon = math.degrees(math.atan2(y, x))
+            points.append((lat, lon))
+        return points
+
+    # -- SRTM .hgt reader ----------------------------------------------------
+
+    def _hgt_filename(self, lat: float, lon: float) -> str:
+        """E.g. S16W048.hgt for lat=-15.78, lon=-47.93."""
+        ns = "N" if lat >= 0 else "S"
+        ew = "E" if lon >= 0 else "W"
+        return f"{ns}{abs(int(math.floor(lat))):02d}{ew}{abs(int(math.floor(lon))):03d}.hgt"
+
+    def _load_hgt(self, filename: str) -> Optional[bytes]:
+        if filename in self._hgt_cache:
+            return self._hgt_cache[filename]
+        if self.srtm_dir is None:
+            return None
+        path = self.srtm_dir / filename
+        if not path.is_file():
+            self._hgt_cache[filename] = None
+            return None
+        data = path.read_bytes()
+        self._hgt_cache[filename] = data
+        return data
+
+    def _read_hgt_elevation(self, lat: float, lon: float) -> Optional[float]:
+        """Read a single elevation from local SRTM .hgt tile."""
+        filename = self._hgt_filename(lat, lon)
+        data = self._load_hgt(filename)
+        if data is None:
+            return None
+
+        size = len(data)
+        if size == self.SRTM1_SAMPLES ** 2 * 2:
+            samples = self.SRTM1_SAMPLES
+        elif size == self.SRTM3_SAMPLES ** 2 * 2:
+            samples = self.SRTM3_SAMPLES
+        else:
+            logger.warning("Unexpected .hgt file size for %s: %d bytes", filename, size)
+            return None
+
+        lat_frac = lat - math.floor(lat)
+        lon_frac = lon - math.floor(lon)
+        row = int(round((1 - lat_frac) * (samples - 1)))
+        col = int(round(lon_frac * (samples - 1)))
+        row = max(0, min(samples - 1, row))
+        col = max(0, min(samples - 1, col))
+        offset = (row * samples + col) * 2
+        if offset + 2 > size:
+            return None
+        value = struct.unpack(">h", data[offset:offset + 2])[0]
+        if value == -32768:          # SRTM void
+            return None
+        return float(value)
+
+    def _elevations_from_srtm(self, points: List[Tuple[float, float]]) -> Optional[List[float]]:
+        """Try to resolve all points from local SRTM tiles; None if any tile is missing."""
+        elevations = []
+        for lat, lon in points:
+            h = self._read_hgt_elevation(lat, lon)
+            if h is None:
+                return None          # fall through to API
+            elevations.append(h)
+        return elevations
+
+    # -- Open-Elevation API ---------------------------------------------------
+
+    def _elevations_from_api(self, points: List[Tuple[float, float]]) -> List[float]:
+        """Query Open-Elevation (or compatible) for a batch of lat/lon points."""
+        locations = [{"latitude": lat, "longitude": lon} for lat, lon in points]
+        payload = json.dumps({"locations": locations}).encode("utf-8")
+
+        req = urllib.request.Request(
+            self.api_url,
+            data=payload,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
+            raise RuntimeError(f"Open-Elevation API request failed: {exc}") from exc
+
+        results = body.get("results")
+        if not results or len(results) != len(points):
+            raise RuntimeError("Unexpected response from Open-Elevation API")
+        return [r["elevation"] for r in results]
+
+    # -- public interface -----------------------------------------------------
+
+    def profile(self, lat1: float, lon1: float,
+                lat2: float, lon2: float,
+                num_points: int = 50) -> List[float]:
+        """
+        Return a terrain elevation profile (list of heights in metres AMSL)
+        along the straight line from (lat1, lon1) to (lat2, lon2).
+
+        Tries local SRTM tiles first, then falls back to the Open-Elevation API.
+        """
+        points = self.interpolate_path(lat1, lon1, lat2, lon2, num_points)
+
+        # Try local SRTM
+        elevations = self._elevations_from_srtm(points)
+        if elevations is not None:
+            logger.info("Terrain profile resolved from local SRTM tiles")
+            return elevations
+
+        # Fall back to API
+        logger.info("Fetching terrain profile from %s (%d points)", self.api_url, num_points)
+        return self._elevations_from_api(points)
+
+
+# ------------------------------------------------------------
+# Main Platform Class
+# ------------------------------------------------------------
+
+class TelecomTowerPower:
+    """Main SaaS platform for cell tower coverage analysis and repeater planning."""
+
+    def __init__(self, srtm_dir: Optional[str] = None, elevation_api_url: Optional[str] = None):
+        self.towers: Dict[str, Tower] = {}
+        self.terrain = TerrainService(srtm_dir=srtm_dir, api_url=elevation_api_url)
+
+    def add_tower(self, tower: Tower):
+        self.towers[tower.id] = tower
+
+    def load_towers_from_geojson(self, filepath: str):
+        """Load towers from a GeoJSON file (simulated)."""
+        # In real implementation, read GeoJSON with lat/lon and properties.
+        pass
+
+    def find_nearest_towers(self, lat: float, lon: float, operator: Optional[str] = None, limit: int = 5) -> List[Tower]:
+        """Return nearest towers sorted by distance."""
+        distances = []
+        for tower in self.towers.values():
+            if operator and tower.operator != operator:
+                continue
+            d = LinkEngine.haversine_km(lat, lon, tower.lat, tower.lon)
+            distances.append((d, tower))
+        distances.sort(key=lambda x: x[0])
+        return [t for _, t in distances[:limit]]
+
+    def analyze_link(self, tower: Tower, receiver: Receiver,
+                     terrain_profile: Optional[List[float]] = None,
+                     terrain_points: int = 50) -> LinkResult:
+        """
+        Full point-to-point analysis including LOS, Fresnel clearance, and RSSI.
+
+        If *terrain_profile* is None the platform automatically fetches real
+        elevation data via SRTM tiles or the Open-Elevation API.
+        """
+        d_km = LinkEngine.haversine_km(tower.lat, tower.lon, receiver.lat, receiver.lon)
+        f_hz = tower.bands[0].value  # use primary band
+
+        # Estimate received signal (free-space base)
+        # Assume tower antenna gain ~17 dBi typical for sectorial, receiver gain given
+        tx_gain = 17.0
+        rx_gain = receiver.antenna_gain_dbi
+        rssi = LinkEngine.estimate_signal(tower.power_dbm, tx_gain, rx_gain, f_hz, d_km)
+
+        # Terrain & LOS check
+        los_ok = True
+        fresnel_clear = 1.0
+
+        # Auto-fetch terrain if none supplied
+        if terrain_profile is None:
+            try:
+                terrain_profile = self.terrain.profile(
+                    tower.lat, tower.lon, receiver.lat, receiver.lon,
+                    num_points=terrain_points,
+                )
+            except RuntimeError as exc:
+                logger.warning("Could not fetch terrain: %s — assuming flat ground", exc)
+
+        if terrain_profile:
+            # tower.height_m and receiver.height_m are above ground level (AGL).
+            # terrain_profile values are metres above mean sea level (AMSL).
+            # Convert antenna heights to AMSL for clearance calculation.
+            tx_h_amsl = terrain_profile[0] + tower.height_m
+            rx_h_amsl = terrain_profile[-1] + receiver.height_m
+            fresnel_clear = LinkEngine.terrain_clearance(
+                terrain_profile, d_km, f_hz, tx_h_amsl, rx_h_amsl
+            )
+            los_ok = fresnel_clear > 0.6   # rule of thumb: 60% clearance needed for reliable link
+            if fresnel_clear < 0.6:
+                rssi -= (0.6 - fresnel_clear) * 10  # empirical extra loss due to obstruction
+
+        feasible = los_ok and (rssi > -95)   # -95 dBm threshold for 4G/5G reliable
+
+        # Recommendation for repeater tower planning
+        if not los_ok:
+            recommendation = (
+                f"Insufficient Fresnel clearance ({fresnel_clear:.2f}). "
+                f"Increase receiver height to > {tower.height_m + 10:.0f}m or move tower."
+            )
+        elif rssi < -95:
+            recommendation = (
+                f"Signal too low ({rssi:.1f} dBm). "
+                f"Consider higher gain antenna or use a repeater tower at distance {d_km/2:.1f}km."
+            )
+        else:
+            recommendation = f"Good link. RSSI = {rssi:.1f} dBm. Clear LOS."
+
+        return LinkResult(
+            feasible=feasible,
+            signal_dbm=rssi,
+            fresnel_clearance=fresnel_clear,
+            los_ok=los_ok,
+            distance_km=d_km,
+            recommendation=recommendation
+        )
+
+    def plan_repeater_chain(self, start_tower: Tower, target_receiver: Receiver,
+                            max_hops: int = 3, min_rssi_db: float = -85) -> List[Tower]:
+        """
+        Suggest intermediate repeater tower positions (simplified greedy algorithm).
+        Returns list of tower positions (including start_tower) that can reach target.
+        """
+        # This is a high-level planning function: given no existing towers, propose new sites.
+        # For MVP, just return start_tower and a mock intermediate.
+        result = [start_tower]
+        # logic: find point halfway where LOS is feasible and signal > threshold
+        # In real implementation, would iterate over terrain and propose lat/lon.
+        # Here we simulate:
+        mid_lat = (start_tower.lat + target_receiver.lat) / 2
+        mid_lon = (start_tower.lon + target_receiver.lon) / 2
+        intermediate = Tower(
+            id="proposed_repeater_1",
+            lat=mid_lat, lon=mid_lon, height_m=40.0,
+            operator=start_tower.operator, bands=start_tower.bands, power_dbm=43.0
+        )
+        result.append(intermediate)
+        return result
+
+    def export_report(self, link_result: LinkResult, tower: Tower, receiver: Receiver) -> str:
+        """Generate a professional PDF-ready report (JSON summary here)."""
+        report = {
+            "platform": "TELECOM TOWER POWER",
+            "tower_id": tower.id,
+            "tower_location": {"lat": tower.lat, "lon": tower.lon},
+            "receiver_location": {"lat": receiver.lat, "lon": receiver.lon},
+            "distance_km": round(link_result.distance_km, 2),
+            "signal_dbm": round(link_result.signal_dbm, 1),
+            "los_ok": link_result.los_ok,
+            "fresnel_clearance_pct": round(link_result.fresnel_clearance * 100, 1),
+            "feasible": link_result.feasible,
+            "recommendation": link_result.recommendation
+        }
+        return json.dumps(report, indent=2)
+
+# ------------------------------------------------------------
+# Example usage (simulating a rural repeater project)
+# ------------------------------------------------------------
+
+if __name__ == "__main__":
+    # Point srtm_dir at a folder of .hgt tiles for offline use (optional).
+    platform = TelecomTowerPower(srtm_dir=os.environ.get("SRTM_DIR"))
+
+    # Add a real tower (e.g., in rural Brazil)
+    tower_agro = Tower(
+        id="VIVO_AGRO_001",
+        lat=-15.7801, lon=-47.9292,  # near Brasília
+        height_m=45.0,
+        operator="Vivo",
+        bands=[Band.BAND_700, Band.BAND_1800],
+        power_dbm=46.0
+    )
+    platform.add_tower(tower_agro)
+
+    # Receiver at a farm 12 km away
+    farm_receiver = Receiver(
+        lat=-15.8500, lon=-47.8100,
+        height_m=12.0,
+        antenna_gain_dbi=15.0
+    )
+
+    # Terrain is now fetched automatically (SRTM tiles or Open-Elevation API).
+    # Pass terrain_profile=<list> to override with your own data.
+    print("Fetching real terrain elevation profile ...")
+    result = platform.analyze_link(tower_agro, farm_receiver)
+
+    print("=== TELECOM TOWER POWER - Link Analysis ===")
+    print(f"Distance: {result.distance_km:.2f} km")
+    print(f"LOS OK: {result.los_ok}")
+    print(f"Fresnel clearance: {result.fresnel_clearance*100:.1f}%")
+    print(f"Estimated RSSI: {result.signal_dbm:.1f} dBm")
+    print(f"Feasible: {result.feasible}")
+    print(f"Recommendation: {result.recommendation}")
+
+    # Generate report
+    report_json = platform.export_report(result, tower_agro, farm_receiver)
+    print("\n--- Engineering Report (JSON) ---")
+    print(report_json)
+
+    # Repeater planning suggestion
+    print("\n--- Repeater Chain Proposal ---")
+    chain = platform.plan_repeater_chain(tower_agro, farm_receiver)
+    print(f"Suggested repeater tower at: ({chain[1].lat:.4f}, {chain[1].lon:.4f}), height {chain[1].height_m}m")
