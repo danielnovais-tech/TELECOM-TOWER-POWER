@@ -157,9 +157,10 @@ class ElevationService:
             return self.cache[key]
 
         session = await self._get_session()
-        url = f"https://api.open-elevation.com/api/v1/lookup?locations={lat},{lon}"
+        url = "https://api.open-elevation.com/api/v1/lookup"
         try:
-            async with session.get(url, timeout=10) as resp:
+            payload = {"locations": [{"latitude": lat, "longitude": lon}]}
+            async with session.post(url, json=payload, timeout=30) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     elev = data['results'][0]['elevation']
@@ -167,20 +168,73 @@ class ElevationService:
                     return elev
         except Exception:
             pass
-        # fallback: approximate from SRTM? return 0 (sea level) as last resort
         self.cache[key] = 0.0
         return 0.0
 
     async def get_profile(self, lat1: float, lon1: float, lat2: float, lon2: float,
                           num_points: int = 30) -> List[float]:
-        """Return a list of ground heights (m) along the great-circle path."""
-        heights = []
+        """Return a list of ground heights (m) along the great-circle path.
+        Uses a single batch API call for efficiency and reliability."""
+        # Build list of points
+        points = []
         for i in range(num_points):
             frac = i / (num_points - 1)
             lat = lat1 + (lat2 - lat1) * frac
             lon = lon1 + (lon2 - lon1) * frac
-            h = await self.get_elevation(lat, lon)
-            heights.append(h)
+            points.append((round(lat, 5), round(lon, 5)))
+
+        # Check cache for all points
+        uncached_indices = []
+        heights = [None] * num_points
+        for i, (lat, lon) in enumerate(points):
+            cached = self.cache.get((lat, lon))
+            if cached is not None:
+                heights[i] = cached
+            else:
+                uncached_indices.append(i)
+
+        # Batch fetch uncached points in a single API call
+        if uncached_indices:
+            session = await self._get_session()
+            locations = [{"latitude": points[i][0], "longitude": points[i][1]}
+                         for i in uncached_indices]
+            url = "https://api.open-elevation.com/api/v1/lookup"
+            try:
+                payload = {"locations": locations}
+                async with session.post(url, json=payload, timeout=60) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for j, idx in enumerate(uncached_indices):
+                            elev = data['results'][j]['elevation']
+                            self.cache[points[idx]] = elev
+                            heights[idx] = elev
+            except Exception:
+                pass
+
+        # Fill any remaining None with interpolation from neighbors, or 0
+        for i in range(num_points):
+            if heights[i] is None:
+                # Try to interpolate from nearest known neighbors
+                left = right = None
+                for l in range(i - 1, -1, -1):
+                    if heights[l] is not None:
+                        left = (l, heights[l])
+                        break
+                for r in range(i + 1, num_points):
+                    if heights[r] is not None:
+                        right = (r, heights[r])
+                        break
+                if left and right:
+                    frac = (i - left[0]) / (right[0] - left[0])
+                    heights[i] = left[1] + (right[1] - left[1]) * frac
+                elif left:
+                    heights[i] = left[1]
+                elif right:
+                    heights[i] = right[1]
+                else:
+                    heights[i] = 0.0
+                self.cache[points[i]] = heights[i]
+
         return heights
 
     async def close(self):
