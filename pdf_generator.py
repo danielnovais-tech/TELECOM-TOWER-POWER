@@ -40,67 +40,58 @@ def generate_fresnel_plot(
     frequency_hz: float,
     num_points: int = 100
 ) -> io.BytesIO:
-    """
-    Create a matplotlib figure showing:
-      - Ground elevation along path (ASL)
-      - Straight line between TX and RX antennas (ASL)
-      - First Fresnel zone (radius around line-of-sight)
-    tx_height / rx_height are AGL (above ground level).
-    Returns BytesIO buffer with PNG image.
-    """
-    # Create distance array (km)
-    distances = np.linspace(0, distance_km, num_points)
-    # Interpolate terrain profile (if profile has fewer points)
-    if len(terrain_profile) != num_points:
-        x_orig = np.linspace(0, distance_km, len(terrain_profile))
-        ground = np.interp(distances, x_orig, terrain_profile)
-    else:
-        ground = np.array(terrain_profile)
-
-    # Convert AGL heights to ASL by adding ground elevation at each endpoint
-    tx_asl = ground[0] + tx_height
-    rx_asl = ground[-1] + rx_height
-
-    # Line-of-sight height at each distance (ASL)
-    los_height = tx_asl + (rx_asl - tx_asl) * (distances / distance_km)
-
-    # First Fresnel zone radius at each point (meters)
-    fresnel_radius = np.zeros_like(distances)
-    c = 299792458
-    for i, d in enumerate(distances):
-        d1 = d * 1000
-        d2 = (distance_km - d) * 1000
-        if d1 > 0 and d2 > 0:
-            fresnel_radius[i] = math.sqrt((c * d1 * d2) / (frequency_hz * (d1 + d2)))
-        else:
-            fresnel_radius[i] = 0
-
-    # Upper and lower boundaries of first Fresnel zone (relative to LOS)
-    upper_fresnel = los_height + fresnel_radius
-    lower_fresnel = los_height - fresnel_radius
-
-    # Create plot
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.fill_between(distances, ground, ground.min() - 20, color='sandybrown', alpha=0.6, label='Terrain')
-    ax.plot(distances, ground, 'brown', linewidth=1)
-    ax.plot(distances, los_height, 'b--', linewidth=2, label='Line-of-sight')
-    ax.fill_between(distances, lower_fresnel, upper_fresnel, color='green', alpha=0.3, label='1st Fresnel Zone')
-    ax.plot(0, tx_asl, '^', color='red', markersize=10, zorder=5, label='Tower')
-    ax.plot(distance_km, rx_asl, 'v', color='darkgreen', markersize=10, zorder=5, label='Receiver')
-    ax.set_xlabel('Distance (km)')
-    ax.set_ylabel('Elevation ASL (m)')
-    ax.set_title('Terrain Profile & Fresnel Zone Clearance')
-    ax.legend(loc='upper right')
-    ax.grid(True, linestyle=':', alpha=0.6)
-    y_min = min(ground.min(), lower_fresnel.min()) - 20
-    y_max = max(ground.max(), upper_fresnel.max(), tx_asl, rx_asl) + 30
-    ax.set_ylim(y_min, y_max)
-
-    # Save to BytesIO
+    """Return PNG image of terrain + Fresnel zone. Returns empty buffer on failure."""
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=120, bbox_inches='tight')
-    plt.close(fig)
-    buf.seek(0)
+    try:
+        distances = np.linspace(0, distance_km, num_points)
+
+        # Interpolate terrain
+        if len(terrain_profile) != num_points:
+            x_orig = np.linspace(0, distance_km, len(terrain_profile))
+            ground = np.interp(distances, x_orig, terrain_profile)
+        else:
+            ground = np.array(terrain_profile)
+
+        # Convert AGL heights to ASL
+        tx_asl = ground[0] + tx_height
+        rx_asl = ground[-1] + rx_height
+
+        los_height = tx_asl + (rx_asl - tx_asl) * (distances / distance_km)
+
+        # Fresnel radius
+        c = 299792458
+        fresnel_radius = np.zeros_like(distances)
+        for i, d in enumerate(distances):
+            d1 = d * 1000
+            d2 = (distance_km - d) * 1000
+            if d1 > 0 and d2 > 0:
+                fresnel_radius[i] = np.sqrt((c * d1 * d2) / (frequency_hz * (d1 + d2)))
+
+        upper_fresnel = los_height + fresnel_radius
+        lower_fresnel = los_height - fresnel_radius
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.fill_between(distances, ground, 0, color='sandybrown', alpha=0.6, label='Terrain')
+        ax.plot(distances, ground, 'brown', linewidth=1)
+        ax.plot(distances, los_height, 'b--', linewidth=2, label='Line-of-sight')
+        ax.fill_between(distances, lower_fresnel, upper_fresnel,
+                        color='green', alpha=0.3, label='1st Fresnel Zone')
+        ax.plot(0, tx_asl, '^', color='red', markersize=10, zorder=5, label='Tower')
+        ax.plot(distance_km, rx_asl, 'v', color='darkgreen', markersize=10, zorder=5, label='Receiver')
+        ax.set_xlabel('Distance (km)')
+        ax.set_ylabel('Elevation ASL (m)')
+        ax.set_title('Terrain Profile & Fresnel Zone Clearance')
+        ax.legend(loc='upper right')
+        ax.grid(True, linestyle=':', alpha=0.6)
+        y_min = min(ground.min(), lower_fresnel.min()) - 20
+        y_max = max(ground.max(), upper_fresnel.max(), tx_asl, rx_asl) + 30
+        ax.set_ylim(y_min, y_max)
+
+        plt.savefig(buf, format='png', dpi=120, bbox_inches='tight')
+        plt.close(fig)
+        buf.seek(0)
+    except Exception as e:
+        print(f"ERROR generating plot: {e}")
     return buf
 
 # ----------------------------------------------------------------------
@@ -246,13 +237,15 @@ def build_pdf_report(
     # Terrain & Fresnel Zone plot (new page)
     story.append(PageBreak())
     story.append(Paragraph("Terrain & Fresnel Zone Analysis", heading_style))
+
     plot_buf = generate_fresnel_plot(terrain_profile, d_km, tower.height_m, receiver.height_m, f_hz)
-    if plot_buf.getbuffer().nbytes == 0:
-        story.append(Paragraph("Error: plot could not be generated", normal_style))
-    else:
+    if plot_buf.getbuffer().nbytes > 0:
         img = Image(plot_buf, width=160*mm, height=80*mm)
         img.hAlign = 'CENTER'
         story.append(img)
+    else:
+        story.append(Paragraph("<font color='red'>Error: Could not generate terrain plot.</font>", normal_style))
+
     story.append(Spacer(1, 4*mm))
     story.append(Paragraph("<center>Figure: Line-of-sight and first Fresnel zone along path</center>", normal_style))
 
@@ -260,3 +253,17 @@ def build_pdf_report(
     doc.build(story)
     buffer.seek(0)
     return buffer
+
+
+# ----------------------------------------------------------------------
+# Standalone test
+# ----------------------------------------------------------------------
+
+if __name__ == "__main__":
+    # Mock data
+    terrain = [850 + i * 2 for i in range(30)]
+    buf = generate_fresnel_plot(terrain, 14.93, 45.0, 12.0, 700e6)
+    print(f"Buffer size: {buf.getbuffer().nbytes} bytes")
+    with open("test_plot.png", "wb") as f:
+        f.write(buf.getvalue())
+    print("Saved test_plot.png \u2013 check if it looks correct")

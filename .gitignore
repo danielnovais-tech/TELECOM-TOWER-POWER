@@ -20,6 +20,9 @@ nearest*.json
 repeater*.json
 report_out.json
 
+# SRTM elevation tiles (large binary files)
+srtm_data/*.hgt
+
 # C extensions
 *.so
 

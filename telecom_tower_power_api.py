@@ -6,24 +6,34 @@ with real terrain elevation (Open-Elevation) and REST API (FastAPI).
 Run: uvicorn telecom_tower_power_api:app --reload
 """
 
+import collections
+import csv
+import io
+import logging
 import math
 import json
 import asyncio
 import heapq
+import os
 import secrets
+import time
+import zipfile
 from datetime import datetime, timezone
 
 import aiohttp
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Tuple
 from enum import Enum
-from fastapi import FastAPI, HTTPException, Query, Depends, Security
+from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File
 from fastapi.security import APIKeyHeader
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 from pdf_generator import build_pdf_report
+from srtm_elevation import SRTMReader
+
+logger = logging.getLogger("telecom_tower_power")
 
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
@@ -139,41 +149,91 @@ class LinkEngine:
 # ------------------------------------------------------------
 
 class ElevationService:
-    def __init__(self):
-        self.cache: Dict[Tuple[float, float], float] = {}
-        self.session = None
+    """Elevation lookup with three layers: in-memory cache → local SRTM
+    tiles → Open-Elevation API (with retry + exponential backoff)."""
 
-    async def _get_session(self):
-        if self.session is None:
+    _API_URL = "https://api.open-elevation.com/api/v1/lookup"
+    _MAX_RETRIES = 3
+    _BASE_DELAY = 1.0          # seconds; doubles on each retry
+    _BATCH_TIMEOUT = 60        # seconds for the batch POST
+    _SINGLE_TIMEOUT = 30
+
+    def __init__(self, srtm_dir: str | None = None):
+        self.cache: Dict[Tuple[float, float], float] = {}
+        self.session: Optional[aiohttp.ClientSession] = None
+        self.srtm = SRTMReader(srtm_dir or os.getenv("SRTM_DATA_DIR", "./srtm_data"))
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
         return self.session
 
+    # ------------------------------------------------------------------
+    # Retry helper
+    # ------------------------------------------------------------------
+
+    async def _post_with_retry(self, payload: dict, timeout: float) -> Optional[dict]:
+        """POST to Open-Elevation with exponential backoff."""
+        session = await self._get_session()
+        delay = self._BASE_DELAY
+        for attempt in range(1, self._MAX_RETRIES + 1):
+            try:
+                async with session.post(
+                    self._API_URL, json=payload, timeout=timeout
+                ) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    logger.warning(
+                        "Open-Elevation HTTP %s on attempt %d",
+                        resp.status, attempt,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Open-Elevation attempt %d failed: %s", attempt, exc
+                )
+            if attempt < self._MAX_RETRIES:
+                await asyncio.sleep(delay)
+                delay *= 2
+        return None
+
+    # ------------------------------------------------------------------
+    # Single-point elevation
+    # ------------------------------------------------------------------
+
     async def get_elevation(self, lat: float, lon: float) -> float:
-        """Get elevation in meters. Uses cache first, then Open-Elevation API."""
+        """Return elevation (m).  Cache → SRTM → API → 0."""
         key = (round(lat, 5), round(lon, 5))
         if key in self.cache:
             return self.cache[key]
 
-        session = await self._get_session()
-        url = "https://api.open-elevation.com/api/v1/lookup"
-        try:
-            payload = {"locations": [{"latitude": lat, "longitude": lon}]}
-            async with session.post(url, json=payload, timeout=30) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    elev = data['results'][0]['elevation']
-                    self.cache[key] = elev
-                    return elev
-        except Exception:
-            pass
+        # Try local SRTM tile
+        srtm_elev = self.srtm.get_elevation(lat, lon)
+        if srtm_elev is not None:
+            self.cache[key] = srtm_elev
+            return srtm_elev
+
+        # Try remote API with retry
+        payload = {"locations": [{"latitude": lat, "longitude": lon}]}
+        data = await self._post_with_retry(payload, self._SINGLE_TIMEOUT)
+        if data:
+            elev = data["results"][0]["elevation"]
+            self.cache[key] = elev
+            return elev
+
         self.cache[key] = 0.0
         return 0.0
 
-    async def get_profile(self, lat1: float, lon1: float, lat2: float, lon2: float,
-                          num_points: int = 30) -> List[float]:
-        """Return a list of ground heights (m) along the great-circle path.
-        Uses a single batch API call for efficiency and reliability."""
-        # Build list of points
+    # ------------------------------------------------------------------
+    # Profile (multi-point)
+    # ------------------------------------------------------------------
+
+    async def get_profile(
+        self, lat1: float, lon1: float, lat2: float, lon2: float,
+        num_points: int = 30,
+    ) -> List[float]:
+        """Return ground heights (m) along the great-circle path.
+        Uses cache → SRTM → batch API (with retry) → interpolation."""
+
         points = []
         for i in range(num_points):
             frac = i / (num_points - 1)
@@ -181,62 +241,66 @@ class ElevationService:
             lon = lon1 + (lon2 - lon1) * frac
             points.append((round(lat, 5), round(lon, 5)))
 
-        # Check cache for all points
-        uncached_indices = []
-        heights = [None] * num_points
+        heights: List[Optional[float]] = [None] * num_points
+        need_api: List[int] = []
+
         for i, (lat, lon) in enumerate(points):
+            # 1. Cache
             cached = self.cache.get((lat, lon))
             if cached is not None:
                 heights[i] = cached
-            else:
-                uncached_indices.append(i)
+                continue
+            # 2. SRTM
+            srtm_elev = self.srtm.get_elevation(lat, lon)
+            if srtm_elev is not None:
+                self.cache[(lat, lon)] = srtm_elev
+                heights[i] = srtm_elev
+                continue
+            need_api.append(i)
 
-        # Batch fetch uncached points in a single API call
-        if uncached_indices:
-            session = await self._get_session()
-            locations = [{"latitude": points[i][0], "longitude": points[i][1]}
-                         for i in uncached_indices]
-            url = "https://api.open-elevation.com/api/v1/lookup"
-            try:
-                payload = {"locations": locations}
-                async with session.post(url, json=payload, timeout=60) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        for j, idx in enumerate(uncached_indices):
-                            elev = data['results'][j]['elevation']
-                            self.cache[points[idx]] = elev
-                            heights[idx] = elev
-            except Exception:
-                pass
+        # 3. Batch API with retry
+        if need_api:
+            locations = [
+                {"latitude": points[i][0], "longitude": points[i][1]}
+                for i in need_api
+            ]
+            data = await self._post_with_retry(
+                {"locations": locations}, self._BATCH_TIMEOUT
+            )
+            if data:
+                for j, idx in enumerate(need_api):
+                    elev = data["results"][j]["elevation"]
+                    self.cache[points[idx]] = elev
+                    heights[idx] = elev
 
-        # Fill any remaining None with interpolation from neighbors, or 0
+        # 4. Fill remaining Nones via interpolation
         for i in range(num_points):
-            if heights[i] is None:
-                # Try to interpolate from nearest known neighbors
-                left = right = None
-                for l in range(i - 1, -1, -1):
-                    if heights[l] is not None:
-                        left = (l, heights[l])
-                        break
-                for r in range(i + 1, num_points):
-                    if heights[r] is not None:
-                        right = (r, heights[r])
-                        break
-                if left and right:
-                    frac = (i - left[0]) / (right[0] - left[0])
-                    heights[i] = left[1] + (right[1] - left[1]) * frac
-                elif left:
-                    heights[i] = left[1]
-                elif right:
-                    heights[i] = right[1]
-                else:
-                    heights[i] = 0.0
-                self.cache[points[i]] = heights[i]
+            if heights[i] is not None:
+                continue
+            left = right = None
+            for l in range(i - 1, -1, -1):
+                if heights[l] is not None:
+                    left = (l, heights[l])
+                    break
+            for r in range(i + 1, num_points):
+                if heights[r] is not None:
+                    right = (r, heights[r])
+                    break
+            if left and right:
+                frac = (i - left[0]) / (right[0] - left[0])
+                heights[i] = left[1] + (right[1] - left[1]) * frac
+            elif left:
+                heights[i] = left[1]
+            elif right:
+                heights[i] = right[1]
+            else:
+                heights[i] = 0.0
+            self.cache[points[i]] = heights[i]
 
-        return heights
+        return heights  # type: ignore[return-value]
 
     async def close(self):
-        if self.session:
+        if self.session and not self.session.closed:
             await self.session.close()
 
 # ------------------------------------------------------------
@@ -314,15 +378,17 @@ class TelecomTowerPower:
                                   max_hops: int = 3,
                                   candidate_sites: Optional[List[Tower]] = None) -> List[Tower]:
         """
-        Bottleneck-shortest-path multi-hop repeater optimization.
+        Bottleneck-shortest-path multi-hop repeater optimization with
+        terrain-aware LOS scoring.
 
         Finds the path from start_tower to target_receiver (through candidate
         repeater sites) that minimizes the worst single-hop path loss, subject
-        to a max_hops constraint.  This ensures every hop in the chain is
-        feasible and the weakest link is as strong as possible.
+        to a max_hops constraint.  Hops with obstructed Fresnel zones receive
+        additional loss penalties, ensuring the optimizer prefers clear-LOS
+        paths even when FSPL alone would allow a longer hop.
 
-        If no candidate_sites are given, generates evenly spaced candidates along
-        the great-circle path.
+        If no candidate_sites are given, generates evenly spaced candidates
+        along the great-circle path.
         """
         f_hz = start_tower.primary_freq_hz()
         tx_gain = 17.0
@@ -344,10 +410,42 @@ class TelecomTowerPower:
         all_nodes: List[Tower] = [start_tower] + candidate_sites + [target_node]
         node_index = {t.id: t for t in all_nodes}
 
+        # Pre-compute hop costs (FSPL + terrain obstruction penalty)
+        # Cache as dict[(from_id, to_id)] -> effective_loss_db
+        hop_cost: Dict[Tuple[str, str], float] = {}
+        for a in all_nodes:
+            for b in all_nodes:
+                if a.id == b.id or b.id == start_tower.id:
+                    continue
+                d_km = LinkEngine.haversine_km(a.lat, a.lon, b.lat, b.lon)
+                if d_km < 0.1:
+                    hop_cost[(a.id, b.id)] = 0.0
+                    continue
+                fspl = LinkEngine.free_space_path_loss(d_km, f_hz)
+
+                # Fetch terrain profile for this hop and compute Fresnel clearance
+                obstruction_penalty = 0.0
+                try:
+                    profile = await self.elevation.get_profile(
+                        a.lat, a.lon, b.lat, b.lon, num_points=20
+                    )
+                    if profile:
+                        tx_h_asl = profile[0] + a.height_m
+                        rx_h_asl = profile[-1] + b.height_m
+                        clearance = LinkEngine.terrain_clearance(
+                            profile, d_km, f_hz, tx_h_asl, rx_h_asl
+                        )
+                        if clearance < 0.6:
+                            # Penalize obstructed hops: up to 20 dB extra loss
+                            obstruction_penalty = (0.6 - clearance) * 33.0
+                except Exception:
+                    pass  # If terrain fetch fails, use FSPL only
+
+                hop_cost[(a.id, b.id)] = fspl + obstruction_penalty
+
         # Modified Dijkstra for bottleneck path:
-        # cost = worst (max) single-hop FSPL along the path so far
+        # cost = worst (max) single-hop effective loss along the path so far
         # We want to MINIMIZE this bottleneck cost.
-        # State: (bottleneck_cost, hops, node_id, path)
         INF = float('inf')
         best: Dict[Tuple[str, int], float] = {}
         heap: list = [(0.0, 0, start_tower.id, [start_tower.id])]
@@ -375,16 +473,14 @@ class TelecomTowerPower:
             for neighbor in all_nodes:
                 if neighbor.id == nid or neighbor.id == start_tower.id:
                     continue
-                d_km = LinkEngine.haversine_km(current.lat, current.lon,
-                                               neighbor.lat, neighbor.lon)
-                if d_km < 0.1:
+                edge_key = (nid, neighbor.id)
+                if edge_key not in hop_cost:
                     continue
-                hop_fspl = LinkEngine.free_space_path_loss(d_km, f_hz)
-                hop_rssi = current.power_dbm + tx_gain + rx_gain - hop_fspl
-                # Skip hops that would be infeasible (signal below -95 dBm)
+                effective_loss = hop_cost[edge_key]
+                hop_rssi = current.power_dbm + tx_gain + rx_gain - effective_loss
                 if hop_rssi < -95:
                     continue
-                new_bottleneck = max(bottleneck, hop_fspl)
+                new_bottleneck = max(bottleneck, effective_loss)
                 new_state = (neighbor.id, hops + 1)
                 if new_state not in best or best[new_state] > new_bottleneck:
                     heapq.heappush(heap, (new_bottleneck, hops + 1, neighbor.id,
@@ -428,9 +524,9 @@ class Tier(str, Enum):
     ENTERPRISE = "enterprise"
 
 TIER_LIMITS = {
-    Tier.FREE: {"requests_per_min": 10, "pdf_export": False, "max_towers": 20},
-    Tier.PRO: {"requests_per_min": 100, "pdf_export": True, "max_towers": 500},
-    Tier.ENTERPRISE: {"requests_per_min": 1000, "pdf_export": True, "max_towers": 10000},
+    Tier.FREE: {"requests_per_min": int(os.getenv("RATE_LIMIT_FREE", "10")), "pdf_export": False, "max_towers": 20},
+    Tier.PRO: {"requests_per_min": int(os.getenv("RATE_LIMIT_PRO", "100")), "pdf_export": True, "max_towers": 500},
+    Tier.ENTERPRISE: {"requests_per_min": int(os.getenv("RATE_LIMIT_ENTERPRISE", "1000")), "pdf_export": True, "max_towers": 10000},
 }
 
 # In-memory API key store: key -> {"tier": Tier, "owner": str}
@@ -443,11 +539,33 @@ API_KEYS: Dict[str, Dict] = {
 
 api_key_header = APIKeyHeader(name="X-API-Key")
 
+# ---- Sliding-window rate limiter (per API key) ----
+_rate_buckets: Dict[str, collections.deque] = {}
+
+def _check_rate_limit(api_key: str, tier: Tier) -> None:
+    """Raise 429 if the caller exceeds their tier's requests_per_min."""
+    limit = TIER_LIMITS[tier]["requests_per_min"]
+    now = time.monotonic()
+    window = 60.0  # seconds
+
+    bucket = _rate_buckets.setdefault(api_key, collections.deque())
+    # Evict timestamps older than the window
+    while bucket and bucket[0] <= now - window:
+        bucket.popleft()
+    if len(bucket) >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded ({limit} requests/min for {tier.value} tier). "
+                   "Try again shortly.",
+        )
+    bucket.append(now)
+
 async def verify_api_key(api_key: str = Security(api_key_header)) -> Dict:
-    """Validate the API key and return the key metadata (tier, owner)."""
+    """Validate the API key, enforce rate limit, and return key metadata."""
     key_data = API_KEYS.get(api_key)
     if key_data is None:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    _check_rate_limit(api_key, key_data["tier"])
     return key_data
 
 def require_tier(*allowed: Tier):
@@ -516,8 +634,25 @@ async def root():
     return {
         "service": "TELECOM TOWER POWER API",
         "status": "online",
+        "version": "2.0.0",
         "docs": "/docs",
-        "endpoints": ["/towers", "/towers/nearest", "/analyze", "/plan_repeater", "/export_report", "/export_report/pdf"],
+        "endpoints": [
+            "/towers", "/towers/nearest", "/analyze",
+            "/plan_repeater", "/export_report", "/export_report/pdf",
+            "/batch_reports", "/health",
+        ],
+    }
+
+@app.get("/health")
+async def health_check():
+    """Lightweight liveness / readiness probe for load balancers."""
+    srtm_ok = os.path.isdir(platform.elevation.srtm.data_dir)
+    return {
+        "status": "healthy",
+        "towers_loaded": len(platform.towers),
+        "elevation_cache_size": len(platform.elevation.cache),
+        "srtm_available": srtm_ok,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 @app.on_event("startup")
@@ -585,8 +720,8 @@ async def plan_repeater(tower_id: str, receiver: ReceiverInput, max_hops: int = 
     return {"repeater_chain": [asdict(t) for t in chain]}
 
 @app.get("/export_report")
-async def export_report(tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(verify_api_key)):
-    """Generate a professional PDF engineering report."""
+async def export_report(tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
+    """Generate a professional PDF engineering report (Pro/Enterprise tiers only)."""
     tower = platform.towers.get(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
@@ -625,6 +760,83 @@ async def export_report_pdf(tower_id: str, lat: float, lon: float, height_m: flo
         pdf_buffer,
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=report_{tower_id}.pdf"}
+    )
+
+# ------------------------------------------------------------
+# Batch PDF generation (Pro / Enterprise)
+# ------------------------------------------------------------
+
+@app.post("/batch_reports")
+async def batch_reports(
+    tower_id: str,
+    csv_file: UploadFile = File(...),
+    receiver_height_m: float = 10.0,
+    antenna_gain_dbi: float = 12.0,
+    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+):
+    """Upload a CSV of receiver points (columns: lat,lon  and optionally
+    height, gain) and download a ZIP of PDF reports – one per receiver."""
+    tower = platform.towers.get(tower_id)
+    if not tower:
+        raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
+
+    contents = await csv_file.read()
+    try:
+        text = contents.decode("utf-8").splitlines()
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV must be UTF-8 encoded")
+
+    reader = csv.DictReader(text)
+    if not reader.fieldnames or "lat" not in reader.fieldnames or "lon" not in reader.fieldnames:
+        raise HTTPException(
+            status_code=400,
+            detail="CSV must contain at least 'lat' and 'lon' columns",
+        )
+
+    receivers: List[Receiver] = []
+    for row_num, row in enumerate(reader, start=2):
+        try:
+            lat = float(row["lat"])
+            lon = float(row["lon"])
+        except (ValueError, KeyError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid lat/lon on CSV row {row_num}",
+            )
+        height = float(row.get("height", receiver_height_m) or receiver_height_m)
+        gain = float(row.get("gain", antenna_gain_dbi) or antenna_gain_dbi)
+        receivers.append(Receiver(lat=lat, lon=lon, height_m=height, antenna_gain_dbi=gain))
+
+    if not receivers:
+        raise HTTPException(status_code=400, detail="CSV contains no receiver rows")
+
+    MAX_BATCH_ROWS = 100
+    if len(receivers) > MAX_BATCH_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV contains {len(receivers)} rows; maximum is {MAX_BATCH_ROWS}",
+        )
+
+    freq_mhz = tower.primary_freq_hz() / 1e6
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for idx, rx in enumerate(receivers):
+            terrain = await platform.elevation.get_profile(
+                tower.lat, tower.lon, rx.lat, rx.lon
+            )
+            result = await platform.analyze_link(tower, rx, terrain_profile=terrain)
+            pdf_buf = build_pdf_report(tower, rx, result, terrain, freq_mhz)
+            filename = f"report_{tower_id}_{idx + 1:03d}.pdf"
+            zf.writestr(filename, pdf_buf.getvalue())
+
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename=batch_reports_{tower_id}.zip"
+        },
     )
 
 # ------------------------------------------------------------

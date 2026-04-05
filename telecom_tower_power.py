@@ -5,6 +5,7 @@ Focus: rural areas, fixed wireless access (FWA), repeater tower planning.
 Author: Based on the TELECOM TOWER POWER narrative (formerly Mapa das Torres).
 """
 
+import heapq
 import math
 import json
 import struct
@@ -394,26 +395,130 @@ class TelecomTowerPower:
         )
 
     def plan_repeater_chain(self, start_tower: Tower, target_receiver: Receiver,
-                            max_hops: int = 3, min_rssi_db: float = -85) -> List[Tower]:
+                            max_hops: int = 3,
+                            candidate_sites: Optional[List[Tower]] = None) -> List[Tower]:
         """
-        Suggest intermediate repeater tower positions (simplified greedy algorithm).
-        Returns list of tower positions (including start_tower) that can reach target.
+        Bottleneck-shortest-path multi-hop repeater optimization with
+        terrain-aware LOS scoring.
+
+        Finds the path from start_tower to target_receiver (through candidate
+        repeater sites) that minimizes the worst single-hop effective loss,
+        subject to a max_hops constraint.  Hops with obstructed Fresnel zones
+        receive additional loss penalties so the optimizer prefers clear-LOS
+        paths.
+
+        If no candidate_sites are given, generates evenly spaced candidates
+        along the great-circle path.
         """
-        # This is a high-level planning function: given no existing towers, propose new sites.
-        # For MVP, just return start_tower and a mock intermediate.
-        result = [start_tower]
-        # logic: find point halfway where LOS is feasible and signal > threshold
-        # In real implementation, would iterate over terrain and propose lat/lon.
-        # Here we simulate:
-        mid_lat = (start_tower.lat + target_receiver.lat) / 2
-        mid_lon = (start_tower.lon + target_receiver.lon) / 2
-        intermediate = Tower(
-            id="proposed_repeater_1",
-            lat=mid_lat, lon=mid_lon, height_m=40.0,
+        f_hz = start_tower.bands[0].value
+        tx_gain = 17.0
+        rx_gain = 12.0
+
+        if candidate_sites is None:
+            candidate_sites = self._generate_candidates(start_tower, target_receiver, max_hops)
+
+        target_node = Tower(
+            id="__target__",
+            lat=target_receiver.lat, lon=target_receiver.lon,
+            height_m=target_receiver.height_m,
             operator=start_tower.operator, bands=start_tower.bands, power_dbm=43.0
         )
-        result.append(intermediate)
-        return result
+
+        all_nodes: List[Tower] = [start_tower] + candidate_sites + [target_node]
+        node_index = {t.id: t for t in all_nodes}
+
+        # Pre-compute hop costs with terrain obstruction penalties
+        hop_cost: Dict[Tuple[str, str], float] = {}
+        for a in all_nodes:
+            for b in all_nodes:
+                if a.id == b.id or b.id == start_tower.id:
+                    continue
+                d_km = LinkEngine.haversine_km(a.lat, a.lon, b.lat, b.lon)
+                if d_km < 0.1:
+                    hop_cost[(a.id, b.id)] = 0.0
+                    continue
+                fspl = LinkEngine.free_space_path_loss(d_km, f_hz)
+
+                obstruction_penalty = 0.0
+                try:
+                    profile = self.terrain.profile(
+                        a.lat, a.lon, b.lat, b.lon, num_points=20
+                    )
+                    if profile:
+                        tx_h_asl = profile[0] + a.height_m
+                        rx_h_asl = profile[-1] + b.height_m
+                        clearance = LinkEngine.terrain_clearance(
+                            profile, d_km, f_hz, tx_h_asl, rx_h_asl
+                        )
+                        if clearance < 0.6:
+                            obstruction_penalty = (0.6 - clearance) * 33.0
+                except RuntimeError:
+                    pass
+
+                hop_cost[(a.id, b.id)] = fspl + obstruction_penalty
+
+        # Dijkstra for bottleneck path
+        INF = float('inf')
+        best: Dict[Tuple[str, int], float] = {}
+        heap: list = [(0.0, 0, start_tower.id, [start_tower.id])]
+        result_path: Optional[List[str]] = None
+        result_cost = INF
+
+        while heap:
+            bottleneck, hops, nid, path = heapq.heappop(heap)
+
+            if nid == "__target__":
+                if bottleneck < result_cost:
+                    result_cost = bottleneck
+                    result_path = path
+                continue
+
+            if hops >= max_hops:
+                continue
+
+            state_key = (nid, hops)
+            if state_key in best and best[state_key] <= bottleneck:
+                continue
+            best[state_key] = bottleneck
+
+            current = node_index[nid]
+            for neighbor in all_nodes:
+                if neighbor.id == nid or neighbor.id == start_tower.id:
+                    continue
+                edge_key = (nid, neighbor.id)
+                if edge_key not in hop_cost:
+                    continue
+                effective_loss = hop_cost[edge_key]
+                hop_rssi = current.power_dbm + tx_gain + rx_gain - effective_loss
+                if hop_rssi < -95:
+                    continue
+                new_bottleneck = max(bottleneck, effective_loss)
+                new_state = (neighbor.id, hops + 1)
+                if new_state not in best or best[new_state] > new_bottleneck:
+                    heapq.heappush(heap, (new_bottleneck, hops + 1, neighbor.id,
+                                          path + [neighbor.id]))
+
+        if result_path is None:
+            return [start_tower]
+
+        return [node_index[nid] for nid in result_path if nid != "__target__"]
+
+    @staticmethod
+    def _generate_candidates(start_tower: Tower, target_receiver: Receiver,
+                             max_hops: int) -> List[Tower]:
+        """Generate candidate repeater sites evenly along the path."""
+        num_candidates = max(max_hops * 2, 4)
+        candidates = []
+        for i in range(1, num_candidates + 1):
+            frac = i / (num_candidates + 1)
+            lat = start_tower.lat + (target_receiver.lat - start_tower.lat) * frac
+            lon = start_tower.lon + (target_receiver.lon - start_tower.lon) * frac
+            candidates.append(Tower(
+                id=f"candidate_{i}",
+                lat=lat, lon=lon, height_m=40.0,
+                operator=start_tower.operator, bands=start_tower.bands, power_dbm=43.0
+            ))
+        return candidates
 
     def export_report(self, link_result: LinkResult, tower: Tower, receiver: Receiver) -> str:
         """Generate a professional PDF-ready report (JSON summary here)."""
