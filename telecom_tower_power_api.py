@@ -17,6 +17,7 @@ import heapq
 import os
 import secrets
 import time
+import uuid
 import zipfile
 from datetime import datetime, timezone
 
@@ -33,7 +34,7 @@ import uvicorn
 from pdf_generator import build_pdf_report
 from srtm_elevation import SRTMReader
 import stripe_billing
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 logger = logging.getLogger("telecom_tower_power")
 
@@ -56,6 +57,17 @@ RATE_LIMIT_HITS = Counter(
     "Total rate-limit rejections (429)",
     labelnames=["tier"],
 )
+BATCH_JOBS_ACTIVE = Gauge(
+    "batch_jobs_active",
+    "Number of background batch jobs currently running",
+)
+
+# ------------------------------------------------------------
+# Background job queue (in-memory, no external broker needed)
+# ------------------------------------------------------------
+_jobs: Dict[str, Dict] = {}          # job_id → {status, progress, total, ...}
+_job_results: Dict[str, bytes] = {}  # job_id → ZIP bytes
+_MAX_JOB_RESULTS = 50                # evict oldest results beyond this
 
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
@@ -552,12 +564,22 @@ TIER_LIMITS = {
 }
 
 # In-memory API key store: key -> {"tier": Tier, "owner": str}
-# In production, use a database.
-API_KEYS: Dict[str, Dict] = {
+# Override with VALID_API_KEYS env var: JSON dict {"key": "tier", ...}
+# e.g. VALID_API_KEYS='{"prod-key-001":"pro","prod-key-002":"enterprise"}'
+_default_api_keys: Dict[str, Dict] = {
     "demo-key-free-001": {"tier": Tier.FREE, "owner": "demo_free"},
     "demo-key-pro-001": {"tier": Tier.PRO, "owner": "demo_pro"},
     "demo-key-enterprise-001": {"tier": Tier.ENTERPRISE, "owner": "demo_enterprise"},
 }
+
+_env_keys_raw = os.getenv("VALID_API_KEYS")
+if _env_keys_raw:
+    _env_keys = json.loads(_env_keys_raw)
+    API_KEYS: Dict[str, Dict] = {
+        k: {"tier": Tier(v), "owner": k} for k, v in _env_keys.items()
+    }
+else:
+    API_KEYS: Dict[str, Dict] = _default_api_keys
 
 api_key_header = APIKeyHeader(name="X-API-Key")
 
@@ -860,12 +882,28 @@ async def batch_reports(
     if not receivers:
         raise HTTPException(status_code=400, detail="CSV contains no receiver rows")
 
-    MAX_BATCH_ROWS = 100
-    if len(receivers) > MAX_BATCH_ROWS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"CSV contains {len(receivers)} rows; maximum is {MAX_BATCH_ROWS}",
+    SYNC_BATCH_LIMIT = 100
+    if len(receivers) > SYNC_BATCH_LIMIT:
+        # Delegate large batches to background job queue
+        job_id = str(uuid.uuid4())
+        _jobs[job_id] = {
+            "status": "queued",
+            "progress": 0,
+            "total": len(receivers),
+            "tower_id": tower_id,
+            "created": time.time(),
+            "error": None,
+        }
+        asyncio.create_task(
+            _run_batch_job(job_id, tower, receivers, tower_id)
         )
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "total": len(receivers),
+            "message": f"Batch too large for sync ({len(receivers)} rows). "
+                       f"Job created. Poll GET /jobs/{job_id} for progress.",
+        }
 
     freq_mhz = tower.primary_freq_hz() / 1e6
     zip_buffer = io.BytesIO()
@@ -888,6 +926,96 @@ async def batch_reports(
             "Content-Disposition": f"attachment; filename=batch_reports_{tower_id}.zip"
         },
     )
+
+
+# ------------------------------------------------------------
+# Background batch job runner + endpoints
+# ------------------------------------------------------------
+
+async def _run_batch_job(
+    job_id: str,
+    tower,
+    receivers: List,
+    tower_id: str,
+) -> None:
+    """Background coroutine: generates all PDFs, stores ZIP in memory."""
+    BATCH_JOBS_ACTIVE.inc()
+    _jobs[job_id]["status"] = "running"
+    try:
+        freq_mhz = tower.primary_freq_hz() / 1e6
+        zip_buffer = io.BytesIO()
+
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for idx, rx in enumerate(receivers):
+                terrain = await platform.elevation.get_profile(
+                    tower.lat, tower.lon, rx.lat, rx.lon
+                )
+                result = await platform.analyze_link(tower, rx, terrain_profile=terrain)
+                pdf_buf = build_pdf_report(tower, rx, result, terrain, freq_mhz)
+                filename = f"report_{tower_id}_{idx + 1:03d}.pdf"
+                zf.writestr(filename, pdf_buf.getvalue())
+                _jobs[job_id]["progress"] = idx + 1
+
+        # Store result and evict oldest if over limit
+        _job_results[job_id] = zip_buffer.getvalue()
+        if len(_job_results) > _MAX_JOB_RESULTS:
+            oldest = min(_job_results, key=lambda jid: _jobs.get(jid, {}).get("created", 0))
+            _job_results.pop(oldest, None)
+
+        _jobs[job_id]["status"] = "completed"
+        _jobs[job_id]["completed"] = time.time()
+        logger.info("Batch job %s completed: %d PDFs", job_id, len(receivers))
+
+    except Exception as exc:
+        _jobs[job_id]["status"] = "failed"
+        _jobs[job_id]["error"] = str(exc)
+        logger.exception("Batch job %s failed", job_id)
+    finally:
+        BATCH_JOBS_ACTIVE.dec()
+
+
+@app.get("/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """Poll the status of a background batch job."""
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    resp = {
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job["progress"],
+        "total": job["total"],
+        "tower_id": job["tower_id"],
+    }
+    if job["status"] == "completed":
+        resp["download_url"] = f"/jobs/{job_id}/download"
+    if job["status"] == "failed":
+        resp["error"] = job["error"]
+    return resp
+
+
+@app.get("/jobs/{job_id}/download")
+async def download_job_result(job_id: str):
+    """Download the ZIP file produced by a completed batch job."""
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is {job['status']}; cannot download yet",
+        )
+    data = _job_results.get(job_id)
+    if data is None:
+        raise HTTPException(status_code=410, detail="Result expired; please resubmit")
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename=batch_reports_{job['tower_id']}.zip"
+        },
+    )
+
 
 # ------------------------------------------------------------
 # Self-service signup & Stripe billing
@@ -943,6 +1071,44 @@ async def stripe_webhook(request: Request):
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return result
+
+@app.get("/signup/success")
+async def signup_success(session_id: str):
+    """
+    After Stripe Checkout, the frontend redirects here with session_id.
+    Returns the provisioned API key so the user can start using the API.
+    """
+    try:
+        info = stripe_billing.retrieve_key_from_checkout_session(session_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {
+        "api_key": info["api_key"],
+        "tier": info["tier"],
+        "email": info["email"],
+        "message": "Payment confirmed. Include your API key in the X-API-Key header.",
+    }
+
+class KeyLookupRequest(BaseModel):
+    email: str = Field(..., min_length=5, max_length=254)
+
+@app.post("/signup/status")
+async def signup_status(body: KeyLookupRequest):
+    """
+    Look up an existing API key by email address.
+    Returns the key, tier, and account status.
+    """
+    info = stripe_billing.get_key_info_for_email(body.email)
+    if info is None:
+        raise HTTPException(status_code=404, detail="No account found for this email")
+    return {
+        "api_key": info["api_key"],
+        "tier": info["tier"],
+        "email": info["email"],
+        "has_subscription": info.get("stripe_subscription_id") is not None,
+    }
 
 # ------------------------------------------------------------
 # Run the server (if executed directly)

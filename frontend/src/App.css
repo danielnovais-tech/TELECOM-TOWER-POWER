@@ -264,3 +264,156 @@ html, body, #root {
   user-select: all;
 }
 .key-warning { color: #fbbf24 !important; font-size: 0.78rem !important; margin-top: 0.3rem; }
+
+/* ========== MOBILE RESPONSIVE ========== */
+
+/* Tablets & small laptops */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 280px;
+    min-width: 280px;
+  }
+  .plan-grid {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+  }
+}
+
+/* Phones */
+@media (max-width: 768px) {
+  .app-header {
+    flex-wrap: wrap;
+    padding: 0.5rem 0.8rem;
+    gap: 0.4rem;
+  }
+  .app-header h1 {
+    font-size: 0.95rem;
+  }
+  .app-header .subtitle {
+    display: none;
+  }
+  .header-nav {
+    margin-left: auto;
+  }
+
+  .app-body {
+    flex-direction: column-reverse;
+    overflow: auto;
+  }
+
+  .sidebar {
+    width: 100%;
+    min-width: unset;
+    max-height: 45vh;
+    border-right: none;
+    border-top: 1px solid #334155;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .map-container {
+    flex: 1;
+    min-height: 50vh;
+  }
+
+  /* Compact panels on mobile */
+  .panel {
+    padding: 0.5rem 0.6rem;
+  }
+  .panel h3 {
+    font-size: 0.7rem;
+  }
+
+  /* Stack fields vertically */
+  .field {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.2rem;
+  }
+  .field label {
+    min-width: unset;
+    font-size: 0.75rem;
+  }
+  .field input {
+    font-size: 0.85rem;
+    padding: 0.4rem 0.5rem;
+  }
+
+  /* Bigger touch targets */
+  .btn {
+    padding: 0.65rem 1rem;
+    font-size: 0.85rem;
+    min-height: 44px;
+  }
+
+  /* Signup */
+  .signup-page {
+    padding: 1rem 0.8rem;
+  }
+  .signup-card {
+    padding: 1.2rem;
+  }
+  .signup-form {
+    flex-direction: column;
+  }
+  .signup-form input[type="email"] {
+    font-size: 1rem;
+    padding: 0.7rem;
+  }
+
+  /* Tower list compact */
+  .tower-list {
+    max-height: 120px;
+  }
+  .tower-list li {
+    padding: 6px;
+    font-size: 0.78rem;
+  }
+
+  /* Make info tables less cramped */
+  .info-table td {
+    padding: 3px 4px;
+    font-size: 0.8rem;
+  }
+}
+
+/* Very small phones */
+@media (max-width: 380px) {
+  .app-header h1 {
+    font-size: 0.85rem;
+  }
+  .header-nav button {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.72rem;
+  }
+  .sidebar {
+    max-height: 40vh;
+  }
+}
+
+/* Landscape phones */
+@media (max-height: 500px) and (orientation: landscape) {
+  .app-body {
+    flex-direction: row;
+  }
+  .sidebar {
+    width: 260px;
+    min-width: 260px;
+    max-height: unset;
+    border-top: none;
+    border-right: 1px solid #334155;
+  }
+  .map-container {
+    min-height: unset;
+  }
+}
+
+/* Safe areas for notched phones */
+@supports (padding: env(safe-area-inset-bottom)) {
+  .sidebar {
+    padding-bottom: calc(0.8rem + env(safe-area-inset-bottom));
+  }
+  .app-header {
+    padding-top: calc(0.6rem + env(safe-area-inset-top));
+  }
+}

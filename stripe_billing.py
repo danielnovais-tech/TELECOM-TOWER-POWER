@@ -216,3 +216,39 @@ def get_key_for_email(email: str) -> Optional[str]:
         if meta.get("email") == email:
             return key
     return None
+
+
+def get_key_info_for_email(email: str) -> Optional[Dict]:
+    """Return the API key and its metadata for a given email, or None."""
+    store = _load_store()
+    for key, meta in store.items():
+        if meta.get("email") == email:
+            return {"api_key": key, **meta}
+    return None
+
+
+def retrieve_key_from_checkout_session(session_id: str) -> Dict:
+    """
+    Given a Stripe Checkout Session ID, retrieve the customer's email
+    and return their API key info.  Raises ValueError if session is
+    unpaid or no key exists yet (webhook may not have fired).
+    """
+    if not STRIPE_SECRET_KEY:
+        raise RuntimeError("STRIPE_SECRET_KEY is not configured")
+
+    session = stripe.checkout.Session.retrieve(session_id)
+
+    if session.payment_status != "paid":
+        raise ValueError("Payment not completed")
+
+    email = session.get("customer_email") or session["metadata"].get("email")
+    if not email:
+        raise ValueError("No email associated with this checkout session")
+
+    info = get_key_info_for_email(email)
+    if info is None:
+        raise ValueError(
+            "API key not yet provisioned — the webhook may still be processing. "
+            "Please retry in a few seconds."
+        )
+    return info
