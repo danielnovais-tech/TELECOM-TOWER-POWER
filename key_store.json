@@ -1,0 +1,10 @@
+{
+  "ttp_DDfimK9PavGoPGLiPfgjBbVemXeMVtSKXUcjxkImQp0": {
+    "tier": "free",
+    "owner": "test@example.com",
+    "email": "test@example.com",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1775350976.0368829
+  }
+}

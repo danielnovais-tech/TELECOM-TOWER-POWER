@@ -11,3 +11,5 @@ requests==2.32.3
 folium==0.19.5
 streamlit-folium==0.25.0
 pandas==2.2.3
+stripe
+prometheus-client

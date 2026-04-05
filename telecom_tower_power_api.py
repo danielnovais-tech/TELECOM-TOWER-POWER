@@ -24,16 +24,38 @@ import aiohttp
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Tuple
 from enum import Enum
-from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Request
 from fastapi.security import APIKeyHeader
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 from pdf_generator import build_pdf_report
 from srtm_elevation import SRTMReader
+import stripe_billing
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 logger = logging.getLogger("telecom_tower_power")
+
+# ------------------------------------------------------------
+# Prometheus metrics
+# ------------------------------------------------------------
+REQUEST_LATENCY = Histogram(
+    "http_request_duration_seconds",
+    "Request latency in seconds",
+    labelnames=["method", "endpoint", "status"],
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+REQUEST_COUNT = Counter(
+    "http_requests_total",
+    "Total HTTP requests",
+    labelnames=["method", "endpoint", "status"],
+)
+RATE_LIMIT_HITS = Counter(
+    "rate_limit_hits_total",
+    "Total rate-limit rejections (429)",
+    labelnames=["tier"],
+)
 
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
@@ -553,6 +575,7 @@ def _check_rate_limit(api_key: str, tier: Tier) -> None:
     while bucket and bucket[0] <= now - window:
         bucket.popleft()
     if len(bucket) >= limit:
+        RATE_LIMIT_HITS.labels(tier=tier.value).inc()
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded ({limit} requests/min for {tier.value} tier). "
@@ -564,7 +587,12 @@ async def verify_api_key(api_key: str = Security(api_key_header)) -> Dict:
     """Validate the API key, enforce rate limit, and return key metadata."""
     key_data = API_KEYS.get(api_key)
     if key_data is None:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        # Check dynamically-registered keys from Stripe billing
+        dynamic = stripe_billing.lookup_key(api_key)
+        if dynamic is not None:
+            key_data = {"tier": Tier(dynamic["tier"]), "owner": dynamic["owner"]}
+        else:
+            raise HTTPException(status_code=401, detail="Invalid or missing API key")
     _check_rate_limit(api_key, key_data["tier"])
     return key_data
 
@@ -597,6 +625,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Prometheus latency / count middleware
+@app.middleware("http")
+async def prometheus_middleware(request: Request, call_next):
+    if request.url.path == "/metrics":
+        return await call_next(request)
+    start = time.monotonic()
+    response = await call_next(request)
+    elapsed = time.monotonic() - start
+    endpoint = request.url.path
+    REQUEST_LATENCY.labels(
+        method=request.method, endpoint=endpoint, status=response.status_code,
+    ).observe(elapsed)
+    REQUEST_COUNT.labels(
+        method=request.method, endpoint=endpoint, status=response.status_code,
+    ).inc()
+    return response
 
 # Global platform instance
 platform = TelecomTowerPower()
@@ -642,6 +687,11 @@ async def root():
             "/batch_reports", "/health",
         ],
     }
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """Prometheus metrics endpoint."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/health")
 async def health_check():
@@ -838,6 +888,61 @@ async def batch_reports(
             "Content-Disposition": f"attachment; filename=batch_reports_{tower_id}.zip"
         },
     )
+
+# ------------------------------------------------------------
+# Self-service signup & Stripe billing
+# ------------------------------------------------------------
+
+class SignupRequest(BaseModel):
+    email: str = Field(..., min_length=5, max_length=254)
+
+class CheckoutRequest(BaseModel):
+    email: str = Field(..., min_length=5, max_length=254)
+    tier: str = Field(..., pattern="^(pro|enterprise)$")
+
+@app.post("/signup/free", status_code=201)
+async def signup_free(body: SignupRequest):
+    """Register a free-tier account and receive an API key instantly."""
+    try:
+        result = stripe_billing.register_free_user(body.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "api_key": result["api_key"],
+        "tier": result["tier"],
+        "email": result["email"],
+        "message": "Free account created. Include your API key in the X-API-Key header.",
+    }
+
+@app.post("/signup/checkout")
+async def signup_checkout(body: CheckoutRequest):
+    """
+    Create a Stripe Checkout Session for a paid plan.
+    Returns the Checkout URL the client should redirect to.
+    """
+    try:
+        url = stripe_billing.create_checkout_session(body.email, body.tier)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"checkout_url": url}
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """
+    Receive Stripe webhook events (checkout.session.completed,
+    customer.subscription.deleted, etc.).
+    """
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        result = stripe_billing.handle_webhook_event(payload, sig)
+    except stripe_billing.stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return result
 
 # ------------------------------------------------------------
 # Run the server (if executed directly)
