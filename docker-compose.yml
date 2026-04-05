@@ -38,3 +38,24 @@ services:
       api:
         condition: service_healthy
     restart: "no"
+
+  # ── Optional: uncomment for PostgreSQL-backed HA deployment ──
+  # postgres:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_USER: telecom
+  #     POSTGRES_PASSWORD: telecom_secret
+  #     POSTGRES_DB: towers
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U telecom"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped
+
+# volumes:
+#   pgdata:

@@ -361,14 +361,26 @@ class TelecomTowerPower:
             self.towers[t.id] = t
         logger.info("Loaded %d towers from database", len(self.towers))
 
-    def add_tower(self, tower: Tower):
-        self.towers[tower.id] = tower
-        self.db.upsert({
+    def _tower_to_row(self, tower: Tower) -> dict:
+        return {
             "id": tower.id, "lat": tower.lat, "lon": tower.lon,
             "height_m": tower.height_m, "operator": tower.operator,
             "bands": [b.value for b in tower.bands],
             "power_dbm": tower.power_dbm,
-        })
+        }
+
+    def add_tower(self, tower: Tower):
+        self.towers[tower.id] = tower
+        self.db.upsert(self._tower_to_row(tower))
+
+    def update_tower(self, tower: Tower):
+        self.towers[tower.id] = tower
+        self.db.upsert(self._tower_to_row(tower))
+
+    def remove_tower(self, tower_id: str) -> bool:
+        removed = self.towers.pop(tower_id, None)
+        self.db.delete(tower_id)
+        return removed is not None
 
     def find_nearest_towers(self, lat: float, lon: float, operator: Optional[str] = None,
                             limit: int = 5) -> List[Tower]:
@@ -725,8 +737,9 @@ async def root():
         "version": "2.0.0",
         "docs": "/docs",
         "endpoints": [
-            "/towers", "/towers/nearest", "/analyze",
-            "/plan_repeater", "/export_report", "/export_report/pdf",
+            "/towers", "/towers/{id}", "/towers/nearest",
+            "/analyze", "/plan_repeater",
+            "/export_report", "/export_report/pdf",
             "/batch_reports", "/health",
         ],
     }
@@ -744,6 +757,7 @@ async def health_check():
         "status": "healthy",
         "towers_loaded": len(platform.towers),
         "towers_persisted": platform.db.count(),
+        "db_backend": platform.db.backend,
         "elevation_cache_size": len(platform.elevation.cache),
         "srtm_available": srtm_ok,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -776,6 +790,14 @@ async def add_tower(tower: TowerInput, key_data: Dict = Depends(verify_api_key))
     platform.add_tower(new_tower)
     return {"message": f"Tower {tower.id} added"}
 
+@app.get("/towers/{tower_id}")
+async def get_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
+    """Get a single tower by ID."""
+    tower = platform.towers.get(tower_id)
+    if not tower:
+        raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
+    return asdict(tower)
+
 @app.get("/towers")
 async def list_towers(operator: Optional[str] = None, limit: int = 100, key_data: Dict = Depends(verify_api_key)):
     """List all towers, optionally filtered by operator."""
@@ -783,6 +805,28 @@ async def list_towers(operator: Optional[str] = None, limit: int = 100, key_data
     if operator:
         towers_list = [t for t in towers_list if t.operator == operator]
     return {"towers": [asdict(t) for t in towers_list[:limit]]}
+
+@app.put("/towers/{tower_id}")
+async def update_tower(tower_id: str, tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
+    """Update an existing tower.  The tower ID in the path must match the body."""
+    if tower.id != tower_id:
+        raise HTTPException(status_code=400, detail="Tower ID in path and body must match")
+    if tower_id not in platform.towers:
+        raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
+    updated = Tower(
+        id=tower.id, lat=tower.lat, lon=tower.lon,
+        height_m=tower.height_m, operator=tower.operator,
+        bands=tower.bands, power_dbm=tower.power_dbm,
+    )
+    platform.update_tower(updated)
+    return {"message": f"Tower {tower_id} updated"}
+
+@app.delete("/towers/{tower_id}")
+async def delete_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
+    """Delete a tower from the database."""
+    if not platform.remove_tower(tower_id):
+        raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
+    return {"message": f"Tower {tower_id} deleted"}
 
 @app.get("/towers/nearest")
 async def nearest_towers(lat: float, lon: float, operator: Optional[str] = None, limit: int = 5, key_data: Dict = Depends(verify_api_key)):

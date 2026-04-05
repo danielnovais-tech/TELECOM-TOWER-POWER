@@ -13,3 +13,4 @@ streamlit-folium==0.25.0
 pandas==2.2.3
 stripe
 prometheus-client
+psycopg2-binary
