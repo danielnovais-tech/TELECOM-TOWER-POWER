@@ -5,7 +5,7 @@ Tower database management, point-to-point link analysis, terrain-aware multi-hop
 
 ![Python 3.10](https://img.shields.io/badge/python-3.10-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.135-009688)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-Commercial-red)
 
 ---
 
@@ -126,9 +126,13 @@ X-API-Key: <your-key>
 | `POST` | `/plan_repeater` | Any tier | Dijkstra-optimized multi-hop repeater chain |
 | `GET` | `/export_report` | Pro+ | Download PDF link report |
 | `GET` | `/export_report/pdf` | Pro+ | Download PDF link report (alias) |
-| `POST` | `/batch_reports` | Pro+ | Upload CSV → download ZIP of PDFs (max 100 rows) |
+| `POST` | `/batch_reports` | Pro+ | Upload CSV → ZIP of PDFs (≤100 sync, >100 async job) |
+| `GET` | `/jobs/{job_id}` | — | Poll background batch job status |
+| `GET` | `/jobs/{job_id}/download` | — | Download completed batch job ZIP |
 | `POST` | `/signup/free` | — | Self-service free-tier signup |
 | `POST` | `/signup/checkout` | — | Create Stripe Checkout session (Pro/Enterprise) |
+| `GET` | `/signup/success` | — | Retrieve API key after Stripe payment |
+| `POST` | `/signup/status` | — | Look up existing key by email |
 | `POST` | `/stripe/webhook` | Stripe sig | Stripe event handler |
 
 ### Example: Analyze a link
@@ -221,6 +225,7 @@ Generated with ReportLab + Matplotlib:
 | `http_request_duration_seconds` | Histogram | `method`, `endpoint`, `status` | Request latency (10 buckets: 10 ms – 10 s) |
 | `http_requests_total` | Counter | `method`, `endpoint`, `status` | Total request count |
 | `rate_limit_hits_total` | Counter | `tier` | Rate-limit 429 rejections |
+| `batch_jobs_active` | Gauge | — | Background batch jobs currently running |
 
 ---
 
@@ -232,6 +237,7 @@ Generated with ReportLab + Matplotlib:
 | `RATE_LIMIT_FREE` | `10` | Requests/min for free tier |
 | `RATE_LIMIT_PRO` | `100` | Requests/min for pro tier |
 | `RATE_LIMIT_ENTERPRISE` | `1000` | Requests/min for enterprise tier |
+| `VALID_API_KEYS` | *(demo keys)* | JSON dict `{"key":"tier"}` — overrides built-in demo keys |
 | `STRIPE_SECRET_KEY` | — | Stripe API key (`sk_test_...` or `sk_live_...`) |
 | `STRIPE_WEBHOOK_SECRET` | — | Stripe webhook signing secret (`whsec_...`) |
 | `STRIPE_PRICE_PRO` | — | Stripe Price ID for Pro plan |
@@ -296,7 +302,10 @@ lat,lon,height,gain
 -15.8700,-47.7900,10.0,12.0
 ```
 
-Required columns: `lat`, `lon`. Optional: `height` (default 10 m), `gain` (default 12 dBi). Maximum 100 rows per batch.
+Required columns: `lat`, `lon`. Optional: `height` (default 10 m), `gain` (default 12 dBi).
+
+- **≤ 100 rows** → synchronous ZIP response
+- **> 100 rows** → background job; poll `GET /jobs/{job_id}` for progress, download via `/jobs/{job_id}/download`
 
 ---
 
@@ -310,10 +319,14 @@ TELECOM-TOWER-POWER/
 ├── pdf_generator.py             # PDF report builder
 ├── srtm_elevation.py            # SRTM .hgt tile reader
 ├── load_towers.py               # CSV → API tower loader
-├── frontend.py                  # Streamlit UI
+├── frontend.py                  # Streamlit UI (API-backed)
+├── streamlit_app.py             # Standalone Streamlit (no API needed)
 ├── towers_brazil.csv            # Sample tower dataset (Brasília)
 ├── sample_receivers.csv         # Sample receivers for batch testing
+├── sample_batch_test.csv        # 20-row batch test CSV
+├── .env.example                 # Environment variable template
 ├── requirements.txt             # Python dependencies
+├── LICENSE                      # Commercial license
 ├── Dockerfile                   # Multi-stage Docker build
 ├── docker-compose.yml           # Full-stack orchestration
 ├── start.sh                     # Full-stack launcher script
@@ -328,9 +341,15 @@ TELECOM-TOWER-POWER/
 │   │   ├── Sidebar.jsx          # Analysis controls + results
 │   │   ├── Signup.jsx           # Self-service signup page
 │   │   ├── api.js               # API client module
-│   │   └── App.css              # Dark theme styles
+│   │   └── App.css              # Dark theme + mobile responsive
+│   ├── public/
+│   │   ├── manifest.json        # PWA manifest
+│   │   ├── sw.js                # Service worker
+│   │   └── icons/               # PWA icons (192 + 512)
 │   ├── vite.config.js           # Vite + proxy config
 │   └── package.json
+├── .streamlit/
+│   └── config.toml              # Streamlit dark theme
 └── srtm_data/                   # SRTM elevation tiles (.hgt)
 ```
 
@@ -338,4 +357,7 @@ TELECOM-TOWER-POWER/
 
 ## License
 
-MIT
+Copyright (c) 2025 DANIEL AZEVEDO NOVAIS. All rights reserved.
+
+This software is proprietary. Commercial use requires a signed license agreement.
+See [LICENSE](LICENSE) for details.

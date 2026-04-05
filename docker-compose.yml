@@ -3,10 +3,13 @@ services:
     build: .
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       - PORT=8000
     volumes:
       - ./srtm_data:/app/srtm_data:ro
+      - ./key_store.json:/app/key_store.json
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
