@@ -19,6 +19,7 @@ COPY telecom_tower_power.py .
 COPY pdf_generator.py .
 COPY srtm_elevation.py .
 COPY stripe_billing.py .
+COPY tower_db.py .
 COPY frontend.py .
 COPY load_towers.py .
 COPY towers_brazil.csv .

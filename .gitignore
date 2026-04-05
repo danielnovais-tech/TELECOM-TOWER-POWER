@@ -23,6 +23,9 @@ report_out.json
 # SRTM elevation tiles (large binary files)
 srtm_data/*.hgt
 
+# SQLite tower database (runtime data)
+towers.db
+
 # C extensions
 *.so
 

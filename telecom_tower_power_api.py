@@ -34,6 +34,7 @@ import uvicorn
 from pdf_generator import build_pdf_report
 from srtm_elevation import SRTMReader
 import stripe_billing
+from tower_db import TowerStore
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 logger = logging.getLogger("telecom_tower_power")
@@ -345,9 +346,29 @@ class TelecomTowerPower:
     def __init__(self):
         self.towers: Dict[str, Tower] = {}
         self.elevation = ElevationService()
+        self.db = TowerStore()
+        self._load_from_db()
+
+    def _load_from_db(self):
+        """Hydrate in-memory cache from SQLite on startup."""
+        for row in self.db.list_all():
+            t = Tower(
+                id=row["id"], lat=row["lat"], lon=row["lon"],
+                height_m=row["height_m"], operator=row["operator"],
+                bands=[Band(b) for b in row["bands"]],
+                power_dbm=row["power_dbm"],
+            )
+            self.towers[t.id] = t
+        logger.info("Loaded %d towers from database", len(self.towers))
 
     def add_tower(self, tower: Tower):
         self.towers[tower.id] = tower
+        self.db.upsert({
+            "id": tower.id, "lat": tower.lat, "lon": tower.lon,
+            "height_m": tower.height_m, "operator": tower.operator,
+            "bands": [b.value for b in tower.bands],
+            "power_dbm": tower.power_dbm,
+        })
 
     def find_nearest_towers(self, lat: float, lon: float, operator: Optional[str] = None,
                             limit: int = 5) -> List[Tower]:
@@ -722,6 +743,7 @@ async def health_check():
     return {
         "status": "healthy",
         "towers_loaded": len(platform.towers),
+        "towers_persisted": platform.db.count(),
         "elevation_cache_size": len(platform.elevation.cache),
         "srtm_available": srtm_ok,
         "timestamp": datetime.now(timezone.utc).isoformat(),

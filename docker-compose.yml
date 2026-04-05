@@ -10,6 +10,7 @@ services:
     volumes:
       - ./srtm_data:/app/srtm_data:ro
       - ./key_store.json:/app/key_store.json
+      - ./towers.db:/app/towers.db
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
