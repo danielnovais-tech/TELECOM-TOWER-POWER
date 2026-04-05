@@ -18,10 +18,12 @@ COPY telecom_tower_power_api.py .
 COPY telecom_tower_power.py .
 COPY pdf_generator.py .
 COPY srtm_elevation.py .
+COPY stripe_billing.py .
 COPY frontend.py .
 COPY load_towers.py .
 COPY towers_brazil.csv .
 COPY sample_receivers.csv .
+COPY sample_batch_test.csv .
 COPY start.sh .
 
 # Create srtm_data directory and fix permissions
@@ -34,7 +36,7 @@ ENV PORT=8000
 EXPOSE ${PORT}
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/health')" || exit 1
+    CMD ["sh", "-c", "python -c \"import urllib.request,os; urllib.request.urlopen('http://localhost:'+os.environ.get('PORT','8000')+'/health')\""]
 
 # Default: API only. Use start.sh for full-stack (API + UI).
-CMD uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port ${PORT}
+CMD ["sh", "-c", "uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port ${PORT}"]

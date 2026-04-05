@@ -653,7 +653,7 @@ class TowerInput(BaseModel):
     lon: float = Field(..., ge=-180, le=180)
     height_m: float = Field(..., gt=0)
     operator: str
-    bands: List[Band]
+    bands: List[Band] = Field(..., min_length=1)
     power_dbm: float = 43.0
 
 class ReceiverInput(BaseModel):
