@@ -14,3 +14,6 @@ pandas==2.2.3
 stripe
 prometheus-client
 psycopg2-binary
+python-json-logger
+alembic
+sqlalchemy

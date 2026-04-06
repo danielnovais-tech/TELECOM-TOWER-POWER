@@ -2,17 +2,19 @@
 streamlit_app.py
 Streamlit Community Cloud frontend for TELECOM TOWER POWER.
 
-Uses the standalone sync engine (telecom_tower_power.py) directly —
-no FastAPI backend required.
+Uses the standalone sync engine (telecom_tower_power.py) for map /
+analysis, and the FastAPI backend for batch jobs & rate-limit display.
 """
 
 import csv
 import io
 import math
 import os
+import time
 
 import folium
 import pandas as pd
+import requests
 import streamlit as st
 from streamlit_folium import st_folium
 
@@ -40,6 +42,86 @@ BAND_MAP = {
 }
 
 SRTM_DIR = os.getenv("SRTM_DATA_DIR", "./srtm_data")
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+
+
+# ── API client helpers ──────────────────────────────────────
+def _api_headers() -> dict:
+    """Return headers with the configured API key."""
+    key = st.session_state.get("api_key", "")
+    return {"X-API-Key": key} if key else {}
+
+
+def _update_rate_limit(resp: requests.Response) -> None:
+    """Store rate-limit headers in session state for sidebar display."""
+    remaining = resp.headers.get("X-RateLimit-Remaining")
+    limit = resp.headers.get("X-RateLimit-Limit")
+    if remaining is not None:
+        st.session_state["rl_remaining"] = int(remaining)
+        st.session_state["rl_limit"] = int(limit or 0)
+
+
+def _handle_api_error(resp: requests.Response) -> bool:
+    """Show user-friendly messages for common errors. Returns True if error."""
+    if resp.status_code == 429:
+        detail = resp.json().get("detail", "Rate limit exceeded.")
+        st.error(f"⏳ **Rate limit exceeded** — {detail}")
+        return True
+    if resp.status_code == 403:
+        detail = resp.json().get("detail", "Forbidden.")
+        st.error(f"🔒 **Access denied** — {detail}")
+        return True
+    if resp.status_code == 401:
+        st.error("🔑 **Invalid API key** — check your key in the sidebar.")
+        return True
+    if resp.status_code >= 400:
+        detail = resp.json().get("detail", resp.text)
+        st.error(f"❌ **Error {resp.status_code}** — {detail}")
+        return True
+    return False
+
+
+def api_get(path: str, **kwargs) -> requests.Response | None:
+    """GET helper with error handling and rate-limit tracking."""
+    try:
+        resp = requests.get(f"{API_URL}{path}", headers=_api_headers(), timeout=30, **kwargs)
+        _update_rate_limit(resp)
+        if _handle_api_error(resp):
+            return None
+        return resp
+    except requests.ConnectionError:
+        st.error("🔌 **Cannot reach API** — is the backend running?")
+        return None
+
+
+def api_post(path: str, **kwargs) -> requests.Response | None:
+    """POST helper with error handling and rate-limit tracking."""
+    try:
+        resp = requests.post(f"{API_URL}{path}", headers=_api_headers(), timeout=120, **kwargs)
+        _update_rate_limit(resp)
+        if _handle_api_error(resp):
+            return None
+        return resp
+    except requests.ConnectionError:
+        st.error("🔌 **Cannot reach API** — is the backend running?")
+        return None
+
+
+@st.cache_data(ttl=300, show_spinner="Loading towers from API…")
+def fetch_tower_list_cached(api_key: str) -> list[dict] | None:
+    """Fetch towers from the API, cached for 5 minutes."""
+    try:
+        resp = requests.get(
+            f"{API_URL}/towers",
+            headers={"X-API-Key": api_key} if api_key else {},
+            params={"limit": 500},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("towers", [])
+    except requests.ConnectionError:
+        pass
+    return None
 
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -154,6 +236,26 @@ def sidebar(engine: TelecomTowerPower):
     st.sidebar.title("📡 TELECOM TOWER POWER")
     st.sidebar.markdown("---")
 
+    # ── API key input ───────────────────────────────────────
+    st.sidebar.subheader("API connection")
+    api_key = st.sidebar.text_input(
+        "API key", type="password", key="api_key",
+        help="Required for batch jobs. Get one from the signup page.",
+    )
+
+    # ── Rate limit display ──────────────────────────────────
+    rl_remaining = st.session_state.get("rl_remaining")
+    rl_limit = st.session_state.get("rl_limit")
+    if rl_remaining is not None and rl_limit is not None:
+        st.sidebar.metric(
+            "API calls remaining this minute",
+            f"{rl_remaining} / {rl_limit}",
+        )
+    elif api_key:
+        st.sidebar.caption("Rate limit info appears after your first API call.")
+
+    st.sidebar.markdown("---")
+
     # Upload custom towers CSV
     uploaded = st.sidebar.file_uploader("Upload towers CSV", type=["csv"], key="tower_csv")
     if uploaded is not None:
@@ -177,6 +279,32 @@ def sidebar(engine: TelecomTowerPower):
             engine.add_tower(tower)
             count += 1
         st.sidebar.success(f"Loaded {count} towers from upload")
+
+    # ── Sync tower list from API ────────────────────────────
+    if api_key and st.sidebar.button("🔄 Sync towers from API", key="sync_towers"):
+        api_towers = fetch_tower_list_cached(api_key)
+        if api_towers:
+            loaded = 0
+            for t in api_towers:
+                bands_raw = t.get("bands", [])
+                bands = []
+                for b in bands_raw:
+                    try:
+                        bands.append(Band(b))
+                    except ValueError:
+                        pass
+                if not bands:
+                    continue
+                tower = Tower(
+                    id=t["id"], lat=t["lat"], lon=t["lon"],
+                    height_m=t["height_m"], operator=t["operator"],
+                    bands=bands, power_dbm=t.get("power_dbm", 43.0),
+                )
+                engine.add_tower(tower)
+                loaded += 1
+            st.sidebar.success(f"Synced {loaded} towers from API")
+        else:
+            st.sidebar.warning("Could not fetch towers from API.")
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Tower selection")
@@ -218,66 +346,114 @@ def sidebar(engine: TelecomTowerPower):
     return tower, receiver, actions
 
 
-# ── Batch analysis ──────────────────────────────────────────
+# ── Batch analysis (API-backed) ─────────────────────────────
 def batch_tab(engine: TelecomTowerPower):
     st.subheader("Batch link analysis")
-    st.markdown("Upload a CSV with columns: `lat`, `lon`, `height`, `gain`")
+    api_key = st.session_state.get("api_key", "")
 
     tower_ids = sorted(engine.towers.keys())
     if not tower_ids:
         st.warning("No towers loaded.")
         return
 
+    # ── Submission form ─────────────────────────────────────
+    st.markdown("Upload a CSV with columns: `lat`, `lon` (and optionally `height`, `gain`)")
     col1, col2 = st.columns([1, 2])
     with col1:
         batch_tower_id = st.selectbox("Tower for batch", tower_ids, key="batch_tower")
         batch_file = st.file_uploader("Receivers CSV", type=["csv"], key="batch_csv")
 
-    if batch_file is not None and st.button("Run batch analysis", key="run_batch"):
-        tower = engine.towers[batch_tower_id]
-        text = batch_file.getvalue().decode("utf-8")
-        reader = csv.DictReader(io.StringIO(text))
-        results = []
-        progress = st.progress(0, text="Analyzing...")
-        rows = list(reader)
-        total = len(rows)
+    if batch_file is not None and st.button("🚀 Submit batch job", key="run_batch"):
+        if not api_key:
+            st.error("🔑 Enter an API key in the sidebar to submit batch jobs.")
+            return
 
-        for i, row in enumerate(rows):
-            rx = Receiver(
-                lat=float(row["lat"]),
-                lon=float(row["lon"]),
-                height_m=float(row.get("height", 10)),
-                antenna_gain_dbi=float(row.get("gain", 12)),
-            )
-            lr = engine.analyze_link(tower, rx)
-            results.append({
-                "Receiver": f"({rx.lat:.4f}, {rx.lon:.4f})",
-                "Distance (km)": round(lr.distance_km, 2),
-                "Signal (dBm)": round(lr.signal_dbm, 1),
-                "Fresnel": round(lr.fresnel_clearance, 2),
-                "LOS": "✅" if lr.los_ok else "❌",
-                "Feasible": "✅" if lr.feasible else "❌",
-                "Recommendation": lr.recommendation,
-            })
-            progress.progress((i + 1) / total, text=f"Analyzed {i + 1}/{total}")
-
-        progress.empty()
-        df = pd.DataFrame(results)
-        with col2:
-            feasible_count = sum(1 for r in results if r["Feasible"] == "✅")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total", total)
-            m2.metric("Feasible", feasible_count)
-            m3.metric("Failed", total - feasible_count)
-        st.dataframe(df, use_container_width=True)
-
-        csv_out = df.to_csv(index=False)
-        st.download_button(
-            "📥 Download results CSV",
-            csv_out,
-            file_name="batch_results.csv",
-            mime="text/csv",
+        resp = api_post(
+            "/batch_reports",
+            params={"tower_id": batch_tower_id},
+            files={"csv_file": ("receivers.csv", batch_file.getvalue(), "text/csv")},
         )
+        if resp is None:
+            return
+
+        data = resp.json()
+
+        # Synchronous response (small batch ≤ 100) — direct ZIP download
+        if resp.headers.get("content-type", "").startswith("application/zip"):
+            st.success(f"✅ Batch complete — {len(batch_file.getvalue().splitlines()) - 1} reports generated")
+            st.download_button(
+                "📥 Download ZIP",
+                data=resp.content,
+                file_name=f"batch_reports_{batch_tower_id}.zip",
+                mime="application/zip",
+            )
+            return
+
+        # Async response — job queued
+        job_id = data.get("job_id")
+        if job_id:
+            st.session_state["active_job_id"] = job_id
+            st.session_state["active_job_tower"] = batch_tower_id
+            st.info(
+                f"📋 Job **{job_id}** queued ({data.get('total', '?')} receivers). "
+                "Polling for status below…"
+            )
+
+    # ── Job progress poller ─────────────────────────────────
+    job_id = st.session_state.get("active_job_id")
+    if job_id:
+        st.markdown("---")
+        st.subheader("Job progress")
+
+        status_placeholder = st.empty()
+        progress_bar = st.empty()
+        download_placeholder = st.empty()
+
+        if st.button("🔄 Refresh job status", key="refresh_job"):
+            pass  # button press triggers re-run
+
+        resp = api_get(f"/jobs/{job_id}")
+        if resp is None:
+            return
+
+        job_data = resp.json()
+        status = job_data.get("status", "unknown")
+        progress = job_data.get("progress", 0)
+        total = job_data.get("total", 1)
+
+        if status == "queued":
+            status_placeholder.info(f"⏳ Job **{job_id}** is queued — waiting for a worker…")
+            progress_bar.progress(0)
+        elif status == "running":
+            pct = progress / total if total else 0
+            status_placeholder.info(
+                f"⚙️ Processing… **{progress}/{total}** reports generated"
+            )
+            progress_bar.progress(pct)
+        elif status == "completed":
+            status_placeholder.success(f"✅ Job **{job_id}** completed — {total} reports ready")
+            progress_bar.progress(1.0)
+            tower_id = st.session_state.get("active_job_tower", "unknown")
+            dl_resp = api_get(f"/jobs/{job_id}/download")
+            if dl_resp is not None:
+                download_placeholder.download_button(
+                    "📥 Download ZIP",
+                    data=dl_resp.content,
+                    file_name=f"batch_reports_{tower_id}.zip",
+                    mime="application/zip",
+                    key="download_zip",
+                )
+            if st.button("Clear job", key="clear_job"):
+                del st.session_state["active_job_id"]
+                st.rerun()
+        elif status == "failed":
+            error_msg = job_data.get("error", "Unknown error")
+            status_placeholder.error(f"❌ Job **{job_id}** failed: {error_msg}")
+            if st.button("Clear job", key="clear_failed_job"):
+                del st.session_state["active_job_id"]
+                st.rerun()
+        else:
+            status_placeholder.warning(f"Job status: {status}")
 
 
 # ── Nearest towers ──────────────────────────────────────────

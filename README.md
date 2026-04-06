@@ -12,62 +12,113 @@ Tower database management, point-to-point link analysis, terrain-aware multi-hop
 ## Architecture
 
 ```
-┌──────────────┐   /api proxy    ┌──────────────────────────────────┐
-│  React SPA   │ ─────────────▸  │  FastAPI  (telecom_tower_power   │
-│  (Leaflet)   │   port 3000     │           _api.py)               │
-└──────────────┘                 │                                  │
-                                 │  ┌──────────┐ ┌───────────────┐  │
-┌──────────────┐  Streamlit UI   │  │ Stripe   │ │  Prometheus   │  │
-│ frontend.py  │ ─────────────▸  │  │ billing  │ │  /metrics     │  │
-└──────────────┘   port 8501     │  └──────────┘ └───────────────┘  │
-                                 │                                  │
-                                 │  ┌──────────┐ ┌───────────────┐  │
-                                 │  │ SRTM     │ │ Open-Elevation│  │
-                                 │  │ .hgt     │ │ API fallback  │  │
-                                 │  └──────────┘ └───────────────┘  │
-                                 │                                  │
-                                 │  ┌──────────────────────────┐    │
-                                 │  │ PDF Generator (ReportLab │    │
-                                 │  │ + Matplotlib terrain)    │    │
-                                 │  └──────────────────────────┘    │
-                                 └──────────────────────────────────┘
+                           ┌──────────────────────────────────────────────────────┐
+                           │                 Docker Compose Stack                 │
+                           │                                                     │
+┌──────────────┐           │  ┌──────────────────────────────────┐               │
+│  React SPA   │───────────│─▸│  FastAPI  (telecom_tower_power   │               │
+│  (Leaflet)   │ port 3000 │  │           _api.py)  :8000        │               │
+└──────────────┘           │  │                                  │               │
+                           │  │  Auth ─▸ Rate Limiter ─▸ Metrics │               │
+┌──────────────┐           │  │  CORS ─▸ Security Headers        │               │
+│ Streamlit UI │───────────│─▸│  Stripe billing │ Prometheus     │               │
+│ frontend.py  │ port 8501 │  └────────┬────────┴────────────────┘               │
+└──────────────┘           │           │                                         │
+                           │           ▼                                         │
+                           │  ┌─────────────────┐   ┌────────────────────┐       │
+                           │  │  PostgreSQL 16   │   │  Batch Worker      │       │
+                           │  │  (tower_db.py)   │◂──│  (batch_worker.py) │       │
+                           │  │  towers, jobs    │   │  polls job queue   │       │
+                           │  └─────────────────┘   └────────────────────┘       │
+                           │                                                     │
+                           │  ┌─────────────────┐   ┌────────────────────┐       │
+                           │  │  Prometheus      │──▸│  Grafana           │       │
+                           │  │  :9090           │   │  :3001             │       │
+                           │  └─────────────────┘   └────────────────────┘       │
+                           └──────────────────────────────────────────────────────┘
+
+SQLite fallback: when DATABASE_URL is not set, the API and worker use a local
+towers.db file automatically — no PostgreSQL required for development.
 ```
 
 | Component | File(s) | Purpose |
 |---|---|---|
 | **API** | `telecom_tower_power_api.py` | FastAPI backend — all endpoints, auth, rate limiting |
+| **Database layer** | `tower_db.py` | Dual SQLite/PostgreSQL persistence (auto-detected) |
+| **Job queue** | `job_store.py` | Persistent batch job queue (DB-backed) |
+| **Batch worker** | `batch_worker.py` | Background process — polls jobs, generates PDF ZIPs |
+| **DB migration** | `migrate_csv_to_db.py` | CLI to load tower CSV into the database |
+| **Schema versioning** | `alembic.ini`, `migrations/` | Alembic database migrations |
 | **Standalone engine** | `telecom_tower_power.py` | Sync library (no server dependency) |
 | **Elevation** | `srtm_elevation.py` | Offline SRTM3 .hgt reader with bilinear interpolation |
 | **PDF reports** | `pdf_generator.py` | A4 engineering reports with terrain/Fresnel charts |
 | **Billing** | `stripe_billing.py` | Stripe Checkout, webhook handling, key lifecycle |
 | **React UI** | `frontend/src/` | Leaflet map, link analysis, repeater planner |
-| **Streamlit UI** | `frontend.py` | Alternative dashboard with Folium maps |
+| **Streamlit UI** | `frontend.py`, `streamlit_app.py` | Dashboard with Folium maps, batch job tracking |
 | **Tower loader** | `load_towers.py` | Bulk CSV → API ingestion script |
+| **Monitoring** | `grafana_dashboard.json`, `prometheus.yml` | Pre-built Grafana dashboard + Prometheus config |
 
 ---
 
 ## Quick Start
 
-### 1. Install dependencies
+### Option A: Docker Compose (recommended)
+
+Brings up the full stack — PostgreSQL, API, worker, frontend, Prometheus, and Grafana:
+
+```bash
+docker-compose up
+```
+
+| Service | URL | Purpose |
+|---|---|---|
+| API | http://localhost:8000 | FastAPI + Swagger docs at `/docs` |
+| Streamlit | http://localhost:8501 | Streamlit dashboard |
+| Prometheus | http://localhost:9090 | Metrics scraper |
+| Grafana | http://localhost:3001 | Dashboards (login: `admin`/`admin`) |
+| PostgreSQL | localhost:5432 | Database (user: `telecom`, db: `towers`) |
+
+The `load-towers` service automatically seeds the database from `towers_brazil.csv` on first run.
+
+### Option B: Local development (SQLite)
+
+No Docker or PostgreSQL required — uses SQLite automatically.
+
+#### 1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Start the API server
+#### 2. Seed the database
+
+```bash
+python migrate_csv_to_db.py --csv towers_brazil.csv --clear
+```
+
+This creates `towers.db` with all towers from the CSV.
+
+#### 3. Start the API server
 
 ```bash
 uvicorn telecom_tower_power_api:app --host 127.0.0.1 --port 8000
 ```
 
-### 3. Load tower data
+#### 4. Start the background worker (separate terminal)
 
 ```bash
-python load_towers.py                          # defaults: towers_brazil.csv → localhost:8000
-python load_towers.py towers_brazil.csv http://your-host:8000
+python batch_worker.py --poll-interval 2
 ```
 
-### 4. Launch the React frontend (optional)
+The worker processes batch PDF jobs queued via `POST /batch_reports`.
+
+#### 5. Launch the Streamlit frontend (optional)
+
+```bash
+streamlit run frontend.py
+```
+
+#### 6. Launch the React frontend (optional)
 
 ```bash
 cd frontend
@@ -75,10 +126,60 @@ npm install
 npm run dev        # http://localhost:3000, proxies /api → backend
 ```
 
-### 5. Launch the Streamlit frontend (optional)
+### Database setup
+
+The platform auto-detects the database backend:
+
+| `DATABASE_URL` env var | Backend | Use case |
+|---|---|---|
+| Not set | **SQLite** (`towers.db`) | Local dev, single-instance |
+| `postgresql://...` | **PostgreSQL** | Production, multi-worker |
+
+To switch to PostgreSQL locally:
 
 ```bash
-streamlit run frontend.py
+export DATABASE_URL=postgresql://telecom:telecom_secret@localhost:5432/towers
+alembic upgrade head                                  # apply schema migrations
+python migrate_csv_to_db.py --csv towers_brazil.csv --clear
+uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port 8000
+```
+
+### Schema migrations (Alembic)
+
+Database schema is version-controlled with [Alembic](https://alembic.sqlalchemy.org/).
+
+```bash
+# Apply all pending migrations
+alembic upgrade head
+
+# Check current revision
+alembic current
+
+# Create a new migration after changing models.py
+alembic revision --autogenerate -m "describe_change"
+
+# Downgrade one revision
+alembic downgrade -1
+```
+
+In Docker Compose, the `migrate` service runs `alembic upgrade head` automatically before the API starts.
+
+### Prometheus / Grafana quick start
+
+With Docker Compose, Prometheus and Grafana start automatically. To connect them:
+
+1. Open Grafana at http://localhost:3001 (login: `admin` / `admin`)
+2. Add data source → Prometheus → URL: `http://prometheus:9090`
+3. Import dashboard → Upload `grafana_dashboard.json` (or it's auto-mounted)
+
+Without Docker, scrape the API's `/metrics` endpoint with any Prometheus instance:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: "telecom-tower-power-api"
+    static_configs:
+      - targets: ["localhost:8000"]
 ```
 
 ---
@@ -218,14 +319,34 @@ Generated with ReportLab + Matplotlib:
 
 ## Monitoring
 
-`GET /metrics` exposes Prometheus-compatible metrics:
+`GET /metrics` exposes Prometheus-compatible metrics. All API request logs are structured JSON.
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
-| `http_request_duration_seconds` | Histogram | `method`, `endpoint`, `status` | Request latency (10 buckets: 10 ms – 10 s) |
-| `http_requests_total` | Counter | `method`, `endpoint`, `status` | Total request count |
+| `http_request_duration_seconds` | Histogram | `method`, `endpoint`, `status`, `tier` | Request latency (10 buckets: 10 ms – 10 s) |
+| `http_requests_total` | Counter | `method`, `endpoint`, `status`, `tier` | Total request count |
 | `rate_limit_hits_total` | Counter | `tier` | Rate-limit 429 rejections |
 | `batch_jobs_active` | Gauge | — | Background batch jobs currently running |
+| `batch_jobs_duration_seconds` | Histogram | — | Time to process a batch job |
+
+**Response headers** on authenticated requests:
+- `X-RateLimit-Remaining` — calls left in the current minute
+- `X-RateLimit-Limit` — total calls allowed per minute for the tier
+
+**Structured JSON logs** — every request emits:
+```json
+{"timestamp": "...", "level": "INFO", "message": "request",
+ "http_method": "GET", "path": "/towers", "status": 200,
+ "duration_ms": 15.0, "api_key_tier": "free"}
+```
+
+**Pre-built Grafana dashboard** (`grafana_dashboard.json`) includes:
+- Request rate by endpoint and tier
+- Latency percentiles (p50 / p90 / p99)
+- Error rate (4xx / 5xx)
+- Rate-limit hit rate by tier
+- Active batch jobs gauge
+- Batch job duration percentiles
 
 ---
 
@@ -233,7 +354,11 @@ Generated with ReportLab + Matplotlib:
 
 | Variable | Default | Description |
 |---|---|---|
+| `DATABASE_URL` | *(none → SQLite)* | PostgreSQL connection string; omit for local SQLite |
 | `SRTM_DATA_DIR` | `./srtm_data` | Path to SRTM `.hgt` tile directory |
+| `CORS_ORIGINS` | `https://app.telecomtowerpower.com` | Comma-separated allowed CORS origins |
+| `MAX_UPLOAD_BYTES` | `10485760` (10 MB) | Maximum request body size |
+| `MAX_BATCH_ROWS` | `100` | Maximum rows per batch CSV upload |
 | `RATE_LIMIT_FREE` | `10` | Requests/min for free tier |
 | `RATE_LIMIT_PRO` | `100` | Requests/min for pro tier |
 | `RATE_LIMIT_ENTERPRISE` | `1000` | Requests/min for enterprise tier |
@@ -263,10 +388,14 @@ docker run -p 8000:8000 -v ./srtm_data:/app/srtm_data:ro telecom-tower-power
 docker-compose up
 ```
 
-Starts three services:
+Starts seven services:
+- **postgres** — PostgreSQL 16 database
 - **api** — FastAPI on port 8000 with healthcheck
+- **worker** — Background batch job processor
 - **frontend** — Streamlit on port 8501
-- **load-towers** — one-shot CSV loader
+- **load-towers** — one-shot CSV → DB seeder
+- **prometheus** — Metrics scraper on port 9090
+- **grafana** — Dashboards on port 3001
 
 ### Railway
 
@@ -274,7 +403,11 @@ Push to a Railway project — `railway.json` configures Dockerfile build, health
 
 ### Render
 
-Push to Render — `render.yaml` defines two web services (API + UI) with healthchecks on the free plan.
+Push to Render — `render.yaml` defines:
+- **PostgreSQL database** — provisioned automatically
+- **API web service** — seeds towers on build, connects to PG via `DATABASE_URL`
+- **Background worker** — polls the job queue
+- **Streamlit UI** — frontend web service
 
 ### Heroku / Generic PaaS
 
@@ -315,6 +448,10 @@ Required columns: `lat`, `lon`. Optional: `height` (default 10 m), `gain` (defau
 TELECOM-TOWER-POWER/
 ├── telecom_tower_power_api.py   # FastAPI app (all endpoints + auth)
 ├── telecom_tower_power.py       # Standalone sync engine
+├── tower_db.py                  # Database layer (SQLite / PostgreSQL)
+├── job_store.py                 # Persistent job queue (batch_jobs table)
+├── batch_worker.py              # Background worker process
+├── migrate_csv_to_db.py         # CSV → DB migration CLI
 ├── stripe_billing.py            # Stripe integration + key store
 ├── pdf_generator.py             # PDF report builder
 ├── srtm_elevation.py            # SRTM .hgt tile reader
@@ -324,13 +461,14 @@ TELECOM-TOWER-POWER/
 ├── towers_brazil.csv            # Sample tower dataset (Brasília)
 ├── sample_receivers.csv         # Sample receivers for batch testing
 ├── sample_batch_test.csv        # 20-row batch test CSV
-├── .env.example                 # Environment variable template
+├── grafana_dashboard.json       # Pre-built Grafana dashboard
+├── prometheus.yml               # Prometheus scrape config
 ├── requirements.txt             # Python dependencies
 ├── LICENSE                      # Commercial license
 ├── Dockerfile                   # Multi-stage Docker build
-├── docker-compose.yml           # Full-stack orchestration
+├── docker-compose.yml           # Full-stack orchestration (7 services)
 ├── start.sh                     # Full-stack launcher script
-├── render.yaml                  # Render deployment config
+├── render.yaml                  # Render deployment config (PG + worker)
 ├── railway.json                 # Railway deployment config
 ├── Procfile                     # Heroku/PaaS process file
 ├── .dockerignore

@@ -35,8 +35,21 @@ from pdf_generator import build_pdf_report
 from srtm_elevation import SRTMReader
 import stripe_billing
 from tower_db import TowerStore
+from job_store import JobStore, JOB_RESULTS_DIR
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from pythonjsonlogger import jsonlogger
 
+# ------------------------------------------------------------
+# Structured JSON logging
+# ------------------------------------------------------------
+_json_handler = logging.StreamHandler()
+_json_handler.setFormatter(
+    jsonlogger.JsonFormatter(
+        fmt="%(asctime)s %(name)s %(levelname)s %(message)s",
+        rename_fields={"asctime": "timestamp", "levelname": "level"},
+    )
+)
+logging.basicConfig(level=logging.INFO, handlers=[_json_handler])
 logger = logging.getLogger("telecom_tower_power")
 
 # ------------------------------------------------------------
@@ -45,13 +58,13 @@ logger = logging.getLogger("telecom_tower_power")
 REQUEST_LATENCY = Histogram(
     "http_request_duration_seconds",
     "Request latency in seconds",
-    labelnames=["method", "endpoint", "status"],
+    labelnames=["method", "endpoint", "status", "tier"],
     buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
 )
 REQUEST_COUNT = Counter(
     "http_requests_total",
     "Total HTTP requests",
-    labelnames=["method", "endpoint", "status"],
+    labelnames=["method", "endpoint", "status", "tier"],
 )
 RATE_LIMIT_HITS = Counter(
     "rate_limit_hits_total",
@@ -62,13 +75,11 @@ BATCH_JOBS_ACTIVE = Gauge(
     "batch_jobs_active",
     "Number of background batch jobs currently running",
 )
-
-# ------------------------------------------------------------
-# Background job queue (in-memory, no external broker needed)
-# ------------------------------------------------------------
-_jobs: Dict[str, Dict] = {}          # job_id → {status, progress, total, ...}
-_job_results: Dict[str, bytes] = {}  # job_id → ZIP bytes
-_MAX_JOB_RESULTS = 50                # evict oldest results beyond this
+BATCH_JOB_DURATION = Histogram(
+    "batch_jobs_duration_seconds",
+    "Time to process a batch job from start to finish",
+    buckets=(1, 5, 10, 30, 60, 120, 300, 600),
+)
 
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
@@ -344,24 +355,24 @@ class ElevationService:
 
 class TelecomTowerPower:
     def __init__(self):
-        self.towers: Dict[str, Tower] = {}
         self.elevation = ElevationService()
         self.db = TowerStore()
-        self._load_from_db()
+        logger.info("DB backend: %s – %d towers in database",
+                     self.db.backend, self.db.count())
 
-    def _load_from_db(self):
-        """Hydrate in-memory cache from SQLite on startup."""
-        for row in self.db.list_all():
-            t = Tower(
-                id=row["id"], lat=row["lat"], lon=row["lon"],
-                height_m=row["height_m"], operator=row["operator"],
-                bands=[Band(b) for b in row["bands"]],
-                power_dbm=row["power_dbm"],
-            )
-            self.towers[t.id] = t
-        logger.info("Loaded %d towers from database", len(self.towers))
+    # ── helpers ──────────────────────────────────────────────────
 
-    def _tower_to_row(self, tower: Tower) -> dict:
+    @staticmethod
+    def _row_to_tower(row: dict) -> Tower:
+        return Tower(
+            id=row["id"], lat=row["lat"], lon=row["lon"],
+            height_m=row["height_m"], operator=row["operator"],
+            bands=[Band(b) for b in row["bands"]],
+            power_dbm=row["power_dbm"],
+        )
+
+    @staticmethod
+    def _tower_to_row(tower: Tower) -> dict:
         return {
             "id": tower.id, "lat": tower.lat, "lon": tower.lon,
             "height_m": tower.height_m, "operator": tower.operator,
@@ -369,29 +380,36 @@ class TelecomTowerPower:
             "power_dbm": tower.power_dbm,
         }
 
+    # ── CRUD (all go through DB) ─────────────────────────────────
+
     def add_tower(self, tower: Tower):
-        self.towers[tower.id] = tower
         self.db.upsert(self._tower_to_row(tower))
 
     def update_tower(self, tower: Tower):
-        self.towers[tower.id] = tower
         self.db.upsert(self._tower_to_row(tower))
 
     def remove_tower(self, tower_id: str) -> bool:
-        removed = self.towers.pop(tower_id, None)
-        self.db.delete(tower_id)
-        return removed is not None
+        return self.db.delete(tower_id)
 
-    def find_nearest_towers(self, lat: float, lon: float, operator: Optional[str] = None,
+    def get_tower(self, tower_id: str) -> Optional[Tower]:
+        row = self.db.get(tower_id)
+        if row is None:
+            return None
+        return self._row_to_tower(row)
+
+    def list_towers(self, operator: Optional[str] = None,
+                    limit: int = 100) -> List[Tower]:
+        rows = self.db.list_all(operator=operator, limit=limit)
+        return [self._row_to_tower(r) for r in rows]
+
+    def tower_count(self) -> int:
+        return self.db.count()
+
+    def find_nearest_towers(self, lat: float, lon: float,
+                            operator: Optional[str] = None,
                             limit: int = 5) -> List[Tower]:
-        distances = []
-        for tower in self.towers.values():
-            if operator and tower.operator != operator:
-                continue
-            d = LinkEngine.haversine_km(lat, lon, tower.lat, tower.lon)
-            distances.append((d, tower))
-        distances.sort(key=lambda x: x[0])
-        return [t for _, t in distances[:limit]]
+        rows = self.db.find_nearest(lat, lon, operator=operator, limit=limit)
+        return [self._row_to_tower(r) for r in rows]
 
     async def analyze_link(self, tower: Tower, receiver: Receiver,
                            terrain_profile: Optional[List[float]] = None) -> LinkResult:
@@ -619,8 +637,9 @@ api_key_header = APIKeyHeader(name="X-API-Key")
 # ---- Sliding-window rate limiter (per API key) ----
 _rate_buckets: Dict[str, collections.deque] = {}
 
-def _check_rate_limit(api_key: str, tier: Tier) -> None:
-    """Raise 429 if the caller exceeds their tier's requests_per_min."""
+def _check_rate_limit(api_key: str, tier: Tier) -> Tuple[int, int]:
+    """Raise 429 if the caller exceeds their tier's requests_per_min.
+    Returns (remaining, limit) for response headers."""
     limit = TIER_LIMITS[tier]["requests_per_min"]
     now = time.monotonic()
     window = 60.0  # seconds
@@ -635,10 +654,16 @@ def _check_rate_limit(api_key: str, tier: Tier) -> None:
             status_code=429,
             detail=f"Rate limit exceeded ({limit} requests/min for {tier.value} tier). "
                    "Try again shortly.",
+            headers={
+                "X-RateLimit-Limit": str(limit),
+                "X-RateLimit-Remaining": "0",
+            },
         )
     bucket.append(now)
+    remaining = max(0, limit - len(bucket))
+    return remaining, limit
 
-async def verify_api_key(api_key: str = Security(api_key_header)) -> Dict:
+async def verify_api_key(request: Request, api_key: str = Security(api_key_header)) -> Dict:
     """Validate the API key, enforce rate limit, and return key metadata."""
     key_data = API_KEYS.get(api_key)
     if key_data is None:
@@ -648,7 +673,10 @@ async def verify_api_key(api_key: str = Security(api_key_header)) -> Dict:
             key_data = {"tier": Tier(dynamic["tier"]), "owner": dynamic["owner"]}
         else:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    _check_rate_limit(api_key, key_data["tier"])
+    remaining, limit = _check_rate_limit(api_key, key_data["tier"])
+    request.state.tier = key_data["tier"].value
+    request.state.rate_limit_remaining = remaining
+    request.state.rate_limit_limit = limit
     return key_data
 
 def require_tier(*allowed: Tier):
@@ -664,6 +692,18 @@ def require_tier(*allowed: Tier):
     return _check
 
 # ------------------------------------------------------------
+# Configuration from environment
+# ------------------------------------------------------------
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 10 MB
+MAX_BATCH_ROWS = int(os.getenv("MAX_BATCH_ROWS", "100"))
+
+_allowed_origins_raw = os.getenv(
+    "CORS_ORIGINS",
+    "https://app.telecomtowerpower.com",
+)
+_allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
+
+# ------------------------------------------------------------
 # FastAPI application
 # ------------------------------------------------------------
 
@@ -675,11 +715,39 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["X-API-Key", "Content-Type", "Authorization"],
+    expose_headers=["X-RateLimit-Remaining", "X-RateLimit-Limit"],
 )
+
+# Security headers middleware
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+# Request body size limit middleware
+@app.middleware("http")
+async def request_size_limit_middleware(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_UPLOAD_BYTES:
+        return Response(
+            content=json.dumps({
+                "detail": f"Request body too large. Maximum size is "
+                           f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+            }),
+            status_code=413,
+            media_type="application/json",
+        )
+    return await call_next(request)
 
 # Prometheus latency / count middleware
 @app.middleware("http")
@@ -690,16 +758,35 @@ async def prometheus_middleware(request: Request, call_next):
     response = await call_next(request)
     elapsed = time.monotonic() - start
     endpoint = request.url.path
+    tier = getattr(request.state, "tier", "anonymous")
     REQUEST_LATENCY.labels(
-        method=request.method, endpoint=endpoint, status=response.status_code,
+        method=request.method, endpoint=endpoint, status=response.status_code, tier=tier,
     ).observe(elapsed)
     REQUEST_COUNT.labels(
-        method=request.method, endpoint=endpoint, status=response.status_code,
+        method=request.method, endpoint=endpoint, status=response.status_code, tier=tier,
     ).inc()
+    # Inject rate-limit headers when auth ran successfully
+    rl_remaining = getattr(request.state, "rate_limit_remaining", None)
+    if rl_remaining is not None:
+        response.headers["X-RateLimit-Remaining"] = str(rl_remaining)
+        response.headers["X-RateLimit-Limit"] = str(
+            getattr(request.state, "rate_limit_limit", 0)
+        )
+    logger.info(
+        "request",
+        extra={
+            "http_method": request.method,
+            "path": endpoint,
+            "status": response.status_code,
+            "duration_ms": round(elapsed * 1000, 2),
+            "api_key_tier": tier,
+        },
+    )
     return response
 
 # Global platform instance
 platform = TelecomTowerPower()
+job_store = JobStore()
 
 # Pydantic models for API
 class TowerInput(BaseModel):
@@ -753,11 +840,15 @@ async def metrics():
 async def health_check():
     """Lightweight liveness / readiness probe for load balancers."""
     srtm_ok = os.path.isdir(platform.elevation.srtm.data_dir)
+    tower_count = platform.tower_count()
+    queued_jobs = len(job_store.list_jobs(status="queued"))
+    running_jobs = len(job_store.list_jobs(status="running"))
     return {
         "status": "healthy",
-        "towers_loaded": len(platform.towers),
-        "towers_persisted": platform.db.count(),
+        "towers_in_db": tower_count,
         "db_backend": platform.db.backend,
+        "jobs_queued": queued_jobs,
+        "jobs_running": running_jobs,
         "elevation_cache_size": len(platform.elevation.cache),
         "srtm_available": srtm_ok,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -776,7 +867,7 @@ async def shutdown():
 async def add_tower(tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
     """Add a new tower to the database."""
     tier_limit = TIER_LIMITS[key_data["tier"]]["max_towers"]
-    if len(platform.towers) >= tier_limit:
+    if platform.tower_count() >= tier_limit:
         raise HTTPException(status_code=403, detail=f"Tower limit reached for {key_data['tier'].value} tier ({tier_limit})")
     new_tower = Tower(
         id=tower.id,
@@ -790,10 +881,16 @@ async def add_tower(tower: TowerInput, key_data: Dict = Depends(verify_api_key))
     platform.add_tower(new_tower)
     return {"message": f"Tower {tower.id} added"}
 
+@app.get("/towers/nearest")
+async def nearest_towers(lat: float, lon: float, operator: Optional[str] = None, limit: int = 5, key_data: Dict = Depends(verify_api_key)):
+    """Find nearest towers to a given location."""
+    nearest = platform.find_nearest_towers(lat, lon, operator, limit)
+    return {"nearest_towers": [asdict(t) for t in nearest]}
+
 @app.get("/towers/{tower_id}")
 async def get_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
     """Get a single tower by ID."""
-    tower = platform.towers.get(tower_id)
+    tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     return asdict(tower)
@@ -801,17 +898,15 @@ async def get_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
 @app.get("/towers")
 async def list_towers(operator: Optional[str] = None, limit: int = 100, key_data: Dict = Depends(verify_api_key)):
     """List all towers, optionally filtered by operator."""
-    towers_list = list(platform.towers.values())
-    if operator:
-        towers_list = [t for t in towers_list if t.operator == operator]
-    return {"towers": [asdict(t) for t in towers_list[:limit]]}
+    towers_list = platform.list_towers(operator=operator, limit=limit)
+    return {"towers": [asdict(t) for t in towers_list]}
 
 @app.put("/towers/{tower_id}")
 async def update_tower(tower_id: str, tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
     """Update an existing tower.  The tower ID in the path must match the body."""
     if tower.id != tower_id:
         raise HTTPException(status_code=400, detail="Tower ID in path and body must match")
-    if tower_id not in platform.towers:
+    if platform.get_tower(tower_id) is None:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     updated = Tower(
         id=tower.id, lat=tower.lat, lon=tower.lon,
@@ -828,19 +923,13 @@ async def delete_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     return {"message": f"Tower {tower_id} deleted"}
 
-@app.get("/towers/nearest")
-async def nearest_towers(lat: float, lon: float, operator: Optional[str] = None, limit: int = 5, key_data: Dict = Depends(verify_api_key)):
-    """Find nearest towers to a given location."""
-    nearest = platform.find_nearest_towers(lat, lon, operator, limit)
-    return {"nearest_towers": [asdict(t) for t in nearest]}
-
 @app.post("/analyze", response_model=LinkAnalysisResponse)
 async def analyze_link(tower_id: str, receiver: ReceiverInput, key_data: Dict = Depends(verify_api_key)):
     """
     Perform point-to-point link analysis between an existing tower and a receiver.
     Automatically fetches real terrain elevation along the path.
     """
-    tower = platform.towers.get(tower_id)
+    tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     rx = Receiver(**receiver.dict())
@@ -850,7 +939,7 @@ async def analyze_link(tower_id: str, receiver: ReceiverInput, key_data: Dict = 
 @app.post("/plan_repeater")
 async def plan_repeater(tower_id: str, receiver: ReceiverInput, max_hops: int = 3, key_data: Dict = Depends(verify_api_key)):
     """Propose an optimized repeater chain using Dijkstra path search."""
-    tower = platform.towers.get(tower_id)
+    tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     rx = Receiver(**receiver.dict())
@@ -860,7 +949,7 @@ async def plan_repeater(tower_id: str, receiver: ReceiverInput, max_hops: int = 
 @app.get("/export_report")
 async def export_report(tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
     """Generate a professional PDF engineering report (Pro/Enterprise tiers only)."""
-    tower = platform.towers.get(tower_id)
+    tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     rx = Receiver(lat=lat, lon=lon, height_m=height_m, antenna_gain_dbi=antenna_gain)
@@ -884,7 +973,7 @@ async def export_report(tower_id: str, lat: float, lon: float, height_m: float =
 @app.get("/export_report/pdf")
 async def export_report_pdf(tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
     """Generate a professional PDF engineering report (Pro/Enterprise tiers only)."""
-    tower = platform.towers.get(tower_id)
+    tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     rx = Receiver(lat=lat, lon=lon, height_m=height_m, antenna_gain_dbi=antenna_gain)
@@ -913,8 +1002,12 @@ async def batch_reports(
     key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
 ):
     """Upload a CSV of receiver points (columns: lat,lon  and optionally
-    height, gain) and download a ZIP of PDF reports – one per receiver."""
-    tower = platform.towers.get(tower_id)
+    height, gain) and download a ZIP of PDF reports – one per receiver.
+
+    Small batches ( <= 100 rows) are processed synchronously.
+    Larger batches are queued for the background worker and return a job_id.
+    """
+    tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
 
@@ -948,20 +1041,27 @@ async def batch_reports(
     if not receivers:
         raise HTTPException(status_code=400, detail="CSV contains no receiver rows")
 
+    if len(receivers) > MAX_BATCH_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV has {len(receivers)} rows, exceeding the maximum of "
+                   f"{MAX_BATCH_ROWS}. Reduce the file size and retry.",
+        )
+
     SYNC_BATCH_LIMIT = 100
     if len(receivers) > SYNC_BATCH_LIMIT:
-        # Delegate large batches to background job queue
+        # Persist job to the database queue for the background worker
         job_id = str(uuid.uuid4())
-        _jobs[job_id] = {
-            "status": "queued",
-            "progress": 0,
-            "total": len(receivers),
-            "tower_id": tower_id,
-            "created": time.time(),
-            "error": None,
-        }
-        asyncio.create_task(
-            _run_batch_job(job_id, tower, receivers, tower_id)
+        receivers_json = json.dumps([
+            {"lat": rx.lat, "lon": rx.lon,
+             "height_m": rx.height_m, "antenna_gain_dbi": rx.antenna_gain_dbi}
+            for rx in receivers
+        ])
+        job_store.create_job(
+            job_id=job_id,
+            tower_id=tower_id,
+            receivers_json=receivers_json,
+            total=len(receivers),
         )
         return {
             "job_id": job_id,
@@ -995,58 +1095,16 @@ async def batch_reports(
 
 
 # ------------------------------------------------------------
-# Background batch job runner + endpoints
+# Job status & download (persistent, DB-backed)
 # ------------------------------------------------------------
-
-async def _run_batch_job(
-    job_id: str,
-    tower,
-    receivers: List,
-    tower_id: str,
-) -> None:
-    """Background coroutine: generates all PDFs, stores ZIP in memory."""
-    BATCH_JOBS_ACTIVE.inc()
-    _jobs[job_id]["status"] = "running"
-    try:
-        freq_mhz = tower.primary_freq_hz() / 1e6
-        zip_buffer = io.BytesIO()
-
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            for idx, rx in enumerate(receivers):
-                terrain = await platform.elevation.get_profile(
-                    tower.lat, tower.lon, rx.lat, rx.lon
-                )
-                result = await platform.analyze_link(tower, rx, terrain_profile=terrain)
-                pdf_buf = build_pdf_report(tower, rx, result, terrain, freq_mhz)
-                filename = f"report_{tower_id}_{idx + 1:03d}.pdf"
-                zf.writestr(filename, pdf_buf.getvalue())
-                _jobs[job_id]["progress"] = idx + 1
-
-        # Store result and evict oldest if over limit
-        _job_results[job_id] = zip_buffer.getvalue()
-        if len(_job_results) > _MAX_JOB_RESULTS:
-            oldest = min(_job_results, key=lambda jid: _jobs.get(jid, {}).get("created", 0))
-            _job_results.pop(oldest, None)
-
-        _jobs[job_id]["status"] = "completed"
-        _jobs[job_id]["completed"] = time.time()
-        logger.info("Batch job %s completed: %d PDFs", job_id, len(receivers))
-
-    except Exception as exc:
-        _jobs[job_id]["status"] = "failed"
-        _jobs[job_id]["error"] = str(exc)
-        logger.exception("Batch job %s failed", job_id)
-    finally:
-        BATCH_JOBS_ACTIVE.dec()
-
 
 @app.get("/jobs/{job_id}")
 async def get_job_status(job_id: str):
     """Poll the status of a background batch job."""
-    job = _jobs.get(job_id)
+    job = job_store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    resp = {
+    resp: Dict[str, object] = {
         "job_id": job_id,
         "status": job["status"],
         "progress": job["progress"],
@@ -1063,7 +1121,7 @@ async def get_job_status(job_id: str):
 @app.get("/jobs/{job_id}/download")
 async def download_job_result(job_id: str):
     """Download the ZIP file produced by a completed batch job."""
-    job = _jobs.get(job_id)
+    job = job_store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job["status"] != "completed":
@@ -1071,11 +1129,17 @@ async def download_job_result(job_id: str):
             status_code=409,
             detail=f"Job is {job['status']}; cannot download yet",
         )
-    data = _job_results.get(job_id)
-    if data is None:
+    result_path = job.get("result_path")
+    if not result_path or not os.path.exists(result_path):
         raise HTTPException(status_code=410, detail="Result expired; please resubmit")
+
+    def _stream_file():
+        with open(result_path, "rb") as f:
+            while chunk := f.read(65536):
+                yield chunk
+
     return StreamingResponse(
-        io.BytesIO(data),
+        _stream_file(),
         media_type="application/zip",
         headers={
             "Content-Disposition": f"attachment; filename=batch_reports_{job['tower_id']}.zip"

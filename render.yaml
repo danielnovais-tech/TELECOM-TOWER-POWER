@@ -1,13 +1,41 @@
+databases:
+  - name: telecom-tower-power-db
+    plan: free
+    databaseName: towers
+    user: telecom
+
 services:
   - type: web
     name: telecom-tower-power-api
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && alembic upgrade head && python migrate_csv_to_db.py --csv towers_brazil.csv
     startCommand: uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: "3.10"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: telecom-tower-power-db
+          property: connectionString
+      - key: CORS_ORIGINS
+        value: https://telecom-tower-power-ui.onrender.com,https://app.telecomtowerpower.com
+      - key: MAX_BATCH_ROWS
+        value: "500"
+    plan: free
+
+  - type: worker
+    name: telecom-tower-power-worker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python batch_worker.py --poll-interval 5
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.10"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: telecom-tower-power-db
+          property: connectionString
     plan: free
 
   - type: web

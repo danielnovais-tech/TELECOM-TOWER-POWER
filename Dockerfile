@@ -20,6 +20,12 @@ COPY pdf_generator.py .
 COPY srtm_elevation.py .
 COPY stripe_billing.py .
 COPY tower_db.py .
+COPY job_store.py .
+COPY batch_worker.py .
+COPY migrate_csv_to_db.py .
+COPY models.py .
+COPY alembic.ini .
+COPY migrations/ migrations/
 COPY frontend.py .
 COPY load_towers.py .
 COPY towers_brazil.csv .
@@ -28,7 +34,7 @@ COPY sample_batch_test.csv .
 COPY start.sh .
 
 # Create srtm_data directory and fix permissions
-RUN mkdir -p srtm_data && chmod +x start.sh && chown -R appuser:appuser /app
+RUN mkdir -p srtm_data job_results && chmod +x start.sh && chown -R appuser:appuser /app
 
 USER appuser
 
