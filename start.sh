@@ -9,8 +9,8 @@ echo "Running Alembic migrations..."
 alembic upgrade head
 echo "Migrations complete."
 
-# Start FastAPI backend
-uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port "$API_PORT" &
+# Start FastAPI backend (async DB-backed)
+uvicorn telecom_tower_power_db:app --host 0.0.0.0 --port "$API_PORT" &
 
 # Wait for API to be ready
 echo "Waiting for API on port $API_PORT..."
@@ -23,8 +23,8 @@ echo "API ready."
 python load_towers.py towers_brazil.csv "http://127.0.0.1:$API_PORT"
 
 # Start Streamlit frontend (foreground)
-export API_BASE_URL="http://127.0.0.1:$API_PORT"
-exec streamlit run frontend.py \
+export API_URL="http://127.0.0.1:$API_PORT"
+exec streamlit run streamlit_app.py \
   --server.port "$UI_PORT" \
   --server.address 0.0.0.0 \
   --server.headless true

@@ -5,10 +5,62 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "alembic upgrade head && uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port ${PORT:-8000}",
+    "startCommand": "alembic upgrade head && uvicorn telecom_tower_power_db:app --host 0.0.0.0 --port ${PORT:-8000}",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 5
+    "restartPolicyMaxRetries": 5,
+    "envVars": {
+      "DATABASE_URL": {
+        "description": "PostgreSQL connection URL (Railway PostgreSQL plugin provides this automatically)",
+        "required": true
+      },
+      "REDIS_URL": {
+        "description": "Redis connection URL (Railway Redis plugin provides this automatically)",
+        "required": true
+      },
+      "S3_BUCKET_NAME": {
+        "description": "S3 bucket for batch result ZIPs (leave blank for local /tmp fallback)",
+        "required": false
+      },
+      "S3_REGION": {
+        "description": "AWS region for S3 bucket",
+        "required": false,
+        "default": "us-east-1"
+      },
+      "AWS_ACCESS_KEY_ID": {
+        "description": "AWS IAM key with s3:PutObject and s3:GetObject permissions",
+        "required": false
+      },
+      "AWS_SECRET_ACCESS_KEY": {
+        "description": "AWS IAM secret key",
+        "required": false
+      },
+      "STRIPE_SECRET_KEY": {
+        "description": "Stripe secret key (sk_live_... or sk_test_...)",
+        "required": false
+      },
+      "STRIPE_WEBHOOK_SECRET": {
+        "description": "Stripe webhook signing secret (whsec_...)",
+        "required": false
+      },
+      "STRIPE_PRICE_PRO": {
+        "description": "Stripe Price ID for Pro tier (price_...)",
+        "required": false
+      },
+      "STRIPE_PRICE_ENTERPRISE": {
+        "description": "Stripe Price ID for Enterprise tier (price_...)",
+        "required": false
+      },
+      "FRONTEND_URL": {
+        "description": "Frontend URL for Stripe Checkout redirects",
+        "required": false,
+        "default": "https://your-app.up.railway.app"
+      },
+      "VALID_API_KEYS": {
+        "description": "JSON dict of static API keys, e.g. {\"key\":\"tier\"}",
+        "required": false
+      }
+    }
   }
 }

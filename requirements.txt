@@ -13,7 +13,13 @@ streamlit-folium==0.25.0
 pandas==2.2.3
 stripe
 prometheus-client
+prometheus-fastapi-instrumentator
 psycopg2-binary
 python-json-logger
 alembic
 sqlalchemy
+asyncpg
+aiosqlite
+redis
+rq
+boto3

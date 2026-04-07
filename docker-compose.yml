@@ -17,26 +17,51 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ── Database Migrations (one-shot) ───────────────────────────
-  migrate:
-    build: .
-    command: alembic upgrade head
-    environment:
-      - DATABASE_URL=postgresql://telecom:telecom_secret@postgres:5432/towers
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
+  # ── Redis (for RQ job queue) ─────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
-  # ── API Server ──────────────────────────────────────────────
+  # ── Database Migrations (one-shot — legacy, API now runs alembic on start)
+  # migrate:
+  #   build: .
+  #   command: alembic upgrade head
+  #   environment:
+  #     - DATABASE_URL=postgresql://telecom:telecom_secret@postgres:5432/towers
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   restart: "no"
+
+  # ── API Server (async DB-backed) ────────────────────────────
   api:
     build: .
+    command: sh -c "alembic upgrade head && uvicorn telecom_tower_power_db:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     environment:
       - PORT=8000
-      - DATABASE_URL=postgresql://telecom:telecom_secret@postgres:5432/towers
-      - CORS_ORIGINS=http://localhost:8501,http://localhost:3000
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://telecom:telecom_secret@postgres:5432/towers}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8501,http://localhost:3000}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - STRIPE_PRICE_PRO=${STRIPE_PRICE_PRO:-}
+      - STRIPE_PRICE_ENTERPRISE=${STRIPE_PRICE_ENTERPRISE:-}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8501}
+      - VALID_API_KEYS=${VALID_API_KEYS:-}
     volumes:
       - ./srtm_data:/app/srtm_data:ro
       - ./key_store.json:/app/key_store.json
@@ -44,22 +69,22 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     restart: unless-stopped
 
-  # ── Background Worker ───────────────────────────────────────
+  # ── Background Worker (DB-polling) ──────────────────────────
   worker:
     build: .
     command: python batch_worker.py --poll-interval 2
     environment:
-      - DATABASE_URL=postgresql://telecom:telecom_secret@postgres:5432/towers
+      - DATABASE_URL=${DATABASE_URL:-postgresql://telecom:telecom_secret@postgres:5432/towers}
     volumes:
       - ./srtm_data:/app/srtm_data:ro
       - job_results:/app/job_results
@@ -70,14 +95,35 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ── RQ Worker (Redis-backed, for telecom_tower_power_db.py) ─
+  rq-worker:
+    build: .
+    command: python worker.py
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://telecom:telecom_secret@postgres:5432/towers}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./srtm_data:/app/srtm_data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ── Streamlit Frontend ──────────────────────────────────────
   frontend:
     build: .
-    command: streamlit run frontend.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    command: streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
     ports:
       - "8501:8501"
     environment:
-      - API_BASE_URL=http://api:8000
+      - API_URL=http://api:8000
     depends_on:
       api:
         condition: service_healthy

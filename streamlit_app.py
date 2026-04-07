@@ -369,7 +369,7 @@ def batch_tab(engine: TelecomTowerPower):
             return
 
         resp = api_post(
-            "/batch_reports",
+            "/batch_submit",
             params={"tower_id": batch_tower_id},
             files={"csv_file": ("receivers.csv", batch_file.getvalue(), "text/csv")},
         )
@@ -377,25 +377,12 @@ def batch_tab(engine: TelecomTowerPower):
             return
 
         data = resp.json()
-
-        # Synchronous response (small batch ≤ 100) — direct ZIP download
-        if resp.headers.get("content-type", "").startswith("application/zip"):
-            st.success(f"✅ Batch complete — {len(batch_file.getvalue().splitlines()) - 1} reports generated")
-            st.download_button(
-                "📥 Download ZIP",
-                data=resp.content,
-                file_name=f"batch_reports_{batch_tower_id}.zip",
-                mime="application/zip",
-            )
-            return
-
-        # Async response — job queued
         job_id = data.get("job_id")
         if job_id:
             st.session_state["active_job_id"] = job_id
             st.session_state["active_job_tower"] = batch_tower_id
             st.info(
-                f"📋 Job **{job_id}** queued ({data.get('total', '?')} receivers). "
+                f"📋 Job **{job_id}** queued. "
                 "Polling for status below…"
             )
 
@@ -412,29 +399,21 @@ def batch_tab(engine: TelecomTowerPower):
         if st.button("🔄 Refresh job status", key="refresh_job"):
             pass  # button press triggers re-run
 
-        resp = api_get(f"/jobs/{job_id}")
+        resp = api_get(f"/batch_status/{job_id}")
         if resp is None:
             return
 
         job_data = resp.json()
         status = job_data.get("status", "unknown")
-        progress = job_data.get("progress", 0)
-        total = job_data.get("total", 1)
 
         if status == "queued":
             status_placeholder.info(f"⏳ Job **{job_id}** is queued — waiting for a worker…")
             progress_bar.progress(0)
-        elif status == "running":
-            pct = progress / total if total else 0
-            status_placeholder.info(
-                f"⚙️ Processing… **{progress}/{total}** reports generated"
-            )
-            progress_bar.progress(pct)
         elif status == "completed":
-            status_placeholder.success(f"✅ Job **{job_id}** completed — {total} reports ready")
+            status_placeholder.success(f"✅ Job **{job_id}** completed — reports ready")
             progress_bar.progress(1.0)
             tower_id = st.session_state.get("active_job_tower", "unknown")
-            dl_resp = api_get(f"/jobs/{job_id}/download")
+            dl_resp = api_get(f"/batch_download/{job_id}")
             if dl_resp is not None:
                 download_placeholder.download_button(
                     "📥 Download ZIP",

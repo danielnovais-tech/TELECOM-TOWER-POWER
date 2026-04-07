@@ -24,6 +24,9 @@ if config.config_file_name is not None:
 # ── Override URL when DATABASE_URL is set ────────────────────────
 database_url = os.getenv("DATABASE_URL")
 if database_url:
+    # Alembic runs synchronous migrations — swap async drivers for sync ones
+    database_url = database_url.replace("postgresql+asyncpg://", "postgresql://")
+    database_url = database_url.replace("sqlite+aiosqlite://", "sqlite://")
     config.set_main_option("sqlalchemy.url", database_url)
 
 # ── Metadata for autogenerate ────────────────────────────────────
