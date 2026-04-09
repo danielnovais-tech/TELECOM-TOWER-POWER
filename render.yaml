@@ -47,6 +47,8 @@ services:
         sync: false
       - key: STRIPE_PRICE_ENTERPRISE
         sync: false
+      - key: VALID_API_KEYS
+        sync: false
       - key: FRONTEND_URL
         value: https://telecom-tower-power-ui.onrender.com
     plan: free

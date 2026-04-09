@@ -32,7 +32,11 @@ from s3_storage import download_result, get_presigned_url, result_exists
 # Database setup
 # ------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./towers.db")
-# For PostgreSQL, use: postgresql+asyncpg://user:pass@localhost/db
+# Auto-convert plain PostgreSQL URLs to asyncpg driver for async engine
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 Base = declarative_base()
@@ -75,9 +79,14 @@ async def get_db():
 # ------------------------------
 # Redis & RQ setup (RQ requires synchronous redis)
 # ------------------------------
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-redis_client = redis.from_url(REDIS_URL)
-queue = Queue("batch_pdfs", connection=redis_client)
+REDIS_URL = os.getenv("REDIS_URL", "")
+try:
+    redis_client = redis.from_url(REDIS_URL or "redis://localhost:6379")
+    redis_client.ping()
+    queue = Queue("batch_pdfs", connection=redis_client)
+except Exception:
+    redis_client = None
+    queue = None
 
 # ------------------------------
 # Prometheus metrics
@@ -225,6 +234,8 @@ async def submit_batch(
     csv_file: UploadFile = File(...),
     auth=require_tier("pro", "enterprise"),
 ):
+    if queue is None:
+        raise HTTPException(503, "Batch processing unavailable – Redis not configured")
     content = await csv_file.read()
     job = queue.enqueue(
         "worker.generate_batch_pdfs",
@@ -242,6 +253,8 @@ async def batch_status(job_id: str, auth=Depends(verify_api_key)):
         raise HTTPException(400, "Invalid job ID: path traversal detected")
     if not _SAFE_ID.match(job_id):
         raise HTTPException(400, "Invalid job ID")
+    if redis_client is None:
+        raise HTTPException(503, "Batch processing unavailable – Redis not configured")
     try:
         job = Job.fetch(job_id, connection=redis_client)
     except Exception:
