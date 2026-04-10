@@ -49,14 +49,18 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode with a live connection."""
+    import logging
+    log = logging.getLogger("alembic.env")
+    log.info("Creating engine...")
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
-        connect_args={"options": "-c lock_timeout=30000 -c statement_timeout=60000"},
+        connect_args={"options": "-c lock_timeout=15000 -c statement_timeout=30000"},
     )
+    log.info("Connecting to database...")
     with connectable.connect() as connection:
-        # Terminate stale backends that may hold locks from prior crashed deploys
+        log.info("Connected. Killing stale alembic sessions...")
         connection.execute(
             sa.text(
                 "SELECT pg_terminate_backend(pid) "
@@ -64,16 +68,20 @@ def run_migrations_online() -> None:
                 "WHERE datname = current_database() "
                 "  AND pid <> pg_backend_pid() "
                 "  AND state = 'idle in transaction' "
-                "  AND query LIKE '%alembic_version%'"
+                "  AND query LIKE '%%alembic_version%%'"
             )
         )
         connection.commit()
+        log.info("Configuring migration context...")
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
         )
+        log.info("Beginning transaction...")
         with context.begin_transaction():
+            log.info("Running migrations...")
             context.run_migrations()
+            log.info("Migrations complete.")
 
 
 if context.is_offline_mode():

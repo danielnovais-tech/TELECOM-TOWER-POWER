@@ -51,4 +51,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["sh", "-c", "python -c \"import urllib.request,os; urllib.request.urlopen('http://localhost:'+os.environ.get('PORT','8000')+'/health')\""]
 
 # Default: API only. Use start.sh for full-stack (API + UI).
-CMD ["sh", "-c", "alembic upgrade head && uvicorn telecom_tower_power_db:app --host 0.0.0.0 --port ${PORT}"]
+# Alembic gets a 60s timeout so the app starts even if migrations stall
+CMD ["sh", "-c", "timeout 60 alembic upgrade head || echo 'WARN: alembic timed out or failed, starting anyway'; uvicorn telecom_tower_power_db:app --host 0.0.0.0 --port ${PORT}"]
