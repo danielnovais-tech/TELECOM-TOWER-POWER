@@ -107,7 +107,7 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 # Auth
 VALID_API_KEYS = json.loads(
-    os.getenv("VALID_API_KEYS", '{"free_123":"free","pro_abc":"pro","ent_xyz":"enterprise"}')
+    os.getenv("VALID_API_KEYS") or '{"free_123":"free","pro_abc":"pro","ent_xyz":"enterprise"}'
 )
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
