@@ -2,13 +2,13 @@
   "family": "telecom-tower-power",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
-  "cpu": "512",
-  "memory": "1024",
+  "cpu": "1024",
+  "memory": "2048",
   "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
   "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskRole",
   "containerDefinitions": [
     {
-      "name": "telecom-tower-power-api",
+      "name": "api",
       "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/telecom-tower-power:latest",
       "essential": true,
       "portMappings": [
@@ -71,6 +71,34 @@
           "awslogs-group": "/ecs/telecom-tower-power",
           "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "api"
+        }
+      }
+    },
+    {
+      "name": "worker",
+      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/telecom-tower-power:latest",
+      "essential": true,
+      "command": ["rq", "worker", "batch_pdfs"],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/DATABASE_URL"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/REDIS_URL"
+        },
+        {
+          "name": "S3_BUCKET_NAME",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/S3_BUCKET_NAME"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/telecom-tower-power",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "worker"
         }
       }
     }
