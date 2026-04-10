@@ -8,6 +8,7 @@ PostgreSQL; otherwise it falls back to the SQLite URL from alembic.ini.
 import os
 from logging.config import fileConfig
 
+import sqlalchemy as sa
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
@@ -52,8 +53,21 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={"options": "-c lock_timeout=30000 -c statement_timeout=60000"},
     )
     with connectable.connect() as connection:
+        # Terminate stale backends that may hold locks from prior crashed deploys
+        connection.execute(
+            sa.text(
+                "SELECT pg_terminate_backend(pid) "
+                "FROM pg_stat_activity "
+                "WHERE datname = current_database() "
+                "  AND pid <> pg_backend_pid() "
+                "  AND state = 'idle in transaction' "
+                "  AND query LIKE '%alembic_version%'"
+            )
+        )
+        connection.commit()
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
