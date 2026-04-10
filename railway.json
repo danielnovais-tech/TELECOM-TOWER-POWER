@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "timeout 60 alembic upgrade head || echo 'WARN: alembic timed out or failed, starting anyway'; uvicorn telecom_tower_power_db:app --host 0.0.0.0 --port ${PORT:-8000}",
+    "startCommand": "./entrypoint.sh",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",

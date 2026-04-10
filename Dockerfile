@@ -37,9 +37,10 @@ COPY sample_receivers.csv .
 COPY sample_batch_test.csv .
 COPY key_store.json .
 COPY start.sh .
+COPY entrypoint.sh .
 
 # Create srtm_data directory and fix permissions
-RUN mkdir -p srtm_data job_results && chmod +x start.sh && chown -R appuser:appuser /app
+RUN mkdir -p srtm_data job_results && chmod +x start.sh entrypoint.sh && chown -R appuser:appuser /app
 
 USER appuser
 
@@ -51,5 +52,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["sh", "-c", "python -c \"import urllib.request,os; urllib.request.urlopen('http://localhost:'+os.environ.get('PORT','8000')+'/health')\""]
 
 # Default: API only. Use start.sh for full-stack (API + UI).
-# Alembic gets a 60s timeout so the app starts even if migrations stall
-CMD ["sh", "-c", "timeout 60 alembic upgrade head || echo 'WARN: alembic timed out or failed, starting anyway'; uvicorn telecom_tower_power_db:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["./entrypoint.sh"]
