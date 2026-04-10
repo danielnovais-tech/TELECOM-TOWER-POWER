@@ -1,0 +1,78 @@
+{
+  "family": "telecom-tower-power",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "telecom-tower-power-api",
+      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/telecom-tower-power:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "PORT", "value": "8000" },
+        { "name": "CORS_ORIGINS", "value": "https://app.telecomtowerpower.com" },
+        { "name": "FRONTEND_URL", "value": "https://app.telecomtowerpower.com" },
+        { "name": "S3_REGION", "value": "us-east-1" },
+        { "name": "MAX_BATCH_ROWS", "value": "500" }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/DATABASE_URL"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/REDIS_URL"
+        },
+        {
+          "name": "S3_BUCKET_NAME",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/S3_BUCKET_NAME"
+        },
+        {
+          "name": "STRIPE_SECRET_KEY",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_SECRET_KEY"
+        },
+        {
+          "name": "STRIPE_WEBHOOK_SECRET",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_WEBHOOK_SECRET"
+        },
+        {
+          "name": "STRIPE_PRICE_PRO",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_PRICE_PRO"
+        },
+        {
+          "name": "STRIPE_PRICE_ENTERPRISE",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_PRICE_ENTERPRISE"
+        },
+        {
+          "name": "VALID_API_KEYS",
+          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/VALID_API_KEYS"
+        }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/telecom-tower-power",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    }
+  ]
+}
