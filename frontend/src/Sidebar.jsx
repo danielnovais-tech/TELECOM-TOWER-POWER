@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { analyzeLink, planRepeater, pdfReportUrl } from "./api";
+import { analyzeLink, planRepeater, downloadPdfReport, RateLimitError } from "./api";
 
 export default function Sidebar({
   towers,
@@ -10,6 +10,8 @@ export default function Sidebar({
   repeaterChain,
   setRepeaterChain,
   healthStatus,
+  rateLimitInfo,
+  onNavigateSignup,
 }) {
   const [rxHeight, setRxHeight] = useState(10);
   const [rxGain, setRxGain] = useState(12);
@@ -33,7 +35,11 @@ export default function Sidebar({
       });
       setAnalysisResult(result);
     } catch (e) {
-      setError(e.message);
+      if (e instanceof RateLimitError) {
+        setError("rate-limit");
+      } else {
+        setError(e.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -51,16 +57,38 @@ export default function Sidebar({
       );
       setRepeaterChain(result.repeater_chain || []);
     } catch (e) {
-      setError(e.message);
+      if (e instanceof RateLimitError) {
+        setError("rate-limit");
+      } else {
+        setError(e.message);
+      }
     } finally {
       setLoading(false);
     }
   }
 
-  function handleDownloadPdf() {
+  async function handleDownloadPdf() {
     if (!canAnalyze) return;
-    const url = pdfReportUrl(selectedTower.id, receiverPos.lat, receiverPos.lng, rxHeight, rxGain);
-    window.open(url, "_blank");
+    setLoading(true);
+    setError(null);
+    try {
+      const blobUrl = await downloadPdfReport(
+        selectedTower.id, receiverPos.lat, receiverPos.lng, rxHeight, rxGain
+      );
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `report_${selectedTower.id}.pdf`;
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      if (e instanceof RateLimitError) {
+        setError("rate-limit");
+      } else {
+        setError(e.message);
+      }
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -146,7 +174,41 @@ export default function Sidebar({
       </section>
 
       {/* error */}
-      {error && <section className="panel error-box">{error}</section>}
+      {error && (
+        <section className="panel error-box">
+          {error === "rate-limit" ? (
+            <div className="rate-limit-error">
+              <strong>Rate limit exceeded.</strong>
+              <p>
+                You&apos;ve hit the {rateLimitInfo?.limit ?? "–"} requests/min limit for your plan.
+                {" "}
+                <button className="link-btn" onClick={onNavigateSignup}>
+                  Upgrade to Pro
+                </button>
+                {" "}for 100 req/min.
+              </p>
+            </div>
+          ) : (
+            error
+          )}
+        </section>
+      )}
+
+      {/* rate limit indicator */}
+      {rateLimitInfo.remaining != null && rateLimitInfo.limit != null && (
+        <section className="panel rate-limit-bar">
+          <h3>API Rate Limit</h3>
+          <div className="rl-track">
+            <div
+              className={`rl-fill${rateLimitInfo.remaining <= 2 ? " rl-low" : ""}`}
+              style={{ width: `${(rateLimitInfo.remaining / rateLimitInfo.limit) * 100}%` }}
+            />
+          </div>
+          <span className="rl-label">
+            {rateLimitInfo.remaining} / {rateLimitInfo.limit} remaining
+          </span>
+        </section>
+      )}
 
       {/* analysis result */}
       {analysisResult && (

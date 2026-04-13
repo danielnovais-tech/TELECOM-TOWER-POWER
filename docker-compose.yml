@@ -62,6 +62,7 @@ services:
       - STRIPE_PRICE_ENTERPRISE=${STRIPE_PRICE_ENTERPRISE:-}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8501}
       - VALID_API_KEYS=${VALID_API_KEYS:-}
+      - ENABLE_DEMO_KEYS=${ENABLE_DEMO_KEYS:-true}
     volumes:
       - ./srtm_data:/app/srtm_data:ro
       - ./key_store.json:/app/key_store.json
@@ -85,14 +86,44 @@ services:
     command: python batch_worker.py --poll-interval 2
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql://telecom:telecom_secret@postgres:5432/towers}
+      - SRTM_REDIS_URL=${SRTM_REDIS_URL:-redis://redis:6379/1}
+      - PDF_WORKERS=${PDF_WORKERS:-4}
     volumes:
       - ./srtm_data:/app/srtm_data:ro
       - job_results:/app/job_results
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       api:
         condition: service_healthy
+    restart: unless-stopped
+
+  # ── Stripe Webhook Service (isolated) ──────────────────────
+  stripe-webhook:
+    build: .
+    command: uvicorn stripe_webhook_service:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      - WEBHOOK_PORT=8001
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - KEY_STORE_PATH=/app/key_store.json
+      - DATABASE_URL=${DATABASE_URL:-postgresql://telecom:telecom_secret@postgres:5432/towers}
+    volumes:
+      - ./key_store.json:/app/key_store.json
+      - ./srtm_data:/app/srtm_data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   # ── RQ Worker (Redis-backed, for telecom_tower_power_db.py) ─
@@ -124,6 +155,18 @@ services:
       - "8501:8501"
     environment:
       - API_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── React PWA Frontend ─────────────────────────────────────
+  frontend-react:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
     depends_on:
       api:
         condition: service_healthy

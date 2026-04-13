@@ -1,7 +1,7 @@
 """
 frontend.py
 TELECOM TOWER POWER — Streamlit SaaS frontend
-Consumes the FastAPI backend for tower management, link analysis, and reporting.
+Consumes the FastAPI backend via the typed api_client module.
 """
 
 import os
@@ -10,6 +10,14 @@ import pandas as pd
 import folium
 import streamlit as st
 from streamlit_folium import st_folium
+
+from api_client import (
+    TelecomTowerAPIClient,
+    ReceiverInput,
+    TowerInput,
+    Band,
+    RateLimitExceeded,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -23,6 +31,12 @@ DEMO_KEYS = {
     "Enterprise (demo-key-enterprise-001)": "demo-key-enterprise-001",
 }
 
+PLAN_INFO = {
+    "free": {"label": "Free", "price": "$0/mo", "features": "10 req/min · 20 towers · link analysis"},
+    "pro": {"label": "Pro", "price": "$29/mo", "features": "100 req/min · 500 towers · PDF & batch export"},
+    "enterprise": {"label": "Enterprise", "price": "$99/mo", "features": "1,000 req/min · 10k towers · priority support"},
+}
+
 st.set_page_config(
     page_title="Telecom Tower Power",
     page_icon="📡",
@@ -30,31 +44,166 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Sidebar — authentication & global settings
+# Session-state defaults
+# ---------------------------------------------------------------------------
+if "user_api_key" not in st.session_state:
+    st.session_state.user_api_key = ""
+if "user_email" not in st.session_state:
+    st.session_state.user_email = ""
+if "user_tier" not in st.session_state:
+    st.session_state.user_tier = ""
+
+# ---------------------------------------------------------------------------
+# Sidebar — authentication & account management
 # ---------------------------------------------------------------------------
 
 st.sidebar.title("📡 Telecom Tower Power")
 st.sidebar.markdown("---")
 st.sidebar.subheader("Authentication")
 
-key_label = st.sidebar.selectbox("API Key", list(DEMO_KEYS.keys()))
-api_key = st.sidebar.text_input(
-    "Or paste a custom key",
-    value=DEMO_KEYS[key_label],
-    type="password",
+auth_mode = st.sidebar.radio(
+    "Key source",
+    ["Demo keys", "My account", "Paste key"],
+    horizontal=True,
 )
 
-HEADERS = {"X-API-Key": api_key}
+if auth_mode == "Demo keys":
+    key_label = st.sidebar.selectbox("API Key", list(DEMO_KEYS.keys()))
+    api_key = DEMO_KEYS[key_label]
+elif auth_mode == "Paste key":
+    api_key = st.sidebar.text_input("API Key", type="password")
+else:  # My account
+    api_key = st.session_state.user_api_key or ""
+    if api_key:
+        st.sidebar.success(f"Signed in · **{st.session_state.user_tier.capitalize()}** plan")
+        st.sidebar.code(api_key[:8] + "…", language=None)
+    else:
+        st.sidebar.info("Sign up or look up your key below.")
+
+# Typed API client
+api = TelecomTowerAPIClient(base_url=API_BASE, api_key=api_key)
+
+# ---------------------------------------------------------------------------
+# Sidebar — Sign Up / Billing
+# ---------------------------------------------------------------------------
+with st.sidebar.expander("🔑 Sign Up / Manage Account"):
+    _signup_client = TelecomTowerAPIClient(base_url=API_BASE, api_key="")
+
+    acct_tab_signup, acct_tab_lookup = st.tabs(["Sign Up", "Look Up Key"])
+
+    with acct_tab_signup:
+        signup_email = st.text_input("Email", key="signup_email", placeholder="you@company.com")
+        signup_tier = st.selectbox(
+            "Plan",
+            list(PLAN_INFO.keys()),
+            format_func=lambda t: f"{PLAN_INFO[t]['label']} — {PLAN_INFO[t]['price']}",
+            key="signup_tier",
+        )
+        st.caption(PLAN_INFO[signup_tier]["features"])
+
+        if st.button("Create Account", type="primary", key="btn_signup"):
+            if not signup_email:
+                st.warning("Enter your email.")
+            else:
+                try:
+                    if signup_tier == "free":
+                        result = _signup_client.signup_free(signup_email)
+                        st.session_state.user_api_key = result["api_key"]
+                        st.session_state.user_email = signup_email
+                        st.session_state.user_tier = "free"
+                        st.success("Account created!")
+                        st.code(result["api_key"], language=None)
+                        st.warning("Save this key — it won't be shown again.")
+                        st.rerun()
+                    else:
+                        result = _signup_client.signup_checkout(signup_email, signup_tier)
+                        checkout_url = result.get("checkout_url", "")
+                        st.markdown(
+                            f"[Complete payment on Stripe ↗]({checkout_url})",
+                        )
+                        st.info(
+                            "After payment, return here and use **Look Up Key** "
+                            "with your email to retrieve your API key."
+                        )
+                except requests.exceptions.HTTPError as e:
+                    st.error(f"Error: {e.response.text}")
+                except requests.exceptions.ConnectionError:
+                    st.error("Cannot connect to API.")
+
+    with acct_tab_lookup:
+        lookup_email = st.text_input("Email", key="lookup_email", placeholder="you@company.com")
+        if st.button("Look Up", key="btn_lookup"):
+            if not lookup_email:
+                st.warning("Enter your email.")
+            else:
+                try:
+                    info = _signup_client.signup_status(lookup_email)
+                    st.session_state.user_api_key = info["api_key"]
+                    st.session_state.user_email = info["email"]
+                    st.session_state.user_tier = info.get("tier", "free")
+                    st.success(f"**{info.get('tier', 'free').capitalize()}** plan")
+                    st.code(info["api_key"], language=None)
+                    st.rerun()
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 404:
+                        st.warning("No account found for this email.")
+                    else:
+                        st.error(f"Error: {e.response.text}")
+                except requests.exceptions.ConnectionError:
+                    st.error("Cannot connect to API.")
+
+        # Stripe return handling — session_id in query params
+        query_params = st.query_params
+        session_id = query_params.get("session_id")
+        if session_id:
+            try:
+                result = _signup_client.signup_success(session_id)
+                st.session_state.user_api_key = result["api_key"]
+                st.session_state.user_email = result.get("email", "")
+                st.session_state.user_tier = result.get("tier", "pro")
+                st.success("Payment confirmed!")
+                st.code(result["api_key"], language=None)
+                st.warning("Save this key — it won't be shown again.")
+            except requests.exceptions.HTTPError:
+                st.info("Payment processing — use Look Up once it completes.")
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Backend: `{API_BASE}`")
 
 
+def _show_rate_limit_sidebar():
+    """Show rate-limit usage in the sidebar if data is available."""
+    if api.rate_limit_remaining is not None and api.rate_limit_limit is not None:
+        used = api.rate_limit_limit - api.rate_limit_remaining
+        frac = used / max(api.rate_limit_limit, 1)
+        st.sidebar.progress(frac)
+        label = f"API usage: {used}/{api.rate_limit_limit} requests/min"
+        if api.rate_limit_remaining <= 2:
+            st.sidebar.warning(label)
+        else:
+            st.sidebar.caption(label)
+
+
+def _handle_rate_limit_error():
+    """Show a user-friendly rate-limit error with upgrade prompt."""
+    limit = api.rate_limit_limit or "?"
+    st.error(
+        f"⚠️ **Rate limit exceeded** ({limit} requests/min for your plan). "
+        "Wait a moment and try again, or upgrade to **Pro** for 100 req/min."
+    )
+
+
 def api_get(path, params=None):
+    """Thin wrapper kept for backward-compat with tab code below."""
     try:
-        r = requests.get(f"{API_BASE}{path}", headers=HEADERS, params=params, timeout=120)
+        r = api._session.get(f"{api.base_url}{path}", params=params, timeout=api.timeout)
+        api._capture_rate_limit(r)
         r.raise_for_status()
+        _show_rate_limit_sidebar()
         return r.json()
+    except RateLimitExceeded:
+        _handle_rate_limit_error()
+        return None
     except requests.exceptions.HTTPError as e:
         st.error(f"API error {e.response.status_code}: {e.response.text}")
         return None
@@ -64,12 +213,18 @@ def api_get(path, params=None):
 
 
 def api_post(path, json_body=None, params=None):
+    """Thin wrapper kept for backward-compat with tab code below."""
     try:
-        r = requests.post(
-            f"{API_BASE}{path}", headers=HEADERS, json=json_body, params=params, timeout=120
+        r = api._session.post(
+            f"{api.base_url}{path}", json=json_body, params=params, timeout=api.timeout
         )
+        api._capture_rate_limit(r)
         r.raise_for_status()
+        _show_rate_limit_sidebar()
         return r.json()
+    except RateLimitExceeded:
+        _handle_rate_limit_error()
+        return None
     except requests.exceptions.HTTPError as e:
         st.error(f"API error {e.response.status_code}: {e.response.text}")
         return None
@@ -82,8 +237,8 @@ def api_post(path, json_body=None, params=None):
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_towers, tab_analyze, tab_repeater, tab_report = st.tabs(
-    ["🗼 Towers", "📊 Link Analysis", "🔗 Repeater Planner", "📄 Reports"]
+tab_towers, tab_analyze, tab_repeater, tab_report, tab_batch = st.tabs(
+    ["🗼 Towers", "📊 Link Analysis", "🔗 Repeater Planner", "📄 Reports", "📦 Batch Jobs"]
 )
 
 # =====================  TAB 1 — TOWERS  =====================
@@ -108,16 +263,20 @@ with tab_towers:
             submitted = st.form_submit_button("Add Tower")
 
         if submitted:
-            body = {
-                "id": tid,
-                "lat": lat,
-                "lon": lon,
-                "height_m": height,
-                "operator": operator,
-                "bands": bands,
-                "power_dbm": power,
-            }
-            result = api_post("/towers", json_body=body)
+            try:
+                tower = TowerInput(
+                    id=tid,
+                    lat=lat,
+                    lon=lon,
+                    height_m=height,
+                    operator=operator,
+                    bands=[Band(b) for b in bands],
+                    power_dbm=power,
+                )
+                result = api_post("/towers", json_body=tower.model_dump())
+            except Exception as e:
+                result = None
+                st.error(f"Validation error: {e}")
             if result:
                 st.success(result["message"])
 
@@ -175,16 +334,28 @@ with tab_analyze:
     with col_result:
         if run_analysis:
             with st.spinner("Fetching terrain elevation & computing link budget…"):
-                result = api_post(
-                    "/analyze",
-                    json_body={
-                        "lat": rx_lat,
-                        "lon": rx_lon,
-                        "height_m": rx_height,
-                        "antenna_gain_dbi": rx_gain,
-                    },
-                    params={"tower_id": tower_id},
-                )
+                try:
+                    rx = ReceiverInput(
+                        lat=rx_lat,
+                        lon=rx_lon,
+                        height_m=rx_height,
+                        antenna_gain_dbi=rx_gain,
+                    )
+                    result = api.analyze_link(tower_id, rx)
+                    result = result.model_dump()
+                    _show_rate_limit_sidebar()
+                except RateLimitExceeded:
+                    result = None
+                    _handle_rate_limit_error()
+                except requests.exceptions.HTTPError as e:
+                    result = None
+                    st.error(f"API error {e.response.status_code}: {e.response.text}")
+                except requests.exceptions.ConnectionError:
+                    result = None
+                    st.error("Cannot connect to API. Is the backend running?")
+                except Exception as e:
+                    result = None
+                    st.error(str(e))
             if result:
                 feasible = result["feasible"]
                 st.subheader("Results")
@@ -262,16 +433,24 @@ with tab_repeater:
     with col_rp_out:
         if run_rp:
             with st.spinner("Optimizing repeater chain…"):
-                chain = api_post(
-                    "/plan_repeater",
-                    json_body={
-                        "lat": rp_lat,
-                        "lon": rp_lon,
-                        "height_m": rp_h,
-                        "antenna_gain_dbi": rp_g,
-                    },
-                    params={"tower_id": rp_tower, "max_hops": max_hops},
-                )
+                try:
+                    rx = ReceiverInput(
+                        lat=rp_lat,
+                        lon=rp_lon,
+                        height_m=rp_h,
+                        antenna_gain_dbi=rp_g,
+                    )
+                    chain = api.plan_repeater(rp_tower, rx, max_hops)
+                    _show_rate_limit_sidebar()
+                except RateLimitExceeded:
+                    chain = None
+                    _handle_rate_limit_error()
+                except requests.exceptions.HTTPError as e:
+                    chain = None
+                    st.error(f"API error {e.response.status_code}: {e.response.text}")
+                except requests.exceptions.ConnectionError:
+                    chain = None
+                    st.error("Cannot connect to API. Is the backend running?")
             if chain and chain.get("repeater_chain"):
                 nodes = chain["repeater_chain"]
                 st.subheader(f"Optimized Chain — {len(nodes)} node(s)")
@@ -348,29 +527,144 @@ with tab_report:
         if st.button("📄 Download PDF"):
             with st.spinner("Generating PDF…"):
                 try:
-                    r = requests.get(
-                        f"{API_BASE}/export_report/pdf",
-                        headers=HEADERS,
-                        params={
-                            "tower_id": rpt_tower,
-                            "lat": rpt_lat,
-                            "lon": rpt_lon,
-                            "height_m": rpt_h,
-                            "antenna_gain": rpt_g,
-                        },
-                        timeout=120,
+                    pdf_bytes = api.export_report_pdf(
+                        tower_id=rpt_tower,
+                        lat=rpt_lat,
+                        lon=rpt_lon,
+                        height_m=rpt_h,
+                        antenna_gain=rpt_g,
                     )
-                    r.raise_for_status()
+                    _show_rate_limit_sidebar()
                     st.download_button(
                         "⬇️ Save PDF",
-                        data=r.content,
+                        data=pdf_bytes,
                         file_name=f"report_{rpt_tower}.pdf",
                         mime="application/pdf",
                     )
+                except RateLimitExceeded:
+                    _handle_rate_limit_error()
                 except requests.exceptions.HTTPError as e:
                     if e.response.status_code == 403:
                         st.warning("PDF export requires a Pro or Enterprise API key.")
                     else:
                         st.error(f"Error: {e.response.text}")
+                except requests.exceptions.ConnectionError:
+                    st.error("Cannot connect to API.")
+
+
+# =====================  TAB 5 — BATCH JOBS  =====================
+with tab_batch:
+    st.header("Batch Report Processing")
+
+    towers_data4 = api_get("/towers")
+    tower_ids4 = (
+        [t["id"] for t in towers_data4["towers"]]
+        if towers_data4 and towers_data4.get("towers")
+        else []
+    )
+    if not tower_ids4:
+        st.warning("Add a tower first.")
+        st.stop()
+
+    col_upload, col_status = st.columns([1, 1])
+
+    with col_upload:
+        st.subheader("Submit Batch")
+        batch_tower = st.selectbox("Tower", tower_ids4, key="batch_tower")
+        batch_rx_h = st.number_input(
+            "Default Receiver Height (m)", value=10.0, key="batch_rx_h"
+        )
+        batch_gain = st.number_input(
+            "Default Antenna Gain (dBi)", value=12.0, key="batch_gain"
+        )
+        uploaded_file = st.file_uploader(
+            "Upload receiver CSV (columns: lat, lon, and optionally height, gain)",
+            type="csv",
+        )
+        if uploaded_file and st.button("🚀 Submit Batch", type="primary"):
+            with st.spinner("Uploading CSV and submitting batch…"):
+                try:
+                    r = api.batch_reports(
+                        tower_id=batch_tower,
+                        csv_file=uploaded_file,
+                        filename=uploaded_file.name,
+                        receiver_height_m=batch_rx_h,
+                        antenna_gain_dbi=batch_gain,
+                    )
+                    _show_rate_limit_sidebar()
+                    content_type = r.headers.get("content-type", "")
+
+                    if "application/zip" in content_type:
+                        st.success("Batch processed synchronously!")
+                        st.download_button(
+                            "⬇️ Download ZIP",
+                            data=r.content,
+                            file_name=f"batch_reports_{batch_tower}.zip",
+                            mime="application/zip",
+                            key="batch_sync_dl",
+                        )
+                    else:
+                        result = r.json()
+                        st.session_state.batch_job_id = result["job_id"]
+                        st.info(
+                            f"Job queued: **{result['total']}** receivers. "
+                            f"Job ID: `{result['job_id']}`"
+                        )
+                except RateLimitExceeded:
+                    _handle_rate_limit_error()
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 403:
+                        st.warning("Batch reports require a Pro or Enterprise API key.")
+                    else:
+                        st.error(f"API error {e.response.status_code}: {e.response.text}")
+                except requests.exceptions.ConnectionError:
+                    st.error("Cannot connect to API.")
+
+    with col_status:
+        st.subheader("Job Status")
+        job_id_input = st.text_input(
+            "Job ID",
+            value=st.session_state.get("batch_job_id", ""),
+            key="batch_job_input",
+        )
+
+        if job_id_input and st.button("🔄 Check Status"):
+            with st.spinner("Polling job status…"):
+                status = api_get(f"/jobs/{job_id_input}")
+            if status:
+                st.session_state.batch_job_status = status
+
+        job_status = st.session_state.get("batch_job_status")
+        if job_status:
+            job_st = job_status["status"]
+            progress = job_status.get("progress", 0)
+            total = job_status.get("total", 1)
+
+            if job_st == "completed":
+                st.success(f"Job completed — {total} reports generated.")
+                st.progress(1.0)
+            elif job_st == "failed":
+                st.error(f"Job failed: {job_status.get('error', 'Unknown error')}")
+                st.progress(progress / max(total, 1))
+            elif job_st == "running":
+                st.info(f"Running… {progress}/{total} receivers processed.")
+                st.progress(progress / max(total, 1))
+            else:
+                st.info(f"Status: **{job_st}** — {progress}/{total}")
+                st.progress(progress / max(total, 1))
+
+            if job_st == "completed":
+                dl_url = job_status.get("download_url", f"/jobs/{job_status['job_id']}/download")
+                try:
+                    dl_bytes = api.job_download(job_status["job_id"])
+                    st.download_button(
+                        "⬇️ Download ZIP",
+                        data=dl_bytes,
+                        file_name=f"batch_reports_{job_status.get('tower_id', 'job')}.zip",
+                        mime="application/zip",
+                        key="batch_async_dl",
+                    )
+                except requests.exceptions.HTTPError as e:
+                    st.error(f"Download error: {e.response.status_code}")
                 except requests.exceptions.ConnectionError:
                     st.error("Cannot connect to API.")

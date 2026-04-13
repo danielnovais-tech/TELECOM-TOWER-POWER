@@ -93,22 +93,29 @@ class LinkEngine:
         return math.sqrt((299792458 * d1 * d2) / (f_hz * (d1 + d2)))  # r1 = sqrt(c*d1*d2 / (f*(d1+d2)))
 
     @staticmethod
-    def terrain_clearance(terrain_profile: List[float], d_km: float, f_hz: float, tx_h: float, rx_h: float) -> float:
+    def terrain_clearance(terrain_profile: List[float], d_km: float, f_hz: float,
+                          tx_h: float, rx_h: float, k_factor: float = 1.33) -> float:
         """
         Simplified terrain clearance check.
         Returns minimum fraction of first Fresnel zone clearance (0 to 1+).
         Assumes terrain_profile is list of heights (m) at equally spaced points.
+        k_factor: effective Earth radius factor (4/3 standard atmosphere).
         """
         n = len(terrain_profile)
         if n < 2:
             return 1.0
         step = d_km / (n - 1)
+        R_eff = 6371.0 * k_factor  # effective Earth radius in km
         min_clearance = float('inf')
         for i, ground_h in enumerate(terrain_profile):
             d_i = i * step
             # straight line height between tx and rx at distance d_i
             line_h = tx_h + (rx_h - tx_h) * (d_i / d_km)
-            clearance = line_h - ground_h
+            # Earth curvature correction: bulge = d1*d2 / (2*R_eff)
+            d1_m = d_i * 1000
+            d2_m = (d_km - d_i) * 1000
+            earth_bulge = (d1_m * d2_m) / (2 * R_eff * 1000)
+            clearance = line_h - ground_h - earth_bulge
             # compute Fresnel radius at this point
             d1 = d_i
             d2 = d_km - d_i
@@ -427,6 +434,9 @@ class TelecomTowerPower:
         all_nodes: List[Tower] = [start_tower] + candidate_sites + [target_node]
         node_index = {t.id: t for t in all_nodes}
 
+        # Max feasible single-hop distance: solve FSPL = Pt + Gt + Gr - (-95)
+        max_hop_km = 10 ** ((start_tower.power_dbm + tx_gain + rx_gain + 95 - 20 * math.log10(f_hz) + 147.55) / 20) / 1000
+
         # Pre-compute hop costs with terrain obstruction penalties
         hop_cost: Dict[Tuple[str, str], float] = {}
         for a in all_nodes:
@@ -437,12 +447,18 @@ class TelecomTowerPower:
                 if d_km < 0.1:
                     hop_cost[(a.id, b.id)] = 0.0
                     continue
+                # Prune edges beyond max feasible distance
+                if d_km > max_hop_km:
+                    continue
                 fspl = LinkEngine.free_space_path_loss(d_km, f_hz)
+
+                # Scale terrain sample count with distance (1 point per km, min 10)
+                num_terrain_pts = max(10, int(d_km * 2))
 
                 obstruction_penalty = 0.0
                 try:
                     profile = self.terrain.profile(
-                        a.lat, a.lon, b.lat, b.lon, num_points=20
+                        a.lat, a.lon, b.lat, b.lon, num_points=num_terrain_pts
                     )
                     if profile:
                         tx_h_asl = profile[0] + a.height_m
@@ -457,20 +473,27 @@ class TelecomTowerPower:
 
                 hop_cost[(a.id, b.id)] = fspl + obstruction_penalty
 
-        # Dijkstra for bottleneck path
+        # Build adjacency list from pre-computed costs for faster neighbor lookup
+        adjacency: Dict[str, List[str]] = {t.id: [] for t in all_nodes}
+        for (a_id, b_id) in hop_cost:
+            adjacency[a_id].append(b_id)
+
+        # Dijkstra for bottleneck path (predecessor map instead of path-in-heap)
         INF = float('inf')
         best: Dict[Tuple[str, int], float] = {}
-        heap: list = [(0.0, 0, start_tower.id, [start_tower.id])]
-        result_path: Optional[List[str]] = None
+        predecessor: Dict[Tuple[str, int], Optional[Tuple[str, int]]] = {}
+        heap: list = [(0.0, 0, start_tower.id)]
+        predecessor[(start_tower.id, 0)] = None
+        result_state: Optional[Tuple[str, int]] = None
         result_cost = INF
 
         while heap:
-            bottleneck, hops, nid, path = heapq.heappop(heap)
+            bottleneck, hops, nid = heapq.heappop(heap)
 
             if nid == "__target__":
                 if bottleneck < result_cost:
                     result_cost = bottleneck
-                    result_path = path
+                    result_state = (nid, hops)
                 continue
 
             if hops >= max_hops:
@@ -482,41 +505,90 @@ class TelecomTowerPower:
             best[state_key] = bottleneck
 
             current = node_index[nid]
-            for neighbor in all_nodes:
-                if neighbor.id == nid or neighbor.id == start_tower.id:
-                    continue
-                edge_key = (nid, neighbor.id)
-                if edge_key not in hop_cost:
-                    continue
+            for neighbor_id in adjacency[nid]:
+                edge_key = (nid, neighbor_id)
                 effective_loss = hop_cost[edge_key]
                 hop_rssi = current.power_dbm + tx_gain + rx_gain - effective_loss
                 if hop_rssi < -95:
                     continue
                 new_bottleneck = max(bottleneck, effective_loss)
-                new_state = (neighbor.id, hops + 1)
+                new_state = (neighbor_id, hops + 1)
                 if new_state not in best or best[new_state] > new_bottleneck:
-                    heapq.heappush(heap, (new_bottleneck, hops + 1, neighbor.id,
-                                          path + [neighbor.id]))
+                    predecessor[new_state] = state_key
+                    heapq.heappush(heap, (new_bottleneck, hops + 1, neighbor_id))
 
-        if result_path is None:
+        if result_state is None:
             return [start_tower]
+
+        # Reconstruct path from predecessor map
+        result_path: List[str] = []
+        state = result_state
+        while state is not None:
+            result_path.append(state[0])
+            state = predecessor.get(state)
+        result_path.reverse()
 
         return [node_index[nid] for nid in result_path if nid != "__target__"]
 
     @staticmethod
     def _generate_candidates(start_tower: Tower, target_receiver: Receiver,
                              max_hops: int) -> List[Tower]:
-        """Generate candidate repeater sites evenly along the path."""
-        num_candidates = max(max_hops * 2, 4)
-        candidates = []
-        for i in range(1, num_candidates + 1):
-            frac = i / (num_candidates + 1)
-            lat = start_tower.lat + (target_receiver.lat - start_tower.lat) * frac
-            lon = start_tower.lon + (target_receiver.lon - start_tower.lon) * frac
+        """Generate candidate repeater sites along and beside the path.
+
+        Creates on-axis candidates evenly spaced along the great-circle path
+        plus lateral offset candidates on each side.  The lateral offsets let
+        the optimiser route *around* terrain obstacles instead of being
+        confined to the direct line.
+        """
+        num_on_axis = max(max_hops * 2, 4)
+        candidates: List[Tower] = []
+        idx = 0
+
+        dlat = target_receiver.lat - start_tower.lat
+        dlon = target_receiver.lon - start_tower.lon
+        path_len_km = LinkEngine.haversine_km(
+            start_tower.lat, start_tower.lon,
+            target_receiver.lat, target_receiver.lon,
+        )
+        # Perpendicular unit vector (90° rotation in lat/lon plane)
+        norm = math.sqrt(dlat**2 + dlon**2) or 1e-9
+        perp_lat = -dlon / norm
+        perp_lon = dlat / norm
+        # Lateral offset ~10% of path length (capped at 5 km equivalent)
+        offset_deg = min(path_len_km * 0.10 / 111.0, 5.0 / 111.0)
+
+        for i in range(1, num_on_axis + 1):
+            frac = i / (num_on_axis + 1)
+            center_lat = start_tower.lat + dlat * frac
+            center_lon = start_tower.lon + dlon * frac
+
+            # On-axis candidate
+            idx += 1
             candidates.append(Tower(
-                id=f"candidate_{i}",
-                lat=lat, lon=lon, height_m=40.0,
-                operator=start_tower.operator, bands=start_tower.bands, power_dbm=43.0
+                id=f"candidate_{idx}",
+                lat=center_lat, lon=center_lon, height_m=40.0,
+                operator=start_tower.operator, bands=start_tower.bands,
+                power_dbm=43.0,
+            ))
+            # Left offset candidate
+            idx += 1
+            candidates.append(Tower(
+                id=f"candidate_{idx}",
+                lat=center_lat + perp_lat * offset_deg,
+                lon=center_lon + perp_lon * offset_deg,
+                height_m=40.0,
+                operator=start_tower.operator, bands=start_tower.bands,
+                power_dbm=43.0,
+            ))
+            # Right offset candidate
+            idx += 1
+            candidates.append(Tower(
+                id=f"candidate_{idx}",
+                lat=center_lat - perp_lat * offset_deg,
+                lon=center_lon - perp_lon * offset_deg,
+                height_m=40.0,
+                operator=start_tower.operator, bands=start_tower.bands,
+                power_dbm=43.0,
             ))
         return candidates
 

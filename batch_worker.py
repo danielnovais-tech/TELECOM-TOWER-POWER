@@ -19,6 +19,7 @@ import os
 import sys
 import time
 import zipfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from job_store import JobStore, JOB_RESULTS_DIR
 from tower_db import TowerStore
@@ -228,9 +229,55 @@ def _analyze_link_sync(
 
 # ── Job processor ────────────────────────────────────────────────
 
+# Maximum parallel PDF workers (default: CPU count, capped at 8)
+_MAX_PDF_WORKERS = min(int(os.getenv("PDF_WORKERS", os.cpu_count() or 4)), 8)
+
+
+def _generate_single_pdf(args: tuple) -> tuple:
+    """Generate one PDF report in a worker process.
+
+    Accepts and returns plain serialisable types so this function can be
+    dispatched via ProcessPoolExecutor.
+
+    Returns ``(idx, pdf_bytes)`` on success or ``(idx, None)`` on error.
+    """
+    (idx, tower_dict, rx_data, srtm_data_dir, freq_mhz) = args
+
+    try:
+        srtm = SRTMReader(srtm_data_dir)
+
+        tower = Tower(
+            id=tower_dict["id"], lat=tower_dict["lat"], lon=tower_dict["lon"],
+            height_m=tower_dict["height_m"], operator=tower_dict["operator"],
+            bands=[Band(b) for b in tower_dict["bands"]],
+            power_dbm=tower_dict["power_dbm"],
+        )
+        rx = Receiver(
+            lat=rx_data["lat"], lon=rx_data["lon"],
+            height_m=rx_data.get("height_m", 10.0),
+            antenna_gain_dbi=rx_data.get("antenna_gain_dbi", 12.0),
+        )
+
+        terrain = _get_terrain_profile_sync(
+            srtm, tower.lat, tower.lon, rx.lat, rx.lon,
+        )
+        result = _analyze_link_sync(tower, rx, terrain)
+        pdf_buf = build_pdf_report(tower, rx, result, terrain, freq_mhz)
+        return (idx, pdf_buf.getvalue())
+    except Exception:
+        logging.getLogger("batch_worker").exception(
+            "PDF worker failed for receiver %d", idx,
+        )
+        return (idx, None)
+
+
 def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
                 srtm: SRTMReader, job_store: object) -> None:
-    """Generate all PDFs for a single batch job and save result to disk."""
+    """Generate all PDFs for a single batch job and save result to disk.
+
+    Uses a ProcessPoolExecutor to parallelise CPU-heavy PDF generation
+    across multiple cores.
+    """
     job_id = job["id"]
     tower_id = job["tower_id"]
     logger.info("Processing job %s  tower=%s  total=%d", job_id, tower_id, job["total"])
@@ -243,38 +290,53 @@ def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
         getattr(job_store, "fail_job")(job_id, f"Tower {tower_id} not found in DB")
         return
 
-    tower = Tower(
-        id=tower_row["id"], lat=tower_row["lat"], lon=tower_row["lon"],
-        height_m=tower_row["height_m"], operator=tower_row["operator"],
-        bands=[Band(b) for b in tower_row["bands"]],
-        power_dbm=tower_row["power_dbm"],
-    )
+    tower_dict = {
+        "id": tower_row["id"], "lat": tower_row["lat"], "lon": tower_row["lon"],
+        "height_m": tower_row["height_m"], "operator": tower_row["operator"],
+        "bands": tower_row["bands"],
+        "power_dbm": tower_row["power_dbm"],
+    }
 
     receivers_data = json.loads(job["receivers"])
-    freq_mhz = tower.primary_freq_hz() / 1e6
+    tower_obj = Tower(
+        id=tower_dict["id"], lat=tower_dict["lat"], lon=tower_dict["lon"],
+        height_m=tower_dict["height_m"], operator=tower_dict["operator"],
+        bands=[Band(b) for b in tower_dict["bands"]],
+        power_dbm=tower_dict["power_dbm"],
+    )
+    freq_mhz = tower_obj.primary_freq_hz() / 1e6
+    srtm_data_dir = srtm.data_dir
 
     result_filename = f"batch_{job_id}.zip"
     result_path = os.path.join(JOB_RESULTS_DIR, result_filename)
 
     try:
-        with zipfile.ZipFile(result_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for idx, rx_data in enumerate(receivers_data):
-                rx = Receiver(
-                    lat=rx_data["lat"], lon=rx_data["lon"],
-                    height_m=rx_data.get("height_m", 10.0),
-                    antenna_gain_dbi=rx_data.get("antenna_gain_dbi", 12.0),
-                )
-                terrain = _get_terrain_profile_sync(
-                    srtm, tower.lat, tower.lon, rx.lat, rx.lon
-                )
-                result = _analyze_link_sync(tower, rx, terrain)
-                pdf_buf = build_pdf_report(tower, rx, result, terrain, freq_mhz)
-                filename = f"report_{tower_id}_{idx + 1:03d}.pdf"
-                zf.writestr(filename, pdf_buf.getvalue())
+        # Build work items for the process pool
+        work_items = [
+            (idx, tower_dict, rx_data, srtm_data_dir, freq_mhz)
+            for idx, rx_data in enumerate(receivers_data)
+        ]
 
-                # Update progress every 10 reports or on last one
-                if (idx + 1) % 10 == 0 or idx + 1 == len(receivers_data):
-                    getattr(job_store, "update_progress")(job_id, idx + 1)
+        pdf_results: dict[int, bytes] = {}
+        completed = 0
+        num_workers = min(_MAX_PDF_WORKERS, len(work_items))
+
+        with ProcessPoolExecutor(max_workers=num_workers) as pool:
+            futures = {pool.submit(_generate_single_pdf, item): item[0] for item in work_items}
+            for future in as_completed(futures):
+                idx, pdf_bytes = future.result()
+                if pdf_bytes is not None:
+                    pdf_results[idx] = pdf_bytes
+                completed += 1
+                if completed % 10 == 0 or completed == len(receivers_data):
+                    getattr(job_store, "update_progress")(job_id, completed)
+
+        # Write ZIP in original order
+        with zipfile.ZipFile(result_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for idx in range(len(receivers_data)):
+                if idx in pdf_results:
+                    filename = f"report_{tower_id}_{idx + 1:03d}.pdf"
+                    zf.writestr(filename, pdf_results[idx])
 
         getattr(job_store, "complete_job")(job_id, result_path)
         logger.info("Job %s completed: %d PDFs → %s", job_id, len(receivers_data), result_path)

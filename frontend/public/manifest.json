@@ -1,7 +1,7 @@
 {
   "name": "Telecom Tower Power",
   "short_name": "TowerPower",
-  "description": "RF Link Analysis & Repeater Planner for Telecom Engineers",
+  "description": "RF link analysis and repeater planning for telecom engineers",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",

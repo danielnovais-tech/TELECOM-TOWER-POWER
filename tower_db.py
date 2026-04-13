@@ -76,6 +76,10 @@ class _SQLiteStore:
                     power_dbm  REAL NOT NULL DEFAULT 43.0
                 )
             """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_towers_operator
+                ON towers(operator)
+            """)
 
     # ---- write --------------------------------------------------
 
@@ -114,16 +118,16 @@ class _SQLiteStore:
         return self._row_to_dict(row) if row else None
 
     def list_all(self, operator: Optional[str] = None,
-                 limit: int = 1000) -> List[Dict[str, Any]]:
+                 limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
         with self._conn() as conn:
             if operator:
                 rows = conn.execute(
-                    "SELECT * FROM towers WHERE operator = ? LIMIT ?",
-                    (operator, limit),
+                    "SELECT * FROM towers WHERE operator = ? LIMIT ? OFFSET ?",
+                    (operator, limit, offset),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM towers LIMIT ?", (limit,)
+                    "SELECT * FROM towers LIMIT ? OFFSET ?", (limit, offset)
                 ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
@@ -203,6 +207,10 @@ class _PgStore:
                         power_dbm  DOUBLE PRECISION NOT NULL DEFAULT 43.0
                     )
                 """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_towers_operator
+                    ON towers(operator)
+                """)
 
     # ---- write --------------------------------------------------
 
@@ -253,17 +261,17 @@ class _PgStore:
         return self._row_to_dict(row)
 
     def list_all(self, operator: Optional[str] = None,
-                 limit: int = 1000) -> List[Dict[str, Any]]:
+                 limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
         assert psycopg2 is not None
         with self._conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 if operator:
                     cur.execute(
-                        "SELECT * FROM towers WHERE operator = %s LIMIT %s",
-                        (operator, limit),
+                        "SELECT * FROM towers WHERE operator = %s LIMIT %s OFFSET %s",
+                        (operator, limit, offset),
                     )
                 else:
-                    cur.execute("SELECT * FROM towers LIMIT %s", (limit,))
+                    cur.execute("SELECT * FROM towers LIMIT %s OFFSET %s", (limit, offset))
                 rows = cur.fetchall()
         return [self._row_to_dict(r) for r in rows]
 

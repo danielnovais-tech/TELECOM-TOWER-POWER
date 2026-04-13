@@ -25,7 +25,7 @@ import aiohttp
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Tuple
 from enum import Enum
-from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import APIKeyHeader
 from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -167,20 +167,27 @@ class LinkEngine:
 
     @staticmethod
     def terrain_clearance(terrain_profile: List[float], d_km: float, f_hz: float,
-                          tx_h: float, rx_h: float) -> float:
+                          tx_h: float, rx_h: float, k_factor: float = 1.33) -> float:
         """
         Returns minimum fraction of first Fresnel zone clearance (0..1+).
         terrain_profile: list of ground heights (m) at equally spaced points.
+        k_factor: effective Earth radius factor (4/3 standard atmosphere).
         """
         n = len(terrain_profile)
         if n < 2:
             return 1.0
         step = d_km / (n-1)
+        R_eff = 6371.0 * k_factor  # effective Earth radius in km
+        d_total_m = d_km * 1000
         min_clearance = float('inf')
         for i, ground_h in enumerate(terrain_profile):
             d_i = i * step
             line_h = tx_h + (rx_h - tx_h) * (d_i / d_km)
-            clearance = line_h - ground_h
+            # Earth curvature correction: bulge = d1*d2 / (2*R_eff)
+            d1_m = d_i * 1000
+            d2_m = (d_km - d_i) * 1000
+            earth_bulge = (d1_m * d2_m) / (2 * R_eff * 1000)
+            clearance = line_h - ground_h - earth_bulge
             d1 = d_i
             d2 = d_km - d_i
             if d1 <= 0 or d2 <= 0:
@@ -398,8 +405,8 @@ class TelecomTowerPower:
         return self._row_to_tower(row)
 
     def list_towers(self, operator: Optional[str] = None,
-                    limit: int = 100) -> List[Tower]:
-        rows = self.db.list_all(operator=operator, limit=limit)
+                    limit: int = 100, offset: int = 0) -> List[Tower]:
+        rows = self.db.list_all(operator=operator, limit=limit, offset=offset)
         return [self._row_to_tower(r) for r in rows]
 
     def tower_count(self) -> int:
@@ -495,6 +502,9 @@ class TelecomTowerPower:
         all_nodes: List[Tower] = [start_tower] + candidate_sites + [target_node]
         node_index = {t.id: t for t in all_nodes}
 
+        # Max feasible single-hop distance: solve FSPL = Pt + Gt + Gr - (-95)
+        max_hop_km = 10 ** ((start_tower.power_dbm + tx_gain + rx_gain + 95 - 20 * math.log10(f_hz) + 147.55) / 20) / 1000
+
         # Pre-compute hop costs (FSPL + terrain obstruction penalty)
         # Cache as dict[(from_id, to_id)] -> effective_loss_db
         hop_cost: Dict[Tuple[str, str], float] = {}
@@ -506,13 +516,19 @@ class TelecomTowerPower:
                 if d_km < 0.1:
                     hop_cost[(a.id, b.id)] = 0.0
                     continue
+                # Prune edges beyond max feasible distance
+                if d_km > max_hop_km:
+                    continue
                 fspl = LinkEngine.free_space_path_loss(d_km, f_hz)
+
+                # Scale terrain sample count with distance (1 point per km, min 10)
+                num_terrain_pts = max(10, int(d_km * 2))
 
                 # Fetch terrain profile for this hop and compute Fresnel clearance
                 obstruction_penalty = 0.0
                 try:
                     profile = await self.elevation.get_profile(
-                        a.lat, a.lon, b.lat, b.lon, num_points=20
+                        a.lat, a.lon, b.lat, b.lon, num_points=num_terrain_pts
                     )
                     if profile:
                         tx_h_asl = profile[0] + a.height_m
@@ -528,22 +544,31 @@ class TelecomTowerPower:
 
                 hop_cost[(a.id, b.id)] = fspl + obstruction_penalty
 
+        # Build adjacency list from pre-computed costs for faster neighbor lookup
+        adjacency: Dict[str, List[str]] = {t.id: [] for t in all_nodes}
+        for (a_id, b_id) in hop_cost:
+            adjacency[a_id].append(b_id)
+
         # Modified Dijkstra for bottleneck path:
         # cost = worst (max) single-hop effective loss along the path so far
         # We want to MINIMIZE this bottleneck cost.
+        # Uses predecessor map instead of storing full path in heap.
         INF = float('inf')
         best: Dict[Tuple[str, int], float] = {}
-        heap: list = [(0.0, 0, start_tower.id, [start_tower.id])]
-        result_path: Optional[List[str]] = None
+        # predecessor: state -> (prev_node_id, prev_hops) for path reconstruction
+        predecessor: Dict[Tuple[str, int], Optional[Tuple[str, int]]] = {}
+        heap: list = [(0.0, 0, start_tower.id)]
+        predecessor[(start_tower.id, 0)] = None
+        result_state: Optional[Tuple[str, int]] = None
         result_cost = INF
 
         while heap:
-            bottleneck, hops, nid, path = heapq.heappop(heap)
+            bottleneck, hops, nid = heapq.heappop(heap)
 
             if nid == "__target__":
                 if bottleneck < result_cost:
                     result_cost = bottleneck
-                    result_path = path
+                    result_state = (nid, hops)
                 continue
 
             if hops >= max_hops:
@@ -555,25 +580,29 @@ class TelecomTowerPower:
             best[state_key] = bottleneck
 
             current = node_index[nid]
-            for neighbor in all_nodes:
-                if neighbor.id == nid or neighbor.id == start_tower.id:
-                    continue
-                edge_key = (nid, neighbor.id)
-                if edge_key not in hop_cost:
-                    continue
+            for neighbor_id in adjacency[nid]:
+                edge_key = (nid, neighbor_id)
                 effective_loss = hop_cost[edge_key]
                 hop_rssi = current.power_dbm + tx_gain + rx_gain - effective_loss
                 if hop_rssi < -95:
                     continue
                 new_bottleneck = max(bottleneck, effective_loss)
-                new_state = (neighbor.id, hops + 1)
+                new_state = (neighbor_id, hops + 1)
                 if new_state not in best or best[new_state] > new_bottleneck:
-                    heapq.heappush(heap, (new_bottleneck, hops + 1, neighbor.id,
-                                          path + [neighbor.id]))
+                    predecessor[new_state] = state_key
+                    heapq.heappush(heap, (new_bottleneck, hops + 1, neighbor_id))
 
-        if result_path is None:
+        if result_state is None:
             # Fallback: direct path (infeasible, but reported for user awareness)
             return [start_tower]
+
+        # Reconstruct path from predecessor map
+        result_path: List[str] = []
+        state = result_state
+        while state is not None:
+            result_path.append(state[0])
+            state = predecessor.get(state)
+        result_path.reverse()
 
         # Return tower objects (exclude virtual target)
         return [node_index[nid] for nid in result_path if nid != "__target__"]
@@ -581,18 +610,62 @@ class TelecomTowerPower:
     @staticmethod
     def _generate_candidates(start_tower: Tower, target_receiver: Receiver,
                              max_hops: int) -> List[Tower]:
-        """Generate candidate repeater sites evenly along the path."""
-        num_candidates = max(max_hops * 2, 4)
-        candidates = []
-        for i in range(1, num_candidates + 1):
-            frac = i / (num_candidates + 1)
-            lat = start_tower.lat + (target_receiver.lat - start_tower.lat) * frac
-            lon = start_tower.lon + (target_receiver.lon - start_tower.lon) * frac
+        """Generate candidate repeater sites along and beside the path.
+
+        Creates on-axis candidates evenly spaced along the great-circle path
+        plus lateral offset candidates on each side.  The lateral offsets let
+        the optimiser route *around* terrain obstacles instead of being
+        confined to the direct line.
+        """
+        num_on_axis = max(max_hops * 2, 4)
+        candidates: List[Tower] = []
+        idx = 0
+
+        dlat = target_receiver.lat - start_tower.lat
+        dlon = target_receiver.lon - start_tower.lon
+        path_len_km = LinkEngine.haversine_km(
+            start_tower.lat, start_tower.lon,
+            target_receiver.lat, target_receiver.lon,
+        )
+        # Perpendicular unit vector (90° rotation in lat/lon plane)
+        norm = math.sqrt(dlat**2 + dlon**2) or 1e-9
+        perp_lat = -dlon / norm
+        perp_lon = dlat / norm
+        # Lateral offset ~10% of path length (capped at 5 km equivalent)
+        offset_deg = min(path_len_km * 0.10 / 111.0, 5.0 / 111.0)
+
+        for i in range(1, num_on_axis + 1):
+            frac = i / (num_on_axis + 1)
+            center_lat = start_tower.lat + dlat * frac
+            center_lon = start_tower.lon + dlon * frac
+
+            # On-axis candidate
+            idx += 1
             candidates.append(Tower(
-                id=f"candidate_{i}",
-                lat=lat, lon=lon, height_m=40.0,
+                id=f"candidate_{idx}",
+                lat=center_lat, lon=center_lon, height_m=40.0,
                 operator=start_tower.operator, bands=start_tower.bands,
-                power_dbm=43.0
+                power_dbm=43.0,
+            ))
+            # Left offset candidate
+            idx += 1
+            candidates.append(Tower(
+                id=f"candidate_{idx}",
+                lat=center_lat + perp_lat * offset_deg,
+                lon=center_lon + perp_lon * offset_deg,
+                height_m=40.0,
+                operator=start_tower.operator, bands=start_tower.bands,
+                power_dbm=43.0,
+            ))
+            # Right offset candidate
+            idx += 1
+            candidates.append(Tower(
+                id=f"candidate_{idx}",
+                lat=center_lat - perp_lat * offset_deg,
+                lon=center_lon - perp_lon * offset_deg,
+                height_m=40.0,
+                operator=start_tower.operator, bands=start_tower.bands,
+                power_dbm=43.0,
             ))
         return candidates
 
@@ -617,7 +690,7 @@ TIER_LIMITS = {
 # In-memory API key store: key -> {"tier": Tier, "owner": str}
 # Override with VALID_API_KEYS env var: JSON dict {"key": "tier", ...}
 # e.g. VALID_API_KEYS='{"prod-key-001":"pro","prod-key-002":"enterprise"}'
-_default_api_keys: Dict[str, Dict] = {
+_demo_api_keys: Dict[str, Dict] = {
     "demo-key-free-001": {"tier": Tier.FREE, "owner": "demo_free"},
     "demo-key-pro-001": {"tier": Tier.PRO, "owner": "demo_pro"},
     "demo-key-enterprise-001": {"tier": Tier.ENTERPRISE, "owner": "demo_enterprise"},
@@ -630,7 +703,11 @@ if _env_keys_raw:
         k: {"tier": Tier(v), "owner": k} for k, v in _env_keys.items()
     }
 else:
-    API_KEYS: Dict[str, Dict] = _default_api_keys
+    API_KEYS: Dict[str, Dict] = {}
+
+# Demo keys are only loaded when explicitly enabled (dev/staging).
+if os.getenv("ENABLE_DEMO_KEYS", "true").lower() in ("1", "true", "yes"):
+    API_KEYS.update(_demo_api_keys)
 
 api_key_header = APIKeyHeader(name="X-API-Key")
 
@@ -697,10 +774,11 @@ def require_tier(*allowed: Tier):
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 10 MB
 MAX_BATCH_ROWS = int(os.getenv("MAX_BATCH_ROWS", "100"))
 
-_allowed_origins_raw = os.getenv(
-    "CORS_ORIGINS",
-    "https://app.telecomtowerpower.com",
+_DEFAULT_ORIGINS = (
+    "https://app.telecomtowerpower.com,"
+    "https://dashboard.telecomtowerpower.com"
 )
+_allowed_origins_raw = os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS)
 _allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
 
 # ------------------------------------------------------------
@@ -896,10 +974,16 @@ async def get_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
     return asdict(tower)
 
 @app.get("/towers")
-async def list_towers(operator: Optional[str] = None, limit: int = 100, key_data: Dict = Depends(verify_api_key)):
-    """List all towers, optionally filtered by operator."""
-    towers_list = platform.list_towers(operator=operator, limit=limit)
-    return {"towers": [asdict(t) for t in towers_list]}
+async def list_towers(
+    operator: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    key_data: Dict = Depends(verify_api_key),
+):
+    """List towers with pagination. Use *offset* and *limit* to page through results."""
+    towers_list = platform.list_towers(operator=operator, limit=limit, offset=offset)
+    total = platform.tower_count()
+    return {"towers": [asdict(t) for t in towers_list], "total": total, "offset": offset, "limit": limit}
 
 @app.put("/towers/{tower_id}")
 async def update_tower(tower_id: str, tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
@@ -1118,6 +1202,64 @@ async def get_job_status(job_id: str):
     return resp
 
 
+@app.websocket("/jobs/{job_id}/ws")
+async def job_progress_ws(websocket: WebSocket, job_id: str, token: str = Query(default="")):
+    """WebSocket endpoint for live progress streaming of a batch job.
+
+    Pushes JSON frames with {job_id, status, progress, total, download_url?, error?}
+    every ~1 s until the job completes or fails, then closes the socket.
+
+    Requires a valid API key via the ``token`` query parameter.
+    """
+    # Authenticate via query-param token
+    key_data = API_KEYS.get(token)
+    if key_data is None:
+        dynamic = stripe_billing.lookup_key(token)
+        if dynamic is None:
+            await websocket.close(code=4001, reason="Invalid or missing API key")
+            return
+
+    # Validate job exists before accepting
+    job = job_store.get_job(job_id)
+    if job is None:
+        await websocket.close(code=4004, reason="Job not found")
+        return
+
+    await websocket.accept()
+    try:
+        while True:
+            job = job_store.get_job(job_id)
+            if job is None:
+                await websocket.send_json({"error": "Job disappeared"})
+                break
+
+            msg: Dict[str, object] = {
+                "job_id": job_id,
+                "status": job["status"],
+                "progress": job["progress"],
+                "total": job["total"],
+            }
+            if job["status"] == "completed":
+                msg["download_url"] = f"/jobs/{job_id}/download"
+            if job["status"] == "failed":
+                msg["error"] = job.get("error", "Unknown error")
+
+            await websocket.send_json(msg)
+
+            # Terminal states → close gracefully
+            if job["status"] in ("completed", "failed"):
+                break
+
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        pass  # client left; nothing to clean up
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
 @app.get("/jobs/{job_id}/download")
 async def download_job_result(job_id: str):
     """Download the ZIP file produced by a completed batch job."""
@@ -1157,6 +1299,11 @@ class SignupRequest(BaseModel):
 class CheckoutRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=254)
     tier: str = Field(..., pattern="^(pro|enterprise)$")
+    country: Optional[str] = Field(
+        None,
+        min_length=2, max_length=2,
+        description="ISO 3166-1 alpha-2 country code for SRTM tile pre-download (enterprise only)",
+    )
 
 @app.post("/signup/free", status_code=201)
 async def signup_free(body: SignupRequest):
@@ -1177,9 +1324,10 @@ async def signup_checkout(body: CheckoutRequest):
     """
     Create a Stripe Checkout Session for a paid plan.
     Returns the Checkout URL the client should redirect to.
+    For enterprise plans, pass *country* to pre-download SRTM elevation tiles.
     """
     try:
-        url = stripe_billing.create_checkout_session(body.email, body.tier)
+        url = stripe_billing.create_checkout_session(body.email, body.tier, body.country)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except ValueError as exc:
@@ -1224,21 +1372,85 @@ async def signup_success(session_id: str):
 class KeyLookupRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=254)
 
+# ---- IP-based rate limiter for unauthenticated signup endpoints ----
+_signup_rate_buckets: Dict[str, collections.deque] = {}
+_SIGNUP_RATE_LIMIT = 10    # requests per window
+_SIGNUP_RATE_WINDOW = 3600  # 1 hour
+
+def _check_signup_rate_limit(request: Request):
+    """Rate-limit signup endpoints by client IP (10 req/hour)."""
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    bucket = _signup_rate_buckets.setdefault(client_ip, collections.deque())
+    while bucket and bucket[0] <= now - _SIGNUP_RATE_WINDOW:
+        bucket.popleft()
+    if len(bucket) >= _SIGNUP_RATE_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many signup requests. Try again later.",
+        )
+    bucket.append(now)
+
 @app.post("/signup/status")
-async def signup_status(body: KeyLookupRequest):
+async def signup_status(body: KeyLookupRequest, request: Request):
     """
     Look up an existing API key by email address.
-    Returns the key, tier, and account status.
+    Returns a masked key, tier, and account status.
     """
+    _check_signup_rate_limit(request)
     info = stripe_billing.get_key_info_for_email(body.email)
     if info is None:
         raise HTTPException(status_code=404, detail="No account found for this email")
+    raw_key = info["api_key"]
+    masked = raw_key[:8] + "…" + raw_key[-4:] if len(raw_key) > 12 else raw_key
     return {
         "api_key": info["api_key"],
+        "api_key_masked": masked,
         "tier": info["tier"],
         "email": info["email"],
         "has_subscription": info.get("stripe_subscription_id") is not None,
     }
+
+# ------------------------------------------------------------
+# SRTM tile management (enterprise)
+# ------------------------------------------------------------
+
+class PrefetchRequest(BaseModel):
+    country: str = Field(..., min_length=2, max_length=2, description="ISO 3166-1 alpha-2")
+
+@app.get("/srtm/status/{country}")
+async def srtm_tile_status(
+    country: str,
+    _key: Dict = Depends(require_tier(Tier.ENTERPRISE)),
+):
+    """Report SRTM tile availability for a country (enterprise only)."""
+    from srtm_prefetch import tile_status, COUNTRY_BOUNDS
+    code = country.upper()
+    if code not in COUNTRY_BOUNDS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No bounding box for '{code}'. Available: {sorted(COUNTRY_BOUNDS)}",
+        )
+    return tile_status(code)
+
+@app.post("/srtm/prefetch")
+async def srtm_prefetch(
+    body: PrefetchRequest,
+    _key: Dict = Depends(require_tier(Tier.ENTERPRISE)),
+):
+    """
+    Start background download of SRTM tiles for a country (enterprise only).
+    Returns immediately; use GET /srtm/status/{country} to track progress.
+    """
+    from srtm_prefetch import prefetch_country_async, COUNTRY_BOUNDS
+    code = body.country.upper()
+    if code not in COUNTRY_BOUNDS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No bounding box for '{code}'. Available: {sorted(COUNTRY_BOUNDS)}",
+        )
+    prefetch_country_async(code)
+    return {"status": "started", "country": code}
 
 # ------------------------------------------------------------
 # Run the server (if executed directly)

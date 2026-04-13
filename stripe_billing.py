@@ -106,10 +106,14 @@ def register_free_user(email: str) -> Dict:
 # Stripe Checkout
 # ---------------------------------------------------------------------------
 
-def create_checkout_session(email: str, tier: str) -> str:
+def create_checkout_session(email: str, tier: str, country: Optional[str] = None) -> str:
     """
     Create a Stripe Checkout Session for a paid tier.
     Returns the Checkout Session URL the frontend should redirect to.
+
+    *country* (ISO 3166-1 alpha-2) is optional; when provided for an
+    enterprise plan, SRTM tiles for that country will be pre-downloaded
+    after payment.
     """
     if not STRIPE_SECRET_KEY:
         raise RuntimeError("STRIPE_SECRET_KEY is not configured")
@@ -118,15 +122,40 @@ def create_checkout_session(email: str, tier: str) -> str:
     if not price_id:
         raise ValueError(f"No Stripe price configured for tier '{tier}'")
 
+    metadata = {"tier": tier, "email": email}
+    if country:
+        metadata["country"] = country.upper()
+
     session = stripe.checkout.Session.create(
         mode="subscription",
         customer_email=email,
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=f"{FRONTEND_URL}/signup/success?session_id={{CHECKOUT_SESSION_ID}}",
         cancel_url=f"{FRONTEND_URL}/signup/cancel",
-        metadata={"tier": tier, "email": email},
+        metadata=metadata,
     )
     return session.url
+
+
+# ---------------------------------------------------------------------------
+# SRTM tile pre-download for enterprise accounts
+# ---------------------------------------------------------------------------
+
+def _maybe_prefetch_srtm(tier: str, session: dict) -> None:
+    """If this is an enterprise checkout with a country, start background prefetch."""
+    if tier != "enterprise":
+        return
+    country = session.get("metadata", {}).get("country")
+    if not country:
+        return
+    try:
+        from srtm_prefetch import prefetch_country_async, COUNTRY_BOUNDS
+        if country.upper() not in COUNTRY_BOUNDS:
+            logger.warning("No SRTM bounds for country %s; skipping prefetch", country)
+            return
+        prefetch_country_async(country)
+    except Exception:
+        logger.exception("Failed to start SRTM prefetch for %s", country)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +205,7 @@ def _on_checkout_completed(session: dict) -> Dict:
         store[existing_key]["stripe_subscription_id"] = subscription_id
         _save_store(store)
         logger.info("Upgraded %s to %s (key %s…)", email, tier, existing_key[:12])
+        _maybe_prefetch_srtm(tier, session)
         return {"action": "upgraded", "email": email, "tier": tier}
 
     # Otherwise create a new key
@@ -190,6 +220,7 @@ def _on_checkout_completed(session: dict) -> Dict:
     }
     _save_store(store)
     logger.info("Provisioned %s key for %s", tier, email)
+    _maybe_prefetch_srtm(tier, session)
     return {"action": "provisioned", "email": email, "tier": tier}
 
 

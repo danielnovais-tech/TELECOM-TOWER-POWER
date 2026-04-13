@@ -2,22 +2,56 @@ import { useEffect, useState, useCallback } from "react";
 import TowerMap from "./TowerMap";
 import Sidebar from "./Sidebar";
 import Signup from "./Signup";
-import { fetchTowers, fetchHealth } from "./api";
+import SignupSuccess from "./SignupSuccess";
+import { fetchTowers, fetchHealth, setApiKey, onRateLimitChange } from "./api";
 import "./App.css";
 
+function getInitialPage() {
+  const path = window.location.pathname;
+  if (path === "/signup/success") return "signup-success";
+  if (path === "/signup/cancel") return "signup-cancel";
+  return "map";
+}
+
+function getSessionId() {
+  return new URLSearchParams(window.location.search).get("session_id");
+}
+
 export default function App() {
-  const [page, setPage] = useState("map"); // "map" | "signup"
+  const [page, setPage] = useState(getInitialPage);
   const [towers, setTowers] = useState([]);
   const [selectedTower, setSelectedTower] = useState(null);
   const [receiverPos, setReceiverPos] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [repeaterChain, setRepeaterChain] = useState([]);
   const [healthStatus, setHealthStatus] = useState(null);
+  const [rateLimitInfo, setRateLimitInfo] = useState({ remaining: null, limit: null });
+  const [rateLimitToast, setRateLimitToast] = useState(null);
 
   useEffect(() => {
     fetchTowers().then(setTowers).catch(console.error);
     fetchHealth().then(setHealthStatus).catch(console.error);
   }, []);
+
+  // Subscribe to rate-limit header updates
+  useEffect(() => {
+    return onRateLimitChange((info) => {
+      setRateLimitInfo(info);
+      if (info.remaining != null && info.limit != null && info.remaining <= 2 && info.remaining > 0) {
+        setRateLimitToast({
+          type: "warning",
+          message: `${info.remaining} request${info.remaining === 1 ? "" : "s"} remaining (${info.limit}/min limit).`,
+        });
+      }
+    });
+  }, []);
+
+  // Auto-dismiss toast after 6 seconds
+  useEffect(() => {
+    if (!rateLimitToast) return;
+    const t = setTimeout(() => setRateLimitToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [rateLimitToast]);
 
   const handleMapClick = useCallback((latlng) => {
     setReceiverPos(latlng);
@@ -37,10 +71,10 @@ export default function App() {
         <h1>Telecom Tower Power</h1>
         <span className="subtitle">RF Link Analysis &amp; Repeater Planner</span>
         <nav className="header-nav">
-          <button className={page === "map" ? "active" : ""} onClick={() => setPage("map")}>
+          <button className={page === "map" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("map"); }}>
             Map
           </button>
-          <button className={page === "signup" ? "active" : ""} onClick={() => setPage("signup")}>
+          <button className={page === "signup" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("signup"); }}>
             Get API Key
           </button>
         </nav>
@@ -57,6 +91,8 @@ export default function App() {
             repeaterChain={repeaterChain}
             setRepeaterChain={setRepeaterChain}
             healthStatus={healthStatus}
+            rateLimitInfo={rateLimitInfo}
+            onNavigateSignup={() => { window.history.pushState({}, "", "/"); setPage("signup"); }}
           />
           <main className="map-container">
             <TowerMap
@@ -70,8 +106,33 @@ export default function App() {
             />
           </main>
         </div>
+      ) : page === "signup-success" ? (
+        <SignupSuccess
+          sessionId={getSessionId()}
+          onKeyReceived={(key) => { setApiKey(key); setPage("map"); }}
+        />
+      ) : page === "signup-cancel" ? (
+        <div className="signup-page">
+          <div className="signup-card">
+            <h2>Checkout Cancelled</h2>
+            <p className="signup-sub">Your payment was not processed. No charges were made.</p>
+            <button
+              className="btn primary"
+              onClick={() => { window.history.pushState({}, "", "/"); setPage("signup"); }}
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
       ) : (
-        <Signup onKeyReceived={(key) => console.log("New API key:", key)} />
+        <Signup onKeyReceived={(key) => { setApiKey(key); setPage("map"); }} />
+      )}
+
+      {rateLimitToast && (
+        <div className={`rate-limit-toast ${rateLimitToast.type}`}>
+          <span>{rateLimitToast.message}</span>
+          <button className="toast-close" onClick={() => setRateLimitToast(null)}>×</button>
+        </div>
       )}
     </div>
   );
