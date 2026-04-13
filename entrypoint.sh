@@ -5,6 +5,19 @@ echo "PORT=${PORT:-8000}"
 echo "DATABASE_URL is set: $([ -n "${DATABASE_URL:-}" ] && echo yes || echo no)"
 echo "REDIS_URL is set: $([ -n "${REDIS_URL:-}" ] && echo yes || echo no)"
 
+# Build React PWA if source exists but dist does not (non-Docker deploys)
+if [ -d "frontend/src" ] && [ ! -d "frontend_dist" ]; then
+    if command -v node >/dev/null 2>&1; then
+        echo "Building React frontend..."
+        (cd frontend && npm ci --ignore-scripts 2>/dev/null || npm install && npx vite build) \
+            && cp -r frontend/dist frontend_dist \
+            && echo "React frontend built → frontend_dist/" \
+            || echo "WARN: React build failed, continuing without PWA frontend"
+    else
+        echo "WARN: Node.js not found, skipping React frontend build"
+    fi
+fi
+
 # Run Alembic migrations with a hard timeout.
 # If it hangs or fails, we still start the API.
 echo "Running alembic upgrade head (60s timeout)..."

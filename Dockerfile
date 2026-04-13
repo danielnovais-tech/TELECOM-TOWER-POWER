@@ -1,3 +1,12 @@
+# ── Stage 1: Build React frontend ──────────────────────────
+FROM node:22-alpine AS frontend-build
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci --ignore-scripts 2>/dev/null || npm install
+COPY frontend/ .
+RUN npx vite build
+
+# ── Stage 2: Python application ────────────────────────────
 FROM python:3.10-slim
 
 # Prevent Python from buffering stdout/stderr (important for container logs)
@@ -30,6 +39,7 @@ COPY models.py .
 COPY alembic.ini .
 COPY migrations/ migrations/
 COPY frontend.py .
+COPY api_client.py .
 COPY streamlit_app.py .
 COPY load_towers.py .
 COPY towers_brazil.csv .
@@ -38,6 +48,9 @@ COPY sample_batch_test.csv .
 COPY key_store.json .
 COPY start.sh .
 COPY entrypoint.sh .
+
+# Copy built React frontend
+COPY --from=frontend-build /app/dist frontend_dist/
 
 # Create srtm_data directory and fix permissions
 RUN mkdir -p srtm_data job_results && chmod +x start.sh entrypoint.sh && chown -R appuser:appuser /app

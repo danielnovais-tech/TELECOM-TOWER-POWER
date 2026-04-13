@@ -8,6 +8,11 @@
  */
 
 import createClient from "openapi-fetch";
+import {
+  cacheTowers, getCachedTowers,
+  cacheAnalysis, getCachedAnalysis,
+  cachePdf, getCachedPdf,
+} from "./offlineStore";
 /** @typedef {import("./api-schema").paths} paths */
 /** @typedef {import("./api-schema").components} components */
 
@@ -115,10 +120,24 @@ export async function fetchHealth() {
 }
 
 export async function fetchTowers(operator = null) {
-  const res = await client.GET("/towers", {
-    params: { query: { limit: 200, ...(operator ? { operator } : {}) } },
-  });
-  return unwrap(res)?.towers;
+  try {
+    const res = await client.GET("/towers", {
+      params: { query: { limit: 200, ...(operator ? { operator } : {}) } },
+    });
+    const towers = unwrap(res)?.towers;
+    if (towers && towers.length) {
+      cacheTowers(towers).catch(() => {});
+    }
+    return towers;
+  } catch (e) {
+    // Offline fallback: serve from IndexedDB
+    const cached = await getCachedTowers();
+    if (cached && cached.length) {
+      console.info("offlineStore: serving towers from cache");
+      return cached;
+    }
+    throw e;
+  }
 }
 
 export async function fetchNearestTowers(lat, lon, limit = 5) {
@@ -129,11 +148,24 @@ export async function fetchNearestTowers(lat, lon, limit = 5) {
 }
 
 export async function analyzeLink(towerId, receiver) {
-  const res = await client.POST("/analyze", {
-    params: { query: { tower_id: towerId } },
-    body: receiver,
-  });
-  return unwrap(res);
+  try {
+    const res = await client.POST("/analyze", {
+      params: { query: { tower_id: towerId } },
+      body: receiver,
+    });
+    const result = unwrap(res);
+    cacheAnalysis(towerId, receiver, result).catch(() => {});
+    return result;
+  } catch (e) {
+    // Offline fallback: return cached analysis if available
+    const cached = await getCachedAnalysis(towerId, receiver);
+    if (cached) {
+      console.info("offlineStore: serving analysis from cache");
+      cached._fromCache = true;
+      return cached;
+    }
+    throw e;
+  }
 }
 
 export async function planRepeater(towerId, receiver, maxHops = 3) {
@@ -149,21 +181,35 @@ export async function planRepeater(towerId, receiver, maxHops = 3) {
  * The caller can use this URL in window.open() or an anchor download.
  */
 export async function downloadPdfReport(towerId, lat, lon, height = 10, gain = 12) {
-  const params = new URLSearchParams({
-    tower_id: towerId, lat, lon, height_m: height, antenna_gain: gain,
-  });
-  const r = await fetch(`${BASE}/export_report/pdf?${params}`, {
-    headers: { "X-API-Key": apiKey },
-  });
-  const rem = r.headers.get("x-ratelimit-remaining");
-  const lim = r.headers.get("x-ratelimit-limit");
-  if (rem != null) rateLimit.remaining = Number(rem);
-  if (lim != null) rateLimit.limit = Number(lim);
-  _rateLimitListeners.forEach((fn) => fn({ ...rateLimit }));
-  if (r.status === 429) throw new RateLimitError(rateLimit.limit);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-  const blob = await r.blob();
-  return URL.createObjectURL(blob);
+  const receiver = { lat, lon, height_m: height, antenna_gain_dbi: gain };
+  try {
+    const params = new URLSearchParams({
+      tower_id: towerId, lat, lon, height_m: height, antenna_gain: gain,
+    });
+    const r = await fetch(`${BASE}/export_report/pdf?${params}`, {
+      headers: { "X-API-Key": apiKey },
+    });
+    const rem = r.headers.get("x-ratelimit-remaining");
+    const lim = r.headers.get("x-ratelimit-limit");
+    if (rem != null) rateLimit.remaining = Number(rem);
+    if (lim != null) rateLimit.limit = Number(lim);
+    _rateLimitListeners.forEach((fn) => fn({ ...rateLimit }));
+    if (r.status === 429) throw new RateLimitError(rateLimit.limit);
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    const blob = await r.blob();
+    // Cache the PDF for offline use
+    blob.arrayBuffer().then((buf) => cachePdf(towerId, receiver, buf)).catch(() => {});
+    return URL.createObjectURL(blob);
+  } catch (e) {
+    // Offline fallback: serve cached PDF
+    const cachedBuf = await getCachedPdf(towerId, receiver);
+    if (cachedBuf) {
+      console.info("offlineStore: serving PDF from cache");
+      const blob = new Blob([cachedBuf], { type: "application/pdf" });
+      return URL.createObjectURL(blob);
+    }
+    throw e;
+  }
 }
 
 // ── Batch job helpers ──────────────────────────────────────────

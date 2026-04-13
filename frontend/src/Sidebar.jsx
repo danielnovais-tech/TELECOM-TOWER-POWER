@@ -1,5 +1,8 @@
-import { useState } from "react";
-import { analyzeLink, planRepeater, downloadPdfReport, RateLimitError } from "./api";
+import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  analyzeLink, planRepeater, downloadPdfReport, RateLimitError,
+  submitBatchReport, pollJobStatus, downloadJobResult, watchJobProgress,
+} from "./api";
 
 export default function Sidebar({
   towers,
@@ -19,7 +22,90 @@ export default function Sidebar({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Batch state
+  const [batchFile, setBatchFile] = useState(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchJob, setBatchJob] = useState(null); // { job_id, status, progress, total, error }
+  const batchWsRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const pollRef = useRef(null);
+
   const canAnalyze = selectedTower && receiverPos;
+  const canBatch = selectedTower && batchFile && !batchLoading;
+
+  // Clean up WebSocket / polling on unmount or job change
+  useEffect(() => {
+    return () => {
+      batchWsRef.current?.close();
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const trackJob = useCallback((jobId) => {
+    // Try WebSocket first, fall back to polling
+    const ws = watchJobProgress(
+      jobId,
+      (msg) => {
+        setBatchJob((prev) => ({ ...prev, ...msg }));
+        if (msg.status === "completed" || msg.status === "failed") {
+          setBatchLoading(false);
+        }
+      },
+      () => {
+        // WS closed — start polling fallback if still in progress
+        setBatchJob((prev) => {
+          if (prev && prev.status !== "completed" && prev.status !== "failed") {
+            pollRef.current = setInterval(async () => {
+              try {
+                const s = await pollJobStatus(jobId);
+                setBatchJob((p) => ({ ...p, ...s }));
+                if (s.status === "completed" || s.status === "failed") {
+                  clearInterval(pollRef.current);
+                  pollRef.current = null;
+                  setBatchLoading(false);
+                }
+              } catch { /* ignore */ }
+            }, 3000);
+          }
+          return prev;
+        });
+      }
+    );
+    batchWsRef.current = ws;
+  }, []);
+
+  async function handleBatchSubmit() {
+    if (!canBatch) return;
+    setBatchLoading(true);
+    setError(null);
+    setBatchJob(null);
+    try {
+      const result = await submitBatchReport(selectedTower.id, batchFile);
+      setBatchJob({ job_id: result.job_id, status: "queued", progress: 0, total: result.total || 0 });
+      trackJob(result.job_id);
+    } catch (e) {
+      if (e instanceof RateLimitError) {
+        setError("rate-limit");
+      } else {
+        setError(e.message);
+      }
+      setBatchLoading(false);
+    }
+  }
+
+  async function handleBatchDownload() {
+    if (!batchJob?.job_id) return;
+    try {
+      const blobUrl = await downloadJobResult(batchJob.job_id);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `batch_${batchJob.job_id}.csv`;
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
 
   async function handleAnalyze() {
     if (!canAnalyze) return;
@@ -243,6 +329,76 @@ export default function Sidebar({
           </ol>
         </section>
       )}
+
+      {/* batch reports */}
+      <section className="panel">
+        <h3>Batch Reports</h3>
+        {!selectedTower ? (
+          <p className="muted">Select a tower first</p>
+        ) : (
+          <>
+            <div className="batch-upload">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv"
+                className="file-input"
+                onChange={(e) => setBatchFile(e.target.files?.[0] || null)}
+              />
+              {batchFile && (
+                <span className="batch-filename">{batchFile.name}</span>
+              )}
+            </div>
+            <button
+              className="btn outline"
+              disabled={!canBatch}
+              onClick={handleBatchSubmit}
+              style={{ marginTop: "0.4rem", width: "100%" }}
+            >
+              {batchLoading ? "Submitting…" : "Upload & Run Batch"}
+            </button>
+          </>
+        )}
+        {batchJob && (
+          <div className="batch-status">
+            <div className="batch-job-id">
+              Job: <code>{batchJob.job_id}</code>
+            </div>
+            <div className="batch-progress-row">
+              <span className={`batch-state batch-state--${batchJob.status}`}>
+                {batchJob.status}
+              </span>
+              {batchJob.total > 0 && (
+                <span className="batch-counts">
+                  {batchJob.progress ?? 0} / {batchJob.total}
+                </span>
+              )}
+            </div>
+            {batchJob.total > 0 && (
+              <div className="rl-track" style={{ marginTop: "0.3rem" }}>
+                <div
+                  className="rl-fill"
+                  style={{ width: `${((batchJob.progress ?? 0) / batchJob.total) * 100}%` }}
+                />
+              </div>
+            )}
+            {batchJob.status === "completed" && (
+              <button
+                className="btn primary"
+                onClick={handleBatchDownload}
+                style={{ marginTop: "0.4rem", width: "100%" }}
+              >
+                Download Results
+              </button>
+            )}
+            {batchJob.status === "failed" && (
+              <p className="text-red" style={{ fontSize: "0.8rem", marginTop: "0.3rem" }}>
+                {batchJob.error || "Job failed"}
+              </p>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* tower list */}
       <section className="panel">

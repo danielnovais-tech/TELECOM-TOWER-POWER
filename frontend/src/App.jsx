@@ -27,6 +27,18 @@ export default function App() {
   const [healthStatus, setHealthStatus] = useState(null);
   const [rateLimitInfo, setRateLimitInfo] = useState({ remaining: null, limit: null });
   const [rateLimitToast, setRateLimitToast] = useState(null);
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+  useEffect(() => {
+    const goOffline = () => setIsOffline(true);
+    const goOnline = () => setIsOffline(false);
+    window.addEventListener("offline", goOffline);
+    window.addEventListener("online", goOnline);
+    return () => {
+      window.removeEventListener("offline", goOffline);
+      window.removeEventListener("online", goOnline);
+    };
+  }, []);
 
   useEffect(() => {
     fetchTowers().then(setTowers).catch(console.error);
@@ -132,6 +144,12 @@ export default function App() {
         <div className={`rate-limit-toast ${rateLimitToast.type}`}>
           <span>{rateLimitToast.message}</span>
           <button className="toast-close" onClick={() => setRateLimitToast(null)}>×</button>
+        </div>
+      )}
+
+      {isOffline && (
+        <div className="offline-banner">
+          You are offline — showing cached data
         </div>
       )}
     </div>

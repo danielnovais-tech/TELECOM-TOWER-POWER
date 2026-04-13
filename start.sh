@@ -22,9 +22,24 @@ echo "API ready."
 # Pre-load tower data
 python load_towers.py towers_brazil.csv "http://127.0.0.1:$API_PORT"
 
-# Start Streamlit frontend (foreground)
+# Choose frontend: "hybrid" (default) = streamlit_app.py, "api" = frontend.py
+FRONTEND_MODE="${FRONTEND_MODE:-hybrid}"
 export API_URL="http://127.0.0.1:$API_PORT"
-exec streamlit run streamlit_app.py \
-  --server.port "$UI_PORT" \
-  --server.address 0.0.0.0 \
-  --server.headless true
+export API_BASE_URL="http://127.0.0.1:$API_PORT"
+
+case "$FRONTEND_MODE" in
+  api)
+    echo "Starting API-client frontend (frontend.py)..."
+    exec streamlit run frontend.py \
+      --server.port "$UI_PORT" \
+      --server.address 0.0.0.0 \
+      --server.headless true
+    ;;
+  *)
+    echo "Starting hybrid frontend (streamlit_app.py)..."
+    exec streamlit run streamlit_app.py \
+      --server.port "$UI_PORT" \
+      --server.address 0.0.0.0 \
+      --server.headless true
+    ;;
+esac

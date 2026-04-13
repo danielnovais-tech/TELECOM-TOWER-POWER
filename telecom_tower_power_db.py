@@ -8,6 +8,7 @@ Run: uvicorn telecom_tower_power_db:app --reload
 import os
 import json
 import math
+import pathlib
 import re
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -383,3 +384,31 @@ async def signup_status(body: KeyLookupRequest):
 @app.get("/health")
 async def health():
     return {"status": "healthy", "database": DATABASE_URL.split("+")[0]}
+
+
+# ------------------------------
+# React PWA: serve built frontend
+# ------------------------------
+FRONTEND_DIR = pathlib.Path(__file__).parent / "frontend_dist"
+
+if FRONTEND_DIR.is_dir():
+    from starlette.staticfiles import StaticFiles
+    from starlette.responses import FileResponse
+
+    @app.middleware("http")
+    async def api_prefix_rewrite(request, call_next):
+        """Rewrite /api/xxx → /xxx so the React PWA (which uses /api prefix) works."""
+        path = request.scope["path"]
+        if path.startswith("/api/") or path == "/api":
+            request.scope["path"] = path[4:] or "/"
+        return await call_next(request)
+
+    class _SPAStaticFiles(StaticFiles):
+        """StaticFiles subclass that falls back to index.html for SPA routing."""
+        async def get_response(self, path, scope):
+            try:
+                return await super().get_response(path, scope)
+            except Exception:
+                return await super().get_response("index.html", scope)
+
+    app.mount("/", _SPAStaticFiles(directory=FRONTEND_DIR, html=True), name="spa")

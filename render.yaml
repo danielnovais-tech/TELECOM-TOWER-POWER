@@ -53,6 +53,27 @@ services:
         value: https://telecom-tower-power-ui.onrender.com
     plan: free
 
+  - type: web
+    name: telecom-tower-power-react
+    runtime: static
+    buildCommand: cd frontend && npm ci && npx vite build
+    staticPublishPath: frontend/dist
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=3600
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://telecom-tower-power-api.onrender.com/*
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+    plan: free
+
   - type: worker
     name: telecom-tower-power-rq-worker
     runtime: python

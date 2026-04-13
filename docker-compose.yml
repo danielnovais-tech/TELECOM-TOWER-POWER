@@ -147,7 +147,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Streamlit Frontend ──────────────────────────────────────
+  # ── Streamlit Frontend (hybrid) ──────────────────────────────
   frontend:
     build: .
     command: streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
@@ -158,6 +158,21 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    restart: unless-stopped
+
+  # ── Streamlit Frontend (API-client mode) ────────────────────
+  frontend-api:
+    build: .
+    command: streamlit run frontend.py --server.port 8502 --server.address 0.0.0.0 --server.headless true
+    ports:
+      - "8502:8502"
+    environment:
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    profiles:
+      - api-frontend
     restart: unless-stopped
 
   # ── React PWA Frontend ─────────────────────────────────────

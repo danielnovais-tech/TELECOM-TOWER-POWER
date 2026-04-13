@@ -356,11 +356,42 @@ def batch_tab(engine: TelecomTowerPower):
         st.warning("No towers loaded.")
         return
 
+    # ── Initialise job history list ─────────────────────────
+    if "batch_jobs" not in st.session_state:
+        st.session_state["batch_jobs"] = []  # list of {job_id, tower_id, status, submitted_at}
+
+    # ── Operator / region filters ───────────────────────────
+    operators = sorted({engine.towers[tid].operator for tid in tower_ids})
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        filter_operator = st.selectbox(
+            "Filter by operator", ["All"] + operators, key="batch_op_filter"
+        )
+    with col_f2:
+        filter_region = st.text_input(
+            "Filter tower ID (contains)", "", key="batch_region_filter",
+            help="Substring match on tower ID, e.g. 'BSB' for Brasília towers",
+        )
+
+    filtered_ids = tower_ids
+    if filter_operator != "All":
+        filtered_ids = [
+            tid for tid in filtered_ids
+            if engine.towers[tid].operator == filter_operator
+        ]
+    if filter_region:
+        q = filter_region.upper()
+        filtered_ids = [tid for tid in filtered_ids if q in tid.upper()]
+
+    if not filtered_ids:
+        st.info("No towers match the current filters.")
+        return
+
     # ── Submission form ─────────────────────────────────────
     st.markdown("Upload a CSV with columns: `lat`, `lon` (and optionally `height`, `gain`)")
     col1, col2 = st.columns([1, 2])
     with col1:
-        batch_tower_id = st.selectbox("Tower for batch", tower_ids, key="batch_tower")
+        batch_tower_id = st.selectbox("Tower for batch", filtered_ids, key="batch_tower")
         batch_file = st.file_uploader("Receivers CSV", type=["csv"], key="batch_csv")
 
     if batch_file is not None and st.button("🚀 Submit batch job", key="run_batch"):
@@ -379,60 +410,90 @@ def batch_tab(engine: TelecomTowerPower):
         data = resp.json()
         job_id = data.get("job_id")
         if job_id:
-            st.session_state["active_job_id"] = job_id
-            st.session_state["active_job_tower"] = batch_tower_id
-            st.info(
-                f"📋 Job **{job_id}** queued. "
-                "Polling for status below…"
-            )
+            job_entry = {
+                "job_id": job_id,
+                "tower_id": batch_tower_id,
+                "operator": engine.towers[batch_tower_id].operator,
+                "status": "queued",
+                "submitted_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            st.session_state["batch_jobs"].insert(0, job_entry)
+            st.info(f"📋 Job **{job_id}** queued.")
 
-    # ── Job progress poller ─────────────────────────────────
-    job_id = st.session_state.get("active_job_id")
-    if job_id:
-        st.markdown("---")
-        st.subheader("Job progress")
+    # ── Auto-refresh toggle ─────────────────────────────────
+    jobs = st.session_state.get("batch_jobs", [])
+    if not jobs:
+        st.caption("No batch jobs submitted yet.")
+        return
 
-        status_placeholder = st.empty()
-        progress_bar = st.empty()
-        download_placeholder = st.empty()
+    st.markdown("---")
+    st.subheader("Batch jobs dashboard")
 
-        if st.button("🔄 Refresh job status", key="refresh_job"):
+    col_r1, col_r2 = st.columns([1, 3])
+    with col_r1:
+        auto_refresh = st.checkbox("Auto-refresh (5 s)", value=False, key="batch_auto")
+    with col_r2:
+        if st.button("🔄 Refresh all jobs", key="refresh_all_jobs"):
             pass  # button press triggers re-run
 
+    # ── Filter jobs by operator ────────────────────────────
+    job_filter_op = st.selectbox(
+        "Filter jobs by operator",
+        ["All"] + sorted({j["operator"] for j in jobs}),
+        key="job_filter_op",
+    )
+    display_jobs = jobs if job_filter_op == "All" else [
+        j for j in jobs if j["operator"] == job_filter_op
+    ]
+
+    # ── Poll & display each job ────────────────────────────
+    for i, job in enumerate(display_jobs):
+        job_id = job["job_id"]
         resp = api_get(f"/batch_status/{job_id}")
-        if resp is None:
-            return
+        if resp is not None:
+            job_data = resp.json()
+            job["status"] = job_data.get("status", job["status"])
 
-        job_data = resp.json()
-        status = job_data.get("status", "unknown")
+        status = job["status"]
+        icon = {"queued": "⏳", "completed": "✅", "failed": "❌"}.get(status, "🔄")
+        progress = {"queued": 0.0, "completed": 1.0, "failed": 0.0}.get(status, 0.5)
 
-        if status == "queued":
-            status_placeholder.info(f"⏳ Job **{job_id}** is queued — waiting for a worker…")
-            progress_bar.progress(0)
-        elif status == "completed":
-            status_placeholder.success(f"✅ Job **{job_id}** completed — reports ready")
-            progress_bar.progress(1.0)
-            tower_id = st.session_state.get("active_job_tower", "unknown")
-            dl_resp = api_get(f"/batch_download/{job_id}")
-            if dl_resp is not None:
-                download_placeholder.download_button(
-                    "📥 Download ZIP",
-                    data=dl_resp.content,
-                    file_name=f"batch_reports_{tower_id}.zip",
-                    mime="application/zip",
-                    key="download_zip",
-                )
-            if st.button("Clear job", key="clear_job"):
-                del st.session_state["active_job_id"]
-                st.rerun()
-        elif status == "failed":
-            error_msg = job_data.get("error", "Unknown error")
-            status_placeholder.error(f"❌ Job **{job_id}** failed: {error_msg}")
-            if st.button("Clear job", key="clear_failed_job"):
-                del st.session_state["active_job_id"]
-                st.rerun()
-        else:
-            status_placeholder.warning(f"Job status: {status}")
+        with st.expander(
+            f"{icon} {job_id}  —  {job['tower_id']} ({job['operator']})  [{status}]",
+            expanded=(i == 0),
+        ):
+            cols = st.columns([2, 1, 1])
+            cols[0].write(f"**Tower:** {job['tower_id']}")
+            cols[1].write(f"**Operator:** {job['operator']}")
+            cols[2].write(f"**Submitted:** {job['submitted_at']}")
+            st.progress(progress, text=f"Status: {status}")
+
+            if status == "completed":
+                dl_resp = api_get(f"/batch_download/{job_id}")
+                if dl_resp is not None:
+                    st.download_button(
+                        "📥 Download ZIP",
+                        data=dl_resp.content,
+                        file_name=f"batch_reports_{job['tower_id']}.zip",
+                        mime="application/zip",
+                        key=f"dl_{job_id}",
+                    )
+            elif status == "failed":
+                error_msg = job_data.get("error", "Unknown error") if resp else "Unknown"
+                st.error(f"Error: {error_msg}")
+
+    # ── Summary metrics ─────────────────────────────────────
+    st.markdown("---")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total jobs", len(jobs))
+    m2.metric("Queued", sum(1 for j in jobs if j["status"] == "queued"))
+    m3.metric("Completed", sum(1 for j in jobs if j["status"] == "completed"))
+    m4.metric("Failed", sum(1 for j in jobs if j["status"] == "failed"))
+
+    # ── Auto-refresh via rerun ──────────────────────────────
+    if auto_refresh and any(j["status"] == "queued" for j in jobs):
+        time.sleep(5)
+        st.rerun()
 
 
 # ── Nearest towers ──────────────────────────────────────────
