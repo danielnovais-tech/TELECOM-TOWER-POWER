@@ -40,4 +40,4 @@ else
     wait "$ALEMBIC_PID" 2>/dev/null || echo "WARN: alembic exited with error (exit $?), continuing..."
 fi
 echo "Starting uvicorn..."
-exec uvicorn telecom_tower_power_db:app --host 0.0.0.0 --port "${PORT:-8000}"
+exec uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port "${PORT:-8000}"

@@ -22,7 +22,8 @@
         { "name": "CORS_ORIGINS", "value": "https://app.telecomtowerpower.com,https://api.telecomtowerpower.com" },
         { "name": "FRONTEND_URL", "value": "https://app.telecomtowerpower.com" },
         { "name": "S3_REGION", "value": "AWS_REGION" },
-        { "name": "MAX_BATCH_ROWS", "value": "500" }
+        { "name": "MAX_BATCH_ROWS", "value": "500" },
+        { "name": "ENABLE_DEMO_KEYS", "value": "false" }
       ],
       "secrets": [
         {
@@ -32,6 +33,10 @@
         {
           "name": "REDIS_URL",
           "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/REDIS_URL"
+        },
+        {
+          "name": "SRTM_REDIS_URL",
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/SRTM_REDIS_URL"
         },
         {
           "name": "S3_BUCKET_NAME",
@@ -82,7 +87,7 @@
       "name": "worker",
       "image": "ACCOUNT_ID.dkr.ecr.AWS_REGION.amazonaws.com/telecom-tower-power:latest",
       "essential": true,
-      "command": ["rq", "worker", "batch_pdfs"],
+      "command": ["python", "batch_worker.py", "--poll-interval", "2"],
       "secrets": [
         {
           "name": "DATABASE_URL",
@@ -91,6 +96,10 @@
         {
           "name": "REDIS_URL",
           "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/REDIS_URL"
+        },
+        {
+          "name": "SRTM_REDIS_URL",
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/SRTM_REDIS_URL"
         },
         {
           "name": "S3_BUCKET_NAME",

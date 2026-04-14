@@ -15,6 +15,7 @@ import json
 import asyncio
 import heapq
 import os
+import pathlib
 import secrets
 import time
 import uuid
@@ -1456,5 +1457,32 @@ async def srtm_prefetch(
 # ------------------------------------------------------------
 # Run the server (if executed directly)
 # ------------------------------------------------------------
+
+# React PWA: serve built frontend (same approach as telecom_tower_power_db)
+FRONTEND_DIR = pathlib.Path(__file__).parent / "frontend_dist"
+
+if FRONTEND_DIR.is_dir():
+    from starlette.staticfiles import StaticFiles
+    from starlette.responses import FileResponse
+
+    @app.middleware("http")
+    async def api_prefix_rewrite(request: Request, call_next):
+        """Rewrite /api/xxx → /xxx so the React PWA (which uses /api prefix) works."""
+        path = request.scope["path"]
+        if path.startswith("/api/") or path == "/api":
+            request.scope["path"] = path[4:] or "/"
+        return await call_next(request)
+
+    class _SPAStaticFiles(StaticFiles):
+        """StaticFiles subclass that falls back to index.html for SPA routing."""
+        async def get_response(self, path, scope):
+            try:
+                return await super().get_response(path, scope)
+            except Exception:
+                return await super().get_response("index.html", scope)
+
+    app.mount("/", _SPAStaticFiles(directory=FRONTEND_DIR, html=True), name="spa")
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

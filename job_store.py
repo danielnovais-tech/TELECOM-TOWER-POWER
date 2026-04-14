@@ -18,9 +18,17 @@ try:
 except ImportError:
     psycopg2 = None  # type: ignore[assignment]
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+_RAW_DATABASE_URL = os.getenv("DATABASE_URL")
 DB_PATH = os.getenv("TOWER_DB_PATH", "towers.db")  # reuse same DB file
 JOB_RESULTS_DIR = os.getenv("JOB_RESULTS_DIR", "./job_results")
+
+# Normalise URL: strip SQLAlchemy async driver suffixes so psycopg2 can connect
+DATABASE_URL = _RAW_DATABASE_URL
+if DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+    DATABASE_URL = DATABASE_URL.replace("postgresql+aiosqlite://", "")
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 _USE_PG = bool(DATABASE_URL)
 

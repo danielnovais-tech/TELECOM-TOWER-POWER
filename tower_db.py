@@ -24,8 +24,17 @@ except ImportError:
     psycopg2 = None  # type: ignore[assignment]
 
 # ── Backend detection ────────────────────────────────────────────
-DATABASE_URL = os.getenv("DATABASE_URL")          # e.g. postgres://user:pw@host:5432/db
+_RAW_DATABASE_URL = os.getenv("DATABASE_URL")          # e.g. postgres://user:pw@host:5432/db
 DB_PATH = os.getenv("TOWER_DB_PATH", "towers.db")  # SQLite fallback
+
+# Normalise URL: strip SQLAlchemy async driver suffixes so psycopg2 can connect
+DATABASE_URL = _RAW_DATABASE_URL
+if DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+    DATABASE_URL = DATABASE_URL.replace("postgresql+aiosqlite://", "")
+    # Also handle the short postgres:// form
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 _USE_PG = bool(DATABASE_URL)
 
