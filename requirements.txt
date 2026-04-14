@@ -25,3 +25,5 @@ redis
 rq
 boto3
 aiofiles
+openpyxl
+geopy

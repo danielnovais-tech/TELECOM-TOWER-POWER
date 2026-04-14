@@ -17,7 +17,7 @@ set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-sa-east-1}"
 CLUSTER_NAME="telecom-tower-power"
-SERVICE_NAME="telecom-tower-power-svc"
+SERVICE_NAME="telecom-tower-power"
 ECR_REPO="telecom-tower-power"
 LOG_GROUP="/ecs/telecom-tower-power"
 TASK_DEF_FILE="ecs-task-definition.json"
@@ -76,8 +76,9 @@ echo "  ✓ Cluster: ${CLUSTER_NAME}"
 # ── Step 5: Register task definition ─────────────────────────────────────────
 echo "▸ Step 5: Registering task definition..."
 # Replace ACCOUNT_ID and AWS_REGION placeholders with actual values
-TASK_DEF=$(sed -e "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" -e "s/AWS_REGION/${AWS_REGION}/g" -e "s/EFS_ID/${EFS_ID}/g" -e "s/AP_SRTM_ID/${AP_SRTM_ID}/g" -e "s/AP_JOBS_ID/${AP_JOBS_ID}/g" "${TASK_DEF_FILE}")
-TASK_ARN=$(echo "${TASK_DEF}" | aws ecs register-task-definition \
+# Pipe sed directly to avoid echo mangling backslashes in healthCheck commands
+TASK_ARN=$(sed -e "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" -e "s/AWS_REGION/${AWS_REGION}/g" -e "s/EFS_ID/${EFS_ID}/g" -e "s/AP_SRTM_ID/${AP_SRTM_ID}/g" -e "s/AP_JOBS_ID/${AP_JOBS_ID}/g" "${TASK_DEF_FILE}" \
+  | aws ecs register-task-definition \
   --cli-input-json file:///dev/stdin \
   --region "${AWS_REGION}" \
   --query 'taskDefinition.taskDefinitionArn' \
