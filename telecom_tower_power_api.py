@@ -1335,6 +1335,7 @@ async def signup_checkout(body: CheckoutRequest):
     return {"checkout_url": url}
 
 @app.post("/stripe/webhook")
+@app.post("/stripe_webhook")
 async def stripe_webhook(request: Request):
     """
     Receive Stripe webhook events (checkout.session.completed,
