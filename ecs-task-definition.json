@@ -9,7 +9,7 @@
   "containerDefinitions": [
     {
       "name": "api",
-      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/telecom-tower-power:latest",
+      "image": "ACCOUNT_ID.dkr.ecr.AWS_REGION.amazonaws.com/telecom-tower-power:latest",
       "essential": true,
       "portMappings": [
         {
@@ -19,44 +19,48 @@
       ],
       "environment": [
         { "name": "PORT", "value": "8000" },
-        { "name": "CORS_ORIGINS", "value": "https://app.telecomtowerpower.com" },
+        { "name": "CORS_ORIGINS", "value": "https://app.telecomtowerpower.com,https://api.telecomtowerpower.com" },
         { "name": "FRONTEND_URL", "value": "https://app.telecomtowerpower.com" },
-        { "name": "S3_REGION", "value": "us-east-1" },
+        { "name": "S3_REGION", "value": "AWS_REGION" },
         { "name": "MAX_BATCH_ROWS", "value": "500" }
       ],
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/DATABASE_URL"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/DATABASE_URL"
         },
         {
           "name": "REDIS_URL",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/REDIS_URL"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/REDIS_URL"
         },
         {
           "name": "S3_BUCKET_NAME",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/S3_BUCKET_NAME"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/S3_BUCKET_NAME"
         },
         {
           "name": "STRIPE_SECRET_KEY",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_SECRET_KEY"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_SECRET_KEY"
         },
         {
           "name": "STRIPE_WEBHOOK_SECRET",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_WEBHOOK_SECRET"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_WEBHOOK_SECRET"
         },
         {
           "name": "STRIPE_PRICE_PRO",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_PRICE_PRO"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_PRICE_PRO"
         },
         {
           "name": "STRIPE_PRICE_ENTERPRISE",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_PRICE_ENTERPRISE"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_PRICE_ENTERPRISE"
         },
         {
           "name": "VALID_API_KEYS",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/VALID_API_KEYS"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/VALID_API_KEYS"
         }
+      ],
+      "mountPoints": [
+        { "sourceVolume": "srtm-data", "containerPath": "/app/srtm_data" },
+        { "sourceVolume": "job-results", "containerPath": "/app/job_results" }
       ],
       "healthCheck": {
         "command": ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"],
@@ -69,36 +73,66 @@
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "/ecs/telecom-tower-power",
-          "awslogs-region": "us-east-1",
+          "awslogs-region": "AWS_REGION",
           "awslogs-stream-prefix": "api"
         }
       }
     },
     {
       "name": "worker",
-      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/telecom-tower-power:latest",
+      "image": "ACCOUNT_ID.dkr.ecr.AWS_REGION.amazonaws.com/telecom-tower-power:latest",
       "essential": true,
       "command": ["rq", "worker", "batch_pdfs"],
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/DATABASE_URL"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/DATABASE_URL"
         },
         {
           "name": "REDIS_URL",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/REDIS_URL"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/REDIS_URL"
         },
         {
           "name": "S3_BUCKET_NAME",
-          "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/telecom-tower-power/S3_BUCKET_NAME"
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/S3_BUCKET_NAME"
         }
+      ],
+      "mountPoints": [
+        { "sourceVolume": "srtm-data", "containerPath": "/app/srtm_data" },
+        { "sourceVolume": "job-results", "containerPath": "/app/job_results" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
           "awslogs-group": "/ecs/telecom-tower-power",
-          "awslogs-region": "us-east-1",
+          "awslogs-region": "AWS_REGION",
           "awslogs-stream-prefix": "worker"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "srtm-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "EFS_ID",
+        "rootDirectory": "/",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "AP_SRTM_ID",
+          "iam": "ENABLED"
+        }
+      }
+    },
+    {
+      "name": "job-results",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "EFS_ID",
+        "rootDirectory": "/",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "AP_JOBS_ID",
+          "iam": "ENABLED"
         }
       }
     }

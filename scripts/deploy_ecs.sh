@@ -15,13 +15,16 @@ set -euo pipefail
 #   ./scripts/deploy_ecs.sh
 # ============================================================================
 
-AWS_REGION="${AWS_REGION:-us-east-1}"
+AWS_REGION="${AWS_REGION:-sa-east-1}"
 CLUSTER_NAME="telecom-tower-power"
 SERVICE_NAME="telecom-tower-power-svc"
 ECR_REPO="telecom-tower-power"
 LOG_GROUP="/ecs/telecom-tower-power"
 TASK_DEF_FILE="ecs-task-definition.json"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
+EFS_ID="${EFS_ID:-fs-091b9107b39a5ed53}"
+AP_SRTM_ID="${AP_SRTM_ID:-fsap-0a740ba6cf0c71f41}"
+AP_JOBS_ID="${AP_JOBS_ID:-fsap-02abb963dd67f4238}"
 
 # ── Validate ─────────────────────────────────────────────────────────────────
 if [[ -z "${AWS_ACCOUNT_ID:-}" ]]; then
@@ -72,8 +75,8 @@ echo "  ✓ Cluster: ${CLUSTER_NAME}"
 
 # ── Step 5: Register task definition ─────────────────────────────────────────
 echo "▸ Step 5: Registering task definition..."
-# Replace ACCOUNT_ID placeholder with actual account ID
-TASK_DEF=$(sed "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" "${TASK_DEF_FILE}")
+# Replace ACCOUNT_ID and AWS_REGION placeholders with actual values
+TASK_DEF=$(sed -e "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" -e "s/AWS_REGION/${AWS_REGION}/g" -e "s/EFS_ID/${EFS_ID}/g" -e "s/AP_SRTM_ID/${AP_SRTM_ID}/g" -e "s/AP_JOBS_ID/${AP_JOBS_ID}/g" "${TASK_DEF_FILE}")
 TASK_ARN=$(echo "${TASK_DEF}" | aws ecs register-task-definition \
   --cli-input-json file:///dev/stdin \
   --region "${AWS_REGION}" \

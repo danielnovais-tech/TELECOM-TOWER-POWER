@@ -17,17 +17,17 @@ set -euo pipefail
 #       (Render PostgreSQL, Railway Postgres plugin, etc.) — do NOT set manually.
 
 # ── Required for ALL tiers ─────────────────────────────────────────
-VALID_API_KEYS='{"demo-key-free-001":"free","demo-key-pro-001":"pro","demo-key-enterprise-001":"enterprise"}'
+VALID_API_KEYS='{"ttp_free_c35024654d83b243d3132064dfbde04b":"free","demo-key-free-001":"free"}'
 
 # ── Required for Pro/Enterprise only ───────────────────────────────
-STRIPE_SECRET_KEY="8571"
-STRIPE_WEBHOOK_SECRET="8571"
-STRIPE_PRICE_PRO="8571"
-STRIPE_PRICE_ENTERPRISE="8571"
-AWS_ACCESS_KEY_ID="8571"
-AWS_SECRET_ACCESS_KEY="8571"
-S3_BUCKET_NAME="8571"
-S3_REGION="8571"
+STRIPE_SECRET_KEY="sk_live_REPLACE_ME"
+STRIPE_WEBHOOK_SECRET="whsec_REPLACE_ME"
+STRIPE_PRICE_PRO="price_1TLuIl3HxrWvYaypEFUDbR58"
+STRIPE_PRICE_ENTERPRISE="price_1TLuJp3HxrWvYaypRCcqZr4g"
+AWS_ACCESS_KEY_ID="REPLACE_ME"
+AWS_SECRET_ACCESS_KEY="REPLACE_ME"
+S3_BUCKET_NAME="telecom-tower-power-results"
+S3_REGION="sa-east-1"
 
 # ── App config ───────────────────────────────────────────────────
 FRONTEND_URL="https://telecom-tower-power-ui.onrender.com"
@@ -88,7 +88,7 @@ set_render_secrets() {
   {"key": "FRONTEND_URL",           "value": "${FRONTEND_URL}"},
   {"key": "CORS_ORIGINS",           "value": "${CORS_ORIGINS}"},
   {"key": "MAX_BATCH_ROWS",         "value": "${MAX_BATCH_ROWS}"},
-  {"key": "VALID_API_KEYS",         "value": ${VALID_API_KEYS}}
+  {"key": "VALID_API_KEYS",         "value": "$(echo "$VALID_API_KEYS" | sed 's/"/\\"/g')"}
 ]
 EOF
 )")

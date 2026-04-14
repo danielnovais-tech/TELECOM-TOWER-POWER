@@ -1,3 +1,9 @@
+# Primary infrastructure is now on AWS ECS Fargate (sa-east-1)
+# - ALB: telecom-tower-power-alb-581610578.sa-east-1.elb.amazonaws.com
+# - RDS: telecom-tower-power-db.c5sqioy2uu2m.sa-east-1.rds.amazonaws.com
+# - Redis: telecom-tower-power-redis.ckcuxz.0001.sae1.cache.amazonaws.com
+# Render services below can also use Render-managed databases.
+
 databases:
   - name: telecom-tower-power-db
     plan: free
