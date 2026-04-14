@@ -83,7 +83,7 @@
       },
       "get": {
         "summary": "List Towers",
-        "description": "List all towers, optionally filtered by operator.",
+        "description": "List towers with pagination. Use *offset* and *limit* to page through results.",
         "operationId": "list_towers_towers_get",
         "security": [
           {
@@ -113,8 +113,21 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
               "default": 100,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
             }
           }
         ],
@@ -856,6 +869,23 @@
         }
       }
     },
+    "/stripe_webhook": {
+      "post": {
+        "summary": "Stripe Webhook",
+        "description": "Receive Stripe webhook events (checkout.session.completed,\ncustomer.subscription.deleted, etc.).",
+        "operationId": "stripe_webhook_stripe_webhook_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/stripe/webhook": {
       "post": {
         "summary": "Stripe Webhook",
@@ -914,7 +944,7 @@
     "/signup/status": {
       "post": {
         "summary": "Signup Status",
-        "description": "Look up an existing API key by email address.\nReturns the key, tier, and account status.",
+        "description": "Look up an existing API key by email address.\nReturns a masked key, tier, and account status.",
         "operationId": "signup_status_signup_status_post",
         "requestBody": {
           "content": {

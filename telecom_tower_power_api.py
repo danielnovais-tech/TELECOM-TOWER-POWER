@@ -88,14 +88,20 @@ BATCH_JOB_DURATION = Histogram(
 
 class Band(str, Enum):
     BAND_700 = "700MHz"
+    BAND_850 = "850MHz"
+    BAND_900 = "900MHz"
     BAND_1800 = "1800MHz"
+    BAND_2100 = "2100MHz"
     BAND_2600 = "2600MHz"
     BAND_3500 = "3500MHz"
 
     def to_hz(self) -> float:
         return {
             "700MHz": 700e6,
+            "850MHz": 850e6,
+            "900MHz": 900e6,
             "1800MHz": 1.8e9,
+            "2100MHz": 2.1e9,
             "2600MHz": 2.6e9,
             "3500MHz": 3.5e9,
         }[self.value]
@@ -776,8 +782,12 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 
 MAX_BATCH_ROWS = int(os.getenv("MAX_BATCH_ROWS", "100"))
 
 _DEFAULT_ORIGINS = (
+    "https://app.telecomtowerpower.com.br,"
+    "https://api.telecomtowerpower.com.br,"
     "https://app.telecomtowerpower.com,"
-    "https://dashboard.telecomtowerpower.com"
+    "https://dashboard.telecomtowerpower.com,"
+    "http://localhost:3000,"
+    "http://localhost:8000"
 )
 _allowed_origins_raw = os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS)
 _allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
@@ -809,8 +819,12 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=()"
     response.headers["Cache-Control"] = "no-store"
+    # HSTS: tell browsers to always use HTTPS (1 year, include subdomains)
+    response.headers["Strict-Transport-Security"] = (
+        "max-age=31536000; includeSubDomains; preload"
+    )
     return response
 
 # Request body size limit middleware

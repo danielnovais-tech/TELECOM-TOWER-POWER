@@ -31,7 +31,7 @@ S3_REGION="sa-east-1"
 
 # ── App config ───────────────────────────────────────────────────
 FRONTEND_URL="https://telecom-tower-power-ui.onrender.com"
-CORS_ORIGINS="https://telecom-tower-power-ui.onrender.com,https://app.telecomtowerpower.com"
+CORS_ORIGINS="https://app.telecomtowerpower.com.br,https://api.telecomtowerpower.com.br,https://telecom-tower-power-ui.onrender.com,https://app.telecomtowerpower.com"
 MAX_BATCH_ROWS="500"
 
 # ── Render Service IDs ───────────────────────────────────────────────────────

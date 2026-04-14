@@ -6,5 +6,45 @@
     "stripe_customer_id": null,
     "stripe_subscription_id": null,
     "created": 1775350976.0368829
+  },
+  "ttp_7RsS8b6Xu7q7VXntO_5lYQSwJQ7trrYaq0jCJ_ULcfc": {
+    "tier": "free",
+    "owner": "webhook-test@telecomtowerpower.com.br",
+    "email": "webhook-test@telecomtowerpower.com.br",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776200764.0379832
+  },
+  "ttp_t6mraHPen-xSLxBcIm4ZN5Gf4u5_EKxYomCnycz8Un8": {
+    "tier": "free",
+    "owner": "signup-test@telecomtowerpower.com.br",
+    "email": "signup-test@telecomtowerpower.com.br",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776201001.5681102
+  },
+  "ttp_a7ujaPzaLvY_6tbfGmwtLqmip5ZgeLO_cwz5c_v1QdM": {
+    "tier": "free",
+    "owner": "e2e-test@telecomtowerpower.com.br",
+    "email": "e2e-test@telecomtowerpower.com.br",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776201018.819315
+  },
+  "ttp_XD14BBxA_x1Ag5eAs852ZGChvE4pAUdHFLOjto6iRs0": {
+    "tier": "free",
+    "owner": "paid-user@example.com",
+    "email": "paid-user@example.com",
+    "stripe_customer_id": "cus_test_123",
+    "stripe_subscription_id": null,
+    "created": 1776208039.2690055
+  },
+  "ttp_7fFiybpXRotnIegfziouB5SXzGcTubjK7V3URQP2oUg": {
+    "tier": "free",
+    "owner": "lifecycle@test.com",
+    "email": "lifecycle@test.com",
+    "stripe_customer_id": "cus_lifecycle_1",
+    "stripe_subscription_id": null,
+    "created": 1776208110.5359745
   }
 }

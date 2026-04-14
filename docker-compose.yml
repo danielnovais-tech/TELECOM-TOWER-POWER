@@ -52,7 +52,7 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql://telecom:telecom_secret@postgres:5432/towers}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - SRTM_REDIS_URL=${SRTM_REDIS_URL:-redis://redis:6379/1}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8501,http://localhost:3000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8000,http://localhost:8501}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:-}
       - S3_REGION=${S3_REGION:-us-east-1}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
@@ -62,7 +62,7 @@ services:
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
       - STRIPE_PRICE_PRO=${STRIPE_PRICE_PRO:-}
       - STRIPE_PRICE_ENTERPRISE=${STRIPE_PRICE_ENTERPRISE:-}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8501}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
       - VALID_API_KEYS=${VALID_API_KEYS:-}
       - ENABLE_DEMO_KEYS=${ENABLE_DEMO_KEYS:-true}
     volumes:

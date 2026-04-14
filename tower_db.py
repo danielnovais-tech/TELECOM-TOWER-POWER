@@ -174,6 +174,27 @@ class _SQLiteStore:
                 )
         return len(tower_dicts)
 
+    def find_duplicates(self, distance_m: float = 50.0) -> List[Dict[str, Any]]:
+        """Find towers within *distance_m* metres of each other (same operator).
+
+        Returns a list of dicts with keys:
+          id_a, id_b, operator, distance_m
+        """
+        all_towers = self.list_all(limit=self.count())
+        results: List[Dict[str, Any]] = []
+        for i, a in enumerate(all_towers):
+            for b in all_towers[i + 1:]:
+                if a["operator"] != b["operator"]:
+                    continue
+                d = _haversine_km(a["lat"], a["lon"], b["lat"], b["lon"]) * 1000
+                if d < distance_m:
+                    results.append({
+                        "id_a": a["id"], "id_b": b["id"],
+                        "operator": a["operator"], "distance_m": round(d, 2),
+                    })
+        results.sort(key=lambda x: x["distance_m"])
+        return results
+
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         d = dict(row)
@@ -222,6 +243,16 @@ class _PgStore:
                     CREATE INDEX IF NOT EXISTS idx_towers_operator
                     ON towers(operator)
                 """)
+                # Spatial index for fast proximity queries (requires earthdistance)
+                try:
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS cube")
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS earthdistance")
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_towers_coords
+                        ON towers USING gist(ll_to_earth(lat, lon))
+                    """)
+                except Exception:
+                    conn.rollback()
 
     # ---- write --------------------------------------------------
 
@@ -385,6 +416,58 @@ class _PgStore:
                             power_dbm = EXCLUDED.power_dbm
                     """)
                 return cur.rowcount
+
+    def find_duplicates(self, distance_m: float = 50.0) -> List[Dict[str, Any]]:
+        """Find towers within *distance_m* metres of each other (same operator).
+
+        Uses PostgreSQL earth_distance extension when available, otherwise
+        falls back to Python haversine over all rows.
+        """
+        assert psycopg2 is not None
+        with self._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # Try earth_distance (requires cube + earthdistance extensions)
+                try:
+                    cur.execute("""
+                        SELECT a.id AS id_a, b.id AS id_b, a.operator,
+                               earth_distance(
+                                   ll_to_earth(a.lat, a.lon),
+                                   ll_to_earth(b.lat, b.lon)
+                               ) AS distance_m
+                        FROM towers a, towers b
+                        WHERE a.id < b.id
+                          AND a.operator = b.operator
+                          AND earth_distance(
+                                  ll_to_earth(a.lat, a.lon),
+                                  ll_to_earth(b.lat, b.lon)
+                              ) < %s
+                        ORDER BY distance_m
+                    """, (distance_m,))
+                    rows = cur.fetchall()
+                    return [
+                        {"id_a": r["id_a"], "id_b": r["id_b"],
+                         "operator": r["operator"],
+                         "distance_m": round(r["distance_m"], 2)}
+                        for r in rows
+                    ]
+                except Exception:
+                    conn.rollback()
+
+        # Fallback: Python haversine
+        all_towers = self.list_all(limit=self.count())
+        results: List[Dict[str, Any]] = []
+        for i, a in enumerate(all_towers):
+            for b in all_towers[i + 1:]:
+                if a["operator"] != b["operator"]:
+                    continue
+                d = _haversine_km(a["lat"], a["lon"], b["lat"], b["lon"]) * 1000
+                if d < distance_m:
+                    results.append({
+                        "id_a": a["id"], "id_b": b["id"],
+                        "operator": a["operator"], "distance_m": round(d, 2),
+                    })
+        results.sort(key=lambda x: x["distance_m"])
+        return results
 
     @staticmethod
     def _row_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:

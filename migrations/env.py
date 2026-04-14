@@ -52,26 +52,34 @@ def run_migrations_online() -> None:
     import logging
     log = logging.getLogger("alembic.env")
     log.info("Creating engine...")
+    engine_kwargs: dict = {
+        "prefix": "sqlalchemy.",
+        "poolclass": pool.NullPool,
+    }
+    url = config.get_main_option("sqlalchemy.url") or ""
+    if url.startswith("postgresql"):
+        engine_kwargs["connect_args"] = {
+            "options": "-c lock_timeout=15000 -c statement_timeout=30000",
+        }
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-        connect_args={"options": "-c lock_timeout=15000 -c statement_timeout=30000"},
+        **engine_kwargs,
     )
     log.info("Connecting to database...")
     with connectable.connect() as connection:
-        log.info("Connected. Killing stale alembic sessions...")
-        connection.execute(
-            sa.text(
-                "SELECT pg_terminate_backend(pid) "
-                "FROM pg_stat_activity "
-                "WHERE datname = current_database() "
-                "  AND pid <> pg_backend_pid() "
-                "  AND state = 'idle in transaction' "
-                "  AND query LIKE '%%alembic_version%%'"
+        if url.startswith("postgresql"):
+            log.info("Connected. Killing stale alembic sessions...")
+            connection.execute(
+                sa.text(
+                    "SELECT pg_terminate_backend(pid) "
+                    "FROM pg_stat_activity "
+                    "WHERE datname = current_database() "
+                    "  AND pid <> pg_backend_pid() "
+                    "  AND state = 'idle in transaction' "
+                    "  AND query LIKE '%%alembic_version%%'"
+                )
             )
-        )
-        connection.commit()
+            connection.commit()
         log.info("Configuring migration context...")
         context.configure(
             connection=connection,

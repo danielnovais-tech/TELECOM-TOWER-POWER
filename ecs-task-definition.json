@@ -19,8 +19,8 @@
       ],
       "environment": [
         { "name": "PORT", "value": "8000" },
-        { "name": "CORS_ORIGINS", "value": "https://app.telecomtowerpower.com,https://api.telecomtowerpower.com" },
-        { "name": "FRONTEND_URL", "value": "https://app.telecomtowerpower.com" },
+        { "name": "CORS_ORIGINS", "value": "https://app.telecomtowerpower.com.br,https://api.telecomtowerpower.com.br,https://app.telecomtowerpower.com,https://api.telecomtowerpower.com" },
+        { "name": "FRONTEND_URL", "value": "https://app.telecomtowerpower.com.br" },
         { "name": "S3_REGION", "value": "AWS_REGION" },
         { "name": "MAX_BATCH_ROWS", "value": "500" },
         { "name": "ENABLE_DEMO_KEYS", "value": "false" }

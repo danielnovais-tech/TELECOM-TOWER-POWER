@@ -144,77 +144,70 @@ def _validate_data(store: TowerStore) -> None:
     print(f"{'=' * 60}")
 
 
-def _dedup_sources(store: TowerStore) -> None:
+def _dedup_sources(store: TowerStore, prefer: str = "anatel",
+                   threshold_m: float = 50.0) -> None:
     """Deduplicate towers where both OCID and ANATEL records exist nearby.
 
-    Strategy: if an ANATEL tower is within ~1km of an OCID tower for the
-    same operator, keep OCID's coordinates but prefer ANATEL's operator name
-    as the canonical label, then remove the ANATEL duplicate.
+    Args:
+        store: TowerStore instance.
+        prefer: Which source to keep – ``"anatel"`` (official) or
+                ``"ocid"`` (precise GPS).
+        threshold_m: Maximum distance in metres to consider towers as
+                     duplicates (default 50m).
     """
-    import math
-
-    _print_separator("Deduplication (OCID coords + ANATEL operator names)")
+    _print_separator(
+        f"Deduplication (within {threshold_m:.0f}m, prefer={prefer})"
+    )
     total = store.count()
     if total == 0:
         print("No towers to deduplicate.")
         return
 
-    all_towers = store.list_all(limit=total)
-    ocid_towers = [t for t in all_towers if t["id"].startswith("OCID_")]
-    anatel_towers = [t for t in all_towers if t["id"].startswith("ANATEL_")]
+    # Use the DB-level query (earth_distance on PG, haversine on SQLite)
+    print("  Searching for cross-source duplicates ...")
+    dupes = store.find_duplicates(distance_m=threshold_m)
 
-    if not ocid_towers or not anatel_towers:
-        print("Need both OCID and ANATEL towers for deduplication.")
+    # Keep only cross-source pairs (one OCID, one ANATEL)
+    cross_source = []
+    for d in dupes:
+        a_is_ocid = d["id_a"].startswith("OCID_")
+        a_is_anatel = d["id_a"].startswith("ANATEL_")
+        b_is_ocid = d["id_b"].startswith("OCID_")
+        b_is_anatel = d["id_b"].startswith("ANATEL_")
+        if (a_is_ocid and b_is_anatel) or (a_is_anatel and b_is_ocid):
+            # Normalise: ocid_id first, anatel_id second
+            if a_is_anatel:
+                d["id_a"], d["id_b"] = d["id_b"], d["id_a"]
+            cross_source.append(d)
+
+    same_source = len(dupes) - len(cross_source)
+    print(f"  Total duplicate pairs within {threshold_m:.0f}m: {len(dupes)}")
+    print(f"    Cross-source (OCID↔ANATEL):  {len(cross_source)}")
+    print(f"    Same-source:                  {same_source}")
+
+    if not cross_source:
+        print("  No cross-source duplicates to resolve.")
         return
 
-    print(f"  OCID:   {len(ocid_towers):,}")
-    print(f"  ANATEL: {len(anatel_towers):,}")
+    removed_ids: list[str] = []
+    kept_ids: list[str] = []
+    for pair in cross_source:
+        ocid_id = pair["id_a"]
+        anatel_id = pair["id_b"]
+        if prefer == "anatel":
+            removed_ids.append(ocid_id)
+            kept_ids.append(anatel_id)
+        else:
+            removed_ids.append(anatel_id)
+            kept_ids.append(ocid_id)
 
-    # Build spatial index: grid cells of ~0.01° (~1km)
-    grid: dict[tuple, list] = {}
-    for t in ocid_towers:
-        key = (round(t["lat"], 2), round(t["lon"], 2))
-        grid.setdefault(key, []).append(t)
-
-    MATCH_THRESHOLD_KM = 1.0
-    merged = 0
-    removed_ids = []
-
-    for at in anatel_towers:
-        key = (round(at["lat"], 2), round(at["lon"], 2))
-        candidates = []
-        # Check the grid cell and its 8 neighbors
-        for dlat in (-0.01, 0.0, 0.01):
-            for dlon in (-0.01, 0.0, 0.01):
-                nkey = (round(key[0] + dlat, 2), round(key[1] + dlon, 2))
-                candidates.extend(grid.get(nkey, []))
-
-        best = None
-        best_dist = MATCH_THRESHOLD_KM
-        for ot in candidates:
-            if ot["operator"] != at["operator"]:
-                continue
-            # Quick approximate distance
-            dlat = (ot["lat"] - at["lat"]) * 111.0
-            dlon = (ot["lon"] - at["lon"]) * 111.0 * math.cos(math.radians(at["lat"]))
-            dist = math.sqrt(dlat * dlat + dlon * dlon)
-            if dist < best_dist:
-                best_dist = dist
-                best = ot
-
-        if best:
-            # Keep OCID coords, use ANATEL operator name
-            best["operator"] = at["operator"]
-            store.upsert(best)
-            removed_ids.append(at["id"])
-            merged += 1
-
-    # Remove merged ANATEL duplicates
+    # Remove duplicates
     for tid in removed_ids:
         store.delete(tid)
 
-    print(f"  Merged {merged} ANATEL→OCID pairs")
-    print(f"  Removed {len(removed_ids)} ANATEL duplicates")
+    label = "ANATEL (official)" if prefer == "anatel" else "OpenCelliD (GPS)"
+    print(f"  Kept {len(kept_ids)} {label} records")
+    print(f"  Removed {len(removed_ids)} duplicate records")
     print(f"  Towers remaining: {store.count():,}")
 
 
@@ -273,7 +266,16 @@ def main():
     )
     parser.add_argument(
         "--dedup", action="store_true",
-        help="Deduplicate: prefer OpenCelliD coords, ANATEL operator names",
+        help="Deduplicate cross-source towers within --dedup-threshold metres",
+    )
+    parser.add_argument(
+        "--dedup-threshold", type=float, default=50.0,
+        help="Distance threshold in metres for deduplication (default: 50)",
+    )
+    parser.add_argument(
+        "--prefer", choices=["anatel", "ocid"], default="anatel",
+        help="Which source to keep when duplicates are found "
+             "(anatel=official, ocid=precise GPS; default: anatel)",
     )
 
     args = parser.parse_args()
@@ -292,7 +294,8 @@ def main():
         return
 
     if args.dedup and not has_ocid and not has_anatel:
-        _dedup_sources(store)
+        _dedup_sources(store, prefer=args.prefer,
+                       threshold_m=args.dedup_threshold)
         return
 
     if not has_ocid and not has_anatel:
@@ -348,7 +351,8 @@ def main():
         _print_stats(store)
 
     if args.dedup and not args.dry_run:
-        _dedup_sources(store)
+        _dedup_sources(store, prefer=args.prefer,
+                       threshold_m=args.dedup_threshold)
 
     if args.validate and not args.dry_run:
         _validate_data(store)
