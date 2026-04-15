@@ -76,13 +76,15 @@ echo "  ✓ Cluster: ${CLUSTER_NAME}"
 # ── Step 5: Register task definition ─────────────────────────────────────────
 echo "▸ Step 5: Registering task definition..."
 # Replace ACCOUNT_ID and AWS_REGION placeholders with actual values
-# Pipe sed directly to avoid echo mangling backslashes in healthCheck commands
-TASK_ARN=$(sed -e "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" -e "s/AWS_REGION/${AWS_REGION}/g" -e "s/EFS_ID/${EFS_ID}/g" -e "s/AP_SRTM_ID/${AP_SRTM_ID}/g" -e "s/AP_JOBS_ID/${AP_JOBS_ID}/g" "${TASK_DEF_FILE}" \
-  | aws ecs register-task-definition \
-  --cli-input-json file:///dev/stdin \
+# Use a temp file instead of piping to stdin (some AWS CLI versions reject file:///dev/stdin)
+_TMPDEF=$(mktemp)
+sed -e "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" -e "s/AWS_REGION/${AWS_REGION}/g" -e "s/EFS_ID/${EFS_ID}/g" -e "s/AP_SRTM_ID/${AP_SRTM_ID}/g" -e "s/AP_JOBS_ID/${AP_JOBS_ID}/g" "${TASK_DEF_FILE}" > "${_TMPDEF}"
+TASK_ARN=$(aws ecs register-task-definition \
+  --cli-input-json "file://${_TMPDEF}" \
   --region "${AWS_REGION}" \
   --query 'taskDefinition.taskDefinitionArn' \
   --output text)
+rm -f "${_TMPDEF}"
 echo "  ✓ Task definition: ${TASK_ARN}"
 
 # ── Step 6: Create or update ECS service ─────────────────────────────────────
