@@ -779,7 +779,7 @@ def require_tier(*allowed: Tier):
 # Configuration from environment
 # ------------------------------------------------------------
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 10 MB
-MAX_BATCH_ROWS = int(os.getenv("MAX_BATCH_ROWS", "100"))
+MAX_BATCH_ROWS = int(os.getenv("MAX_BATCH_ROWS", "5000"))
 
 _DEFAULT_ORIGINS = (
     "https://app.telecomtowerpower.com.br,"
@@ -880,6 +880,18 @@ async def prometheus_middleware(request: Request, call_next):
 # Global platform instance
 platform = TelecomTowerPower()
 job_store = JobStore()
+
+# ── SQS client for async batch pipeline ──
+_sqs_client = None
+SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL", "")
+
+
+def _get_sqs():
+    global _sqs_client
+    if _sqs_client is None:
+        import boto3
+        _sqs_client = boto3.client("sqs")
+    return _sqs_client
 
 # Pydantic models for API
 class TowerInput(BaseModel):
@@ -1151,17 +1163,29 @@ async def batch_reports(
     if len(receivers) > SYNC_BATCH_LIMIT:
         # Persist job to the database queue for the background worker
         job_id = str(uuid.uuid4())
-        receivers_json = json.dumps([
+        receivers_list = [
             {"lat": rx.lat, "lon": rx.lon,
              "height_m": rx.height_m, "antenna_gain_dbi": rx.antenna_gain_dbi}
             for rx in receivers
-        ])
+        ]
+        receivers_json = json.dumps(receivers_list)
         job_store.create_job(
             job_id=job_id,
             tower_id=tower_id,
             receivers_json=receivers_json,
             total=len(receivers),
         )
+
+        # Publish to SQS if configured (serverless Lambda worker path)
+        if SQS_QUEUE_URL:
+            _get_sqs().send_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MessageBody=json.dumps({
+                    "job_id": job_id,
+                    "tower_id": tower_id,
+                }),
+            )
+
         return {
             "job_id": job_id,
             "status": "queued",
@@ -1277,7 +1301,11 @@ async def job_progress_ws(websocket: WebSocket, job_id: str, token: str = Query(
 
 @app.get("/jobs/{job_id}/download")
 async def download_job_result(job_id: str):
-    """Download the ZIP file produced by a completed batch job."""
+    """Download the ZIP file produced by a completed batch job.
+
+    If the result is stored in S3, returns a redirect to a presigned URL.
+    If stored locally, streams the file directly.
+    """
     job = job_store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1287,7 +1315,31 @@ async def download_job_result(job_id: str):
             detail=f"Job is {job['status']}; cannot download yet",
         )
     result_path = job.get("result_path")
-    if not result_path or not os.path.exists(result_path):
+    if not result_path:
+        raise HTTPException(status_code=410, detail="Result expired; please resubmit")
+
+    # S3-backed result → redirect to presigned URL
+    if result_path.startswith("s3://"):
+        from s3_storage import get_presigned_url
+        presigned = get_presigned_url(job_id)
+        if presigned:
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=presigned, status_code=307)
+        # Fallback: try to stream from S3 directly
+        from s3_storage import download_result
+        data = download_result(job_id)
+        if data is None:
+            raise HTTPException(status_code=410, detail="Result expired; please resubmit")
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f"attachment; filename=batch_reports_{job['tower_id']}.zip"
+            },
+        )
+
+    # Local file path
+    if not os.path.exists(result_path):
         raise HTTPException(status_code=410, detail="Result expired; please resubmit")
 
     def _stream_file():

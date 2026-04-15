@@ -1,0 +1,197 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Telecom Tower Power – serverless deployment via
+  AWS Lambda + API Gateway (HTTP API).
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.12
+    Architectures:
+      - x86_64
+
+Parameters:
+  DatabaseUrl:
+    Type: String
+    Description: PostgreSQL connection string (postgresql+asyncpg://...)
+    NoEcho: true
+  RedisUrl:
+    Type: String
+    Description: Redis connection string
+    Default: ""
+    NoEcho: true
+  ValidApiKeys:
+    Type: String
+    Description: JSON map of API keys to tiers
+    Default: ""
+    NoEcho: true
+  EnableDemoKeys:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  CorsOrigins:
+    Type: String
+    Default: "*"
+    Description: Comma-separated CORS allowed origins
+  Stage:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+
+Resources:
+  # ---- Lambda Function (API) ----
+  TelecomTowerPowerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: lambda_handler.handler
+      CodeUri: .
+      Description: Telecom Tower Power FastAPI application
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref DatabaseUrl
+          REDIS_URL: !Ref RedisUrl
+          VALID_API_KEYS: !Ref ValidApiKeys
+          ENABLE_DEMO_KEYS: !Ref EnableDemoKeys
+          CORS_ORIGINS: !Ref CorsOrigins
+          SRTM_DATA_DIR: /tmp/srtm_data
+          S3_BUCKET_NAME: !Ref ReportsBucket
+          SQS_QUEUE_URL: !Ref BatchJobQueue
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub "arn:aws:s3:::${ReportsBucket}/*"
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource: !GetAtt BatchJobQueue.Arn
+      Events:
+        ApiCatchAll:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+        ApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /
+            Method: ANY
+
+  # ---- Lambda Function (SQS Batch Worker) ----
+  BatchWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: sqs_lambda_worker.handler
+      CodeUri: .
+      Description: >
+        SQS-triggered Lambda that processes batch PDF generation jobs.
+        Reads job from DB, generates PDFs, uploads ZIP to S3.
+      MemorySize: 1024
+      Timeout: 900
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref DatabaseUrl
+          S3_BUCKET_NAME: !Ref ReportsBucket
+          S3_PREFIX: "batch-results/"
+          SRTM_DATA_DIR: /tmp/srtm_data
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub "arn:aws:s3:::${ReportsBucket}/*"
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt BatchJobQueue.Arn
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt BatchJobQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  # ---- SQS Queue (Batch Jobs) ----
+  BatchJobQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "telecom-batch-jobs-${Stage}"
+      VisibilityTimeout: 960
+      MessageRetentionPeriod: 1209600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt BatchJobDLQ.Arn
+        maxReceiveCount: 3
+
+  # ---- SQS Dead Letter Queue ----
+  BatchJobDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "telecom-batch-jobs-dlq-${Stage}"
+      MessageRetentionPeriod: 1209600
+
+  # ---- HTTP API (API Gateway v2) ----
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - X-API-Key
+          - Authorization
+        MaxAge: 3600
+
+  # ---- S3 Bucket for reports / batch results ----
+  ReportsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "telecom-tower-power-reports-${AWS::AccountId}-${Stage}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldReports
+            Status: Enabled
+            ExpirationInDays: 30
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/"
+  FunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt TelecomTowerPowerFunction.Arn
+  BatchWorkerFunctionArn:
+    Description: Batch worker Lambda function ARN
+    Value: !GetAtt BatchWorkerFunction.Arn
+  BatchJobQueueUrl:
+    Description: SQS queue URL for batch jobs
+    Value: !Ref BatchJobQueue
+  BatchJobQueueArn:
+    Description: SQS queue ARN for batch jobs
+    Value: !GetAtt BatchJobQueue.Arn
+  BatchJobDLQUrl:
+    Description: Dead letter queue URL for failed batch jobs
+    Value: !Ref BatchJobDLQ
+  ReportsBucketName:
+    Description: S3 bucket for generated reports
+    Value: !Ref ReportsBucket
