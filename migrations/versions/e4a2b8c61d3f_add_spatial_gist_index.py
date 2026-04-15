@@ -20,8 +20,9 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     conn = op.get_bind()
     if conn.dialect.name == 'postgresql':
+        # Cannot use CONCURRENTLY inside a transaction; use non-concurrent create
         op.execute(
-            'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_towers_coords '
+            'CREATE INDEX IF NOT EXISTS idx_towers_coords '
             'ON towers USING gist(ll_to_earth(lat, lon))'
         )
 
@@ -29,4 +30,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     conn = op.get_bind()
     if conn.dialect.name == 'postgresql':
-        op.execute('DROP INDEX CONCURRENTLY IF EXISTS idx_towers_coords')
+        op.execute('DROP INDEX IF EXISTS idx_towers_coords')
