@@ -3,6 +3,7 @@ import TowerMap from "./TowerMap";
 import Sidebar from "./Sidebar";
 import Signup from "./Signup";
 import SignupSuccess from "./SignupSuccess";
+import BedrockPlayground from "./BedrockPlayground";
 import { fetchTowers, fetchHealth, setApiKey, onRateLimitChange } from "./api";
 import "./App.css";
 
@@ -86,6 +87,9 @@ export default function App() {
           <button className={page === "map" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("map"); }}>
             Map
           </button>
+          <button className={page === "ai" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("ai"); }}>
+            AI Playground
+          </button>
           <button className={page === "signup" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("signup"); }}>
             Get API Key
           </button>
@@ -122,6 +126,11 @@ export default function App() {
         <SignupSuccess
           sessionId={getSessionId()}
           onKeyReceived={(key) => { setApiKey(key); setPage("map"); }}
+        />
+      ) : page === "ai" ? (
+        <BedrockPlayground
+          analysisResult={analysisResult}
+          selectedTower={selectedTower}
         />
       ) : page === "signup-cancel" ? (
         <div className="signup-page">

@@ -285,3 +285,41 @@ export function watchJobProgress(jobId, onMessage, onClose) {
 
   return { close: () => ws.close() };
 }
+
+// ── Bedrock AI Playground helpers ────────────────────────────────
+
+/**
+ * Send a prompt to the Amazon Bedrock playground endpoint.
+ * @param {{ prompt: string, model_id?: string, max_tokens?: number, temperature?: number, context?: string }} body
+ * @returns {Promise<{ response: string, model_id: string, input_tokens: number, output_tokens: number }>}
+ */
+export async function bedrockChat(body) {
+  const r = await fetch(`${BASE}/bedrock/chat`, {
+    method: "POST",
+    headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const rem = r.headers.get("x-ratelimit-remaining");
+  const lim = r.headers.get("x-ratelimit-limit");
+  if (rem != null) rateLimit.remaining = Number(rem);
+  if (lim != null) rateLimit.limit = Number(lim);
+  _rateLimitListeners.forEach((fn) => fn({ ...rateLimit }));
+  if (r.status === 429) throw new RateLimitError(rateLimit.limit);
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(detail || `${r.status} ${r.statusText}`);
+  }
+  return r.json();
+}
+
+/**
+ * Fetch available Bedrock foundation models.
+ * @returns {Promise<{ models: Array<{ model_id: string, provider: string, name: string }> }>}
+ */
+export async function fetchBedrockModels() {
+  const r = await fetch(`${BASE}/bedrock/models`, {
+    headers: { "X-API-Key": apiKey },
+  });
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}

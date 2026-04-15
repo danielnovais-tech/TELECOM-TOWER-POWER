@@ -8,6 +8,13 @@ Environment variables (all required for live mode):
   STRIPE_PRICE_PRO       – price_... (monthly Pro plan)
   STRIPE_PRICE_ENTERPRISE– price_... (monthly Enterprise plan)
   FRONTEND_URL           – e.g. http://localhost:3000  (for Checkout redirects)
+
+SES email (optional – sends welcome email with API key after checkout):
+  SES_SMTP_HOST          – e.g. email-smtp.sa-east-1.amazonaws.com
+  SES_SMTP_PORT          – 587 (STARTTLS)
+  SES_SMTP_USERNAME      – SMTP username from SES console
+  SES_SMTP_PASSWORD      – SMTP password from SES console
+  SES_FROM_ADDRESS       – Verified sender, e.g. no-reply@telecomtowerpower.com.br
 """
 
 import hashlib
@@ -15,7 +22,10 @@ import json
 import logging
 import os
 import secrets
+import smtplib
 import time
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -33,6 +43,13 @@ STRIPE_PRICE_ENTERPRISE = os.getenv("STRIPE_PRICE_ENTERPRISE", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://app.telecomtowerpower.com.br")
 
 stripe.api_key = STRIPE_SECRET_KEY
+
+# SES SMTP settings (for welcome emails)
+_SES_HOST = os.getenv("SES_SMTP_HOST", "email-smtp.sa-east-1.amazonaws.com")
+_SES_PORT = int(os.getenv("SES_SMTP_PORT", "587"))
+_SES_USER = os.getenv("SES_SMTP_USERNAME", "")
+_SES_PASS = os.getenv("SES_SMTP_PASSWORD", "")
+_SES_FROM = os.getenv("SES_FROM_ADDRESS", "no-reply@telecomtowerpower.com.br")
 
 # Map tier name → Stripe Price ID
 TIER_PRICE_MAP: Dict[str, str] = {
@@ -138,6 +155,75 @@ def create_checkout_session(email: str, tier: str, country: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
+# Welcome email via Amazon SES
+# ---------------------------------------------------------------------------
+
+def send_welcome_email(email: str, api_key: str, tier: str) -> bool:
+    """
+    Send a welcome email with the API key after successful checkout.
+    Returns True on success, False on failure (non-fatal).
+    """
+    if not _SES_USER or not _SES_PASS:
+        logger.warning("SES credentials not configured; skipping welcome email for %s", email)
+        return False
+
+    tier_label = tier.capitalize()
+    docs_url = "https://api.telecomtowerpower.com.br/docs"
+
+    subject = f"Welcome to Telecom Tower Power – Your {tier_label} API Key"
+
+    text_body = (
+        f"Welcome to Telecom Tower Power!\n\n"
+        f"Your {tier_label} plan is now active.\n\n"
+        f"API Key: {api_key}\n\n"
+        f"Quick start:\n"
+        f"  curl -H 'X-API-Key: {api_key}' "
+        f"https://api.telecomtowerpower.com.br/towers/nearby?lat=-15.79&lon=-47.88\n\n"
+        f"Full API docs: {docs_url}\n\n"
+        f"Keep your key confidential. If compromised, contact support.\n\n"
+        f"— Telecom Tower Power Team"
+    )
+
+    html_body = f"""\
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:20px">
+  <h2 style="color:#1a73e8">Welcome to Telecom Tower Power!</h2>
+  <p>Your <strong>{tier_label}</strong> plan is now active.</p>
+  <div style="background:#f4f4f4;padding:16px;border-radius:8px;margin:16px 0">
+    <p style="margin:0 0 4px"><strong>Your API Key:</strong></p>
+    <code style="font-size:14px;word-break:break-all">{api_key}</code>
+  </div>
+  <p><strong>Quick start:</strong></p>
+  <pre style="background:#272822;color:#f8f8f2;padding:12px;border-radius:6px;overflow-x:auto">
+curl -H 'X-API-Key: {api_key}' \\
+  https://api.telecomtowerpower.com.br/towers/nearby?lat=-15.79&amp;lon=-47.88</pre>
+  <p><a href="{docs_url}">Full API documentation &rarr;</a></p>
+  <hr style="border:none;border-top:1px solid #ddd;margin:24px 0">
+  <p style="font-size:12px;color:#888">
+    Keep your key confidential. If compromised, contact support immediately.
+  </p>
+</div>
+"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = _SES_FROM
+    msg["To"] = email
+    msg.attach(MIMEText(text_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        with smtplib.SMTP(_SES_HOST, _SES_PORT) as server:
+            server.starttls()
+            server.login(_SES_USER, _SES_PASS)
+            server.sendmail(_SES_FROM, [email], msg.as_string())
+        logger.info("Welcome email sent to %s (%s tier)", email, tier)
+        return True
+    except Exception:
+        logger.exception("Failed to send welcome email to %s", email)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # SRTM tile pre-download for enterprise accounts
 # ---------------------------------------------------------------------------
 
@@ -206,6 +292,7 @@ def _on_checkout_completed(session: dict) -> Dict:
         _save_store(store)
         logger.info("Upgraded %s to %s (key %s…)", email, tier, existing_key[:12])
         _maybe_prefetch_srtm(tier, session)
+        send_welcome_email(email, existing_key, tier)
         return {"action": "upgraded", "email": email, "tier": tier}
 
     # Otherwise create a new key
@@ -221,6 +308,7 @@ def _on_checkout_completed(session: dict) -> Dict:
     _save_store(store)
     logger.info("Provisioned %s key for %s", tier, email)
     _maybe_prefetch_srtm(tier, session)
+    send_welcome_email(email, key, tier)
     return {"action": "provisioned", "email": email, "tier": tier}
 
 

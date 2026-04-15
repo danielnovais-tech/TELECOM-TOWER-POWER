@@ -1469,6 +1469,57 @@ async def srtm_prefetch(
     return {"status": "started", "country": code}
 
 # ------------------------------------------------------------
+# Amazon Bedrock AI Playground
+# ------------------------------------------------------------
+
+class BedrockChatRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=4000, description="User prompt")
+    model_id: Optional[str] = Field(None, description="Bedrock model ID override")
+    max_tokens: Optional[int] = Field(None, ge=1, le=4096, description="Max response tokens")
+    temperature: Optional[float] = Field(None, ge=0.0, le=1.0, description="Sampling temperature")
+    context: Optional[str] = Field(None, max_length=8000, description="Analysis context JSON")
+
+
+@app.post("/bedrock/chat")
+async def bedrock_chat(
+    body: BedrockChatRequest,
+    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+):
+    """
+    Send a prompt to an Amazon Bedrock base foundation model and return
+    the generated response.  Supports Titan, Claude, and Llama model families.
+    Requires PRO or ENTERPRISE tier.
+    """
+    from bedrock_service import invoke_model
+    try:
+        result = invoke_model(
+            prompt=body.prompt,
+            model_id=body.model_id,
+            max_tokens=body.max_tokens,
+            temperature=body.temperature,
+            context=body.context,
+        )
+        return result
+    except Exception as exc:
+        logger.error("Bedrock chat error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Bedrock model error: {exc}")
+
+
+@app.get("/bedrock/models")
+async def bedrock_models(
+    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+):
+    """List available Bedrock foundation models for the AI playground."""
+    from bedrock_service import list_available_models
+    try:
+        models = list_available_models()
+        return {"models": models}
+    except Exception as exc:
+        logger.error("Bedrock list models error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Bedrock error: {exc}")
+
+
+# ------------------------------------------------------------
 # Run the server (if executed directly)
 # ------------------------------------------------------------
 
