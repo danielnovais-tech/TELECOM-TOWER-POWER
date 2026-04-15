@@ -18,7 +18,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_index('idx_towers_operator', 'towers', ['operator'])
+    op.execute('CREATE INDEX IF NOT EXISTS idx_towers_operator ON towers (operator)')
 
 
 def downgrade() -> None:

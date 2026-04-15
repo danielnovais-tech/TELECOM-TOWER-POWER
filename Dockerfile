@@ -31,6 +31,7 @@ COPY s3_storage.py .
 COPY pdf_generator.py .
 COPY srtm_elevation.py .
 COPY stripe_billing.py .
+COPY stripe_webhook_service.py .
 COPY tower_db.py .
 COPY job_store.py .
 COPY batch_worker.py .
