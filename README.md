@@ -211,7 +211,8 @@ X-API-Key: <your-key>
 | Requests/min | 10 | 100 | 1,000 |
 | Max towers | 20 | 500 | 10,000 |
 | PDF export | — | ✓ | ✓ |
-| Batch reports | — | ✓ | ✓ |
+| Batch rows | — | 2,000 | 10,000 |
+| AI assistant | — | ✓ | ✓ |
 
 ### Endpoints
 
@@ -228,8 +229,8 @@ X-API-Key: <your-key>
 | `GET` | `/export_report` | Pro+ | Download PDF link report |
 | `GET` | `/export_report/pdf` | Pro+ | Download PDF link report (alias) |
 | `POST` | `/batch_reports` | Pro+ | Upload CSV → ZIP of PDFs (≤100 sync, >100 async job) |
-| `GET` | `/jobs/{job_id}` | — | Poll background batch job status |
-| `GET` | `/jobs/{job_id}/download` | — | Download completed batch job ZIP |
+| `GET` | `/jobs/{job_id}` | Pro+ | Poll background batch job status |
+| `GET` | `/jobs/{job_id}/download` | Pro+ | Download completed batch job ZIP |
 | `POST` | `/signup/free` | — | Self-service free-tier signup |
 | `POST` | `/signup/checkout` | — | Create Stripe Checkout session (Pro/Enterprise) |
 | `GET` | `/signup/success` | — | Retrieve API key after Stripe payment |

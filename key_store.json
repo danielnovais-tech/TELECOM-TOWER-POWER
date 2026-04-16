@@ -46,5 +46,29 @@
     "stripe_customer_id": "cus_lifecycle_1",
     "stripe_subscription_id": null,
     "created": 1776208110.5359745
+  },
+  "ttp_Z1untQuAsXOl0D3wDXBKGvwz-3eVXs-jC7szY1HUbFQ": {
+    "tier": "free",
+    "owner": "localtest@example.com",
+    "email": "localtest@example.com",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776285495.2692442
+  },
+  "ttp_l5amhWot8cIJR35-2yFy38-rnJVDajqmvD2m5lVmjyc": {
+    "tier": "free",
+    "owner": "local-test@example.com",
+    "email": "local-test@example.com",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776290531.15232
+  },
+  "ttp_2EIhXLCTXa49s6Gu-a1ROsi9iqsS7dj0gPqqMeuGc1E": {
+    "tier": "free",
+    "owner": "localdup1776293980@test.com",
+    "email": "localdup1776293980@test.com",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776293980.9482954
   }
 }

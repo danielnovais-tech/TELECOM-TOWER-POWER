@@ -58,19 +58,43 @@ TIER_PRICE_MAP: Dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Persistent JSON key-store  (swap for a real DB in production)
+# Persistent key-store  (in-memory primary + JSON file as seed/backup)
 # ---------------------------------------------------------------------------
 _STORE_PATH = Path(os.getenv("KEY_STORE_PATH", "./key_store.json"))
 
+# In-memory store – initialised from the JSON file at import time, then
+# treated as the single source of truth.  File writes are best-effort
+# (container filesystems on ECS/Fargate can silently drop writes).
+_mem_store: Dict[str, Dict] = {}
+_mem_store_initialised = False
+
+
+def _ensure_mem_store() -> None:
+    """Seed the in-memory store from the JSON file (once)."""
+    global _mem_store_initialised
+    if _mem_store_initialised:
+        return
+    _mem_store_initialised = True
+    try:
+        if _STORE_PATH.exists():
+            _mem_store.update(json.loads(_STORE_PATH.read_text()))
+            logger.info("Loaded %d keys from %s", len(_mem_store), _STORE_PATH)
+    except Exception as exc:
+        logger.warning("Could not read key store file %s: %s", _STORE_PATH, exc)
+
 
 def _load_store() -> Dict:
-    if _STORE_PATH.exists():
-        return json.loads(_STORE_PATH.read_text())
-    return {}
+    _ensure_mem_store()
+    return dict(_mem_store)
 
 
 def _save_store(data: Dict) -> None:
-    _STORE_PATH.write_text(json.dumps(data, indent=2))
+    _mem_store.clear()
+    _mem_store.update(data)
+    try:
+        _STORE_PATH.write_text(json.dumps(data, indent=2))
+    except Exception as exc:
+        logger.warning("Could not persist key store to %s: %s", _STORE_PATH, exc)
 
 
 def _generate_api_key() -> str:
@@ -99,9 +123,16 @@ def register_free_user(email: str) -> Dict:
     """
     store = _load_store()
 
+    existing_emails = [m.get("email") for m in store.values()]
+    logger.info(
+        "register_free_user: email=%s store_id=%s keys=%d emails=%s",
+        email, id(_mem_store), len(store), existing_emails,
+    )
+
     # prevent duplicate sign-ups for the same e-mail
     for meta in store.values():
         if meta.get("email") == email:
+            logger.info("Duplicate detected for %s", email)
             raise ValueError("An API key already exists for this email")
 
     key = _generate_api_key()

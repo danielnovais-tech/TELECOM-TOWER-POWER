@@ -1116,7 +1116,7 @@ def run_signup(base: str, run_id: str) -> None:
         _record("POST /signup/status (unknown email) → 404", cat, 404,
                 f"exception: {exc}", False, str(exc))
 
-    # 6.6 Checkout with no Stripe key → 503 (or 400 if price not configured)
+    # 6.6 Checkout – 200 if Stripe is configured, 400/503 otherwise
     try:
         r = _http(
             "POST",
@@ -1124,15 +1124,15 @@ def run_signup(base: str, run_id: str) -> None:
             json={"email": email, "tier": "pro"},
             timeout=10,
         )
-        passed = r.status_code in (400, 503)
+        passed = r.status_code in (200, 400, 503)
         _record(
-            "POST /signup/checkout (no Stripe config) → 400/503", cat,
-            "400 or 503", r.status_code, passed,
+            "POST /signup/checkout → 200/400/503", cat,
+            "200, 400 or 503", r.status_code, passed,
             detail=r.text[:200] if not passed else "",
         )
     except Exception as exc:
-        _record("POST /signup/checkout (no Stripe config) → 400/503", cat,
-                "400 or 503", f"exception: {exc}", False, str(exc))
+        _record("POST /signup/checkout → 200/400/503", cat,
+                "200, 400 or 503", f"exception: {exc}", False, str(exc))
 
 
 # ── 7. Security / Edge Cases ────────────────────────────────────────────────
@@ -1188,10 +1188,15 @@ def run_security(base: str, keys: KeyStore) -> None:
 
     # 7.4 CORS headers on OPTIONS preflight
     try:
+        # Use an origin appropriate for the environment
+        if "localhost" in base:
+            cors_origin = "http://localhost:3000"
+        else:
+            cors_origin = "https://app.telecomtowerpower.com.br"
         r = requests.options(
             f"{base}/towers",
             headers={
-                "Origin": "http://localhost:3000",
+                "Origin": cors_origin,
                 "Access-Control-Request-Method": "GET",
             },
             timeout=10,

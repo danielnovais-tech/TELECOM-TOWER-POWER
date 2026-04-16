@@ -1,7 +1,9 @@
 {
   "family": "telecom-tower-power",
   "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
   "cpu": "1024",
   "memory": "2048",
   "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
@@ -18,12 +20,30 @@
         }
       ],
       "environment": [
-        { "name": "PORT", "value": "8000" },
-        { "name": "CORS_ORIGINS", "value": "https://app.telecomtowerpower.com.br,https://api.telecomtowerpower.com.br,https://app.telecomtowerpower.com,https://api.telecomtowerpower.com" },
-        { "name": "FRONTEND_URL", "value": "https://app.telecomtowerpower.com.br" },
-        { "name": "S3_REGION", "value": "AWS_REGION" },
-        { "name": "MAX_BATCH_ROWS", "value": "500" },
-        { "name": "ENABLE_DEMO_KEYS", "value": "false" }
+        {
+          "name": "PORT",
+          "value": "8000"
+        },
+        {
+          "name": "CORS_ORIGINS",
+          "value": "https://app.telecomtowerpower.com.br,https://api.telecomtowerpower.com.br,https://app.telecomtowerpower.com,https://api.telecomtowerpower.com"
+        },
+        {
+          "name": "FRONTEND_URL",
+          "value": "https://app.telecomtowerpower.com.br"
+        },
+        {
+          "name": "S3_REGION",
+          "value": "AWS_REGION"
+        },
+        {
+          "name": "MAX_BATCH_ROWS",
+          "value": "500"
+        },
+        {
+          "name": "ENABLE_DEMO_KEYS",
+          "value": "true"
+        }
       ],
       "secrets": [
         {
@@ -64,11 +84,20 @@
         }
       ],
       "mountPoints": [
-        { "sourceVolume": "srtm-data", "containerPath": "/app/srtm_data" },
-        { "sourceVolume": "job-results", "containerPath": "/app/job_results" }
+        {
+          "sourceVolume": "srtm-data",
+          "containerPath": "/app/srtm_data"
+        },
+        {
+          "sourceVolume": "job-results",
+          "containerPath": "/app/job_results"
+        }
       ],
       "healthCheck": {
-        "command": ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"],
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"
+        ],
         "interval": 30,
         "timeout": 5,
         "retries": 3,
@@ -87,7 +116,12 @@
       "name": "worker",
       "image": "ACCOUNT_ID.dkr.ecr.AWS_REGION.amazonaws.com/telecom-tower-power:latest",
       "essential": true,
-      "command": ["python", "batch_worker.py", "--poll-interval", "2"],
+      "command": [
+        "python",
+        "batch_worker.py",
+        "--poll-interval",
+        "2"
+      ],
       "secrets": [
         {
           "name": "DATABASE_URL",
@@ -107,8 +141,14 @@
         }
       ],
       "mountPoints": [
-        { "sourceVolume": "srtm-data", "containerPath": "/app/srtm_data" },
-        { "sourceVolume": "job-results", "containerPath": "/app/job_results" }
+        {
+          "sourceVolume": "srtm-data",
+          "containerPath": "/app/srtm_data"
+        },
+        {
+          "sourceVolume": "job-results",
+          "containerPath": "/app/job_results"
+        }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",

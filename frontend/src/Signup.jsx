@@ -66,12 +66,13 @@ export default function Signup({ onKeyReceived }) {
             <input type="radio" name="tier" value="pro"
               checked={tier === "pro"} onChange={() => setTier("pro")} />
             <div className="plan-header">Pro</div>
-            <div className="plan-price">$29<span>/mo</span></div>
+            <div className="plan-price">R$ 1.000<span>/mo</span></div>
             <ul>
               <li>100 requests / min</li>
               <li>500 towers</li>
+              <li>2,000 batch rows</li>
               <li>PDF reports</li>
-              <li>Batch export</li>
+              <li>AI assistant</li>
             </ul>
           </label>
 
@@ -79,13 +80,13 @@ export default function Signup({ onKeyReceived }) {
             <input type="radio" name="tier" value="enterprise"
               checked={tier === "enterprise"} onChange={() => setTier("enterprise")} />
             <div className="plan-header">Enterprise</div>
-            <div className="plan-price">$99<span>/mo</span></div>
+            <div className="plan-price">R$ 5.000<span>/mo</span></div>
             <ul>
               <li>1,000 requests / min</li>
               <li>10,000 towers</li>
+              <li>10,000 batch rows</li>
               <li>PDF reports</li>
-              <li>Batch export</li>
-              <li>Priority support</li>
+              <li>AI assistant</li>
             </ul>
           </label>
         </div>

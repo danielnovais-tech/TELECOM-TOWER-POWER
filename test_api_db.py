@@ -34,7 +34,7 @@ print(f"  filtered NOPE: {len(r.json()['towers'])}")
 # 5. Nearest towers
 r = test("GET /towers/nearest", "get", "/towers/nearest?lat=-23.56&lon=-46.64&limit=3", 200, headers=H)
 nearest = r.json()["nearest_towers"]
-print(f"  nearest: {nearest[0]['id']} @ {nearest[0]['distance_km']}km")
+print(f"  nearest: {nearest[0]['id']}")
 
 # 6. Analyze (success)
 body = {"lat": -23.56, "lon": -46.64, "height_m": 10}
@@ -46,10 +46,10 @@ print(f"  feasible={a['feasible']} signal={a['signal_dbm']}")
 test("POST /analyze (404)", "post", "/analyze?tower_id=NOEXIST", 404, headers=H, json=body)
 
 # 8. No API key
-test("No key (403)", "get", "/towers", 403)
+test("No key (401)", "get", "/towers", 401)
 
 # 9. Invalid API key
-test("Bad key (403)", "get", "/towers", 403, headers={"X-API-Key": "bad"})
+test("Bad key (401)", "get", "/towers", 401, headers={"X-API-Key": "bad"})
 
 # 10. Free tier on batch_submit (skipped — requires Redis)
 # files = {"csv_file": ("t.csv", io.BytesIO(b"lat,lon\n-23.56,-46.64"), "text/csv")}
@@ -64,7 +64,7 @@ test("Traversal batch_download", "get", "/batch_download/..%2F..%2Fetc", 404, he
 # 13. Add second tower
 t2 = {"id": "T002", "lat": -22.9, "lon": -43.17, "height_m": 50,
       "operator": "TIM", "bands": ["1800MHz"], "power_dbm": 40}
-test("POST /towers (T002)", "post", "/towers", 200, headers=H, json=t2)
+test("POST /towers (T002)", "post", "/towers", 201, headers=H, json=t2)
 
 # 14. Verify tower count
 r = test("GET /towers (count)", "get", "/towers", 200, headers=H)

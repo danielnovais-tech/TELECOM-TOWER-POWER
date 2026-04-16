@@ -30,6 +30,8 @@ COPY worker.py .
 COPY s3_storage.py .
 COPY pdf_generator.py .
 COPY srtm_elevation.py .
+COPY srtm_prefetch.py .
+COPY bedrock_service.py .
 COPY stripe_billing.py .
 COPY stripe_webhook_service.py .
 COPY tower_db.py .

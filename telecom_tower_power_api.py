@@ -689,9 +689,9 @@ class Tier(str, Enum):
     ENTERPRISE = "enterprise"
 
 TIER_LIMITS = {
-    Tier.FREE: {"requests_per_min": int(os.getenv("RATE_LIMIT_FREE", "10")), "pdf_export": False, "max_towers": 20},
-    Tier.PRO: {"requests_per_min": int(os.getenv("RATE_LIMIT_PRO", "100")), "pdf_export": True, "max_towers": 500},
-    Tier.ENTERPRISE: {"requests_per_min": int(os.getenv("RATE_LIMIT_ENTERPRISE", "1000")), "pdf_export": True, "max_towers": 10000},
+    Tier.FREE: {"requests_per_min": int(os.getenv("RATE_LIMIT_FREE", "10")), "pdf_export": False, "max_towers": 20, "max_batch_rows": 0},
+    Tier.PRO: {"requests_per_min": int(os.getenv("RATE_LIMIT_PRO", "100")), "pdf_export": True, "max_towers": 500, "max_batch_rows": 2000},
+    Tier.ENTERPRISE: {"requests_per_min": int(os.getenv("RATE_LIMIT_ENTERPRISE", "1000")), "pdf_export": True, "max_towers": 10000, "max_batch_rows": 10000},
 }
 
 # In-memory API key store: key -> {"tier": Tier, "owner": str}
@@ -717,6 +717,9 @@ if os.getenv("ENABLE_DEMO_KEYS", "true").lower() in ("1", "true", "yes"):
     API_KEYS.update(_demo_api_keys)
 
 api_key_header = APIKeyHeader(name="X-API-Key")
+
+# ---- Per-key tower creation counter ----
+_towers_created_per_key: Dict[str, int] = {}
 
 # ---- Sliding-window rate limiter (per API key) ----
 _rate_buckets: Dict[str, collections.deque] = {}
@@ -972,8 +975,10 @@ async def shutdown():
 async def add_tower(tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
     """Add a new tower to the database."""
     tier_limit = TIER_LIMITS[key_data["tier"]]["max_towers"]
-    if platform.tower_count() >= tier_limit:
-        raise HTTPException(status_code=403, detail=f"Tower limit reached for {key_data['tier'].value} tier ({tier_limit})")
+    api_key = key_data.get("owner", "unknown")
+    created = _towers_created_per_key.get(api_key, 0)
+    if created >= tier_limit:
+        raise HTTPException(status_code=403, detail=f"Tower creation limit reached for {key_data['tier'].value} tier ({tier_limit})")
     new_tower = Tower(
         id=tower.id,
         lat=tower.lat,
@@ -984,13 +989,19 @@ async def add_tower(tower: TowerInput, key_data: Dict = Depends(verify_api_key))
         power_dbm=tower.power_dbm
     )
     platform.add_tower(new_tower)
+    _towers_created_per_key[api_key] = created + 1
     return {"message": f"Tower {tower.id} added"}
 
 @app.get("/towers/nearest")
 async def nearest_towers(lat: float, lon: float, operator: Optional[str] = None, limit: int = 5, key_data: Dict = Depends(verify_api_key)):
     """Find nearest towers to a given location."""
     nearest = platform.find_nearest_towers(lat, lon, operator, limit)
-    return {"nearest_towers": [asdict(t) for t in nearest]}
+    results = []
+    for t in nearest:
+        d = asdict(t)
+        d["distance_km"] = round(LinkEngine.haversine_km(lat, lon, t.lat, t.lon), 3)
+        results.append(d)
+    return {"nearest_towers": results}
 
 @app.get("/towers/{tower_id}")
 async def get_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
@@ -1152,11 +1163,12 @@ async def batch_reports(
     if not receivers:
         raise HTTPException(status_code=400, detail="CSV contains no receiver rows")
 
-    if len(receivers) > MAX_BATCH_ROWS:
+    tier_batch_limit = TIER_LIMITS[key_data["tier"]]["max_batch_rows"]
+    if len(receivers) > tier_batch_limit:
         raise HTTPException(
             status_code=400,
-            detail=f"CSV has {len(receivers)} rows, exceeding the maximum of "
-                   f"{MAX_BATCH_ROWS}. Reduce the file size and retry.",
+            detail=f"CSV has {len(receivers)} rows, exceeding the {key_data['tier'].value} "
+                   f"tier limit of {tier_batch_limit}. Upgrade your plan or reduce the file.",
         )
 
     SYNC_BATCH_LIMIT = 100
@@ -1222,8 +1234,8 @@ async def batch_reports(
 # ------------------------------------------------------------
 
 @app.get("/jobs/{job_id}")
-async def get_job_status(job_id: str):
-    """Poll the status of a background batch job."""
+async def get_job_status(job_id: str, _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
+    """Poll the status of a background batch job (Pro/Enterprise only)."""
     job = job_store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1300,8 +1312,8 @@ async def job_progress_ws(websocket: WebSocket, job_id: str, token: str = Query(
 
 
 @app.get("/jobs/{job_id}/download")
-async def download_job_result(job_id: str):
-    """Download the ZIP file produced by a completed batch job.
+async def download_job_result(job_id: str, _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
+    """Download the ZIP file produced by a completed batch job (Pro/Enterprise only).
 
     If the result is stored in S3, returns a redirect to a presigned URL.
     If stored locally, streams the file directly.
@@ -1582,6 +1594,14 @@ if FRONTEND_DIR.is_dir():
     from starlette.staticfiles import StaticFiles
     from starlette.responses import FileResponse
 
+    # Known API path prefixes that must never be served by the SPA
+    _API_PREFIXES = (
+        "/towers", "/analyze", "/plan_repeater", "/batch_reports",
+        "/jobs", "/export_report", "/bedrock", "/srtm",
+        "/signup", "/stripe", "/health", "/metrics", "/openapi",
+        "/docs", "/redoc",
+    )
+
     @app.middleware("http")
     async def api_prefix_rewrite(request: Request, call_next):
         """Rewrite /api/xxx → /xxx so the React PWA (which uses /api prefix) works."""
@@ -1591,8 +1611,14 @@ if FRONTEND_DIR.is_dir():
         return await call_next(request)
 
     class _SPAStaticFiles(StaticFiles):
-        """StaticFiles subclass that falls back to index.html for SPA routing."""
+        """StaticFiles subclass that falls back to index.html for SPA routing,
+        but skips API paths so FastAPI routes take precedence."""
         async def get_response(self, path, scope):
+            # Never intercept known API paths
+            full_path = scope.get("path", f"/{path}")
+            if any(full_path.startswith(p) for p in _API_PREFIXES):
+                from starlette.responses import Response
+                return Response(status_code=404)
             try:
                 return await super().get_response(path, scope)
             except Exception:
