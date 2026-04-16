@@ -24,6 +24,12 @@ STRIPE_SECRET_KEY="sk_live_REPLACE_ME"
 STRIPE_WEBHOOK_SECRET="whsec_REPLACE_ME"
 STRIPE_PRICE_PRO="price_1TLuIl3HxrWvYaypEFUDbR58"
 STRIPE_PRICE_ENTERPRISE="price_1TLuJp3HxrWvYaypRCcqZr4g"
+
+# AWS credentials — IAM user: telecom-tower-power-render
+# Scoped to s3://telecom-tower-power-results/batch-results/* ONLY.
+# EC2 backups use a SEPARATE IAM user (telecom-tower-power-ec2-backup)
+# with credentials stored in /etc/pg-backup-s3.env on the EC2 instance.
+# See: scripts/split_iam_users.sh
 AWS_ACCESS_KEY_ID="REPLACE_ME"
 AWS_SECRET_ACCESS_KEY="REPLACE_ME"
 S3_BUCKET_NAME="telecom-tower-power-results"
