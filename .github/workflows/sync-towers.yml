@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - uses: actions/setup-python@v5
         with:
@@ -24,12 +26,17 @@ jobs:
         run: pip install psycopg2-binary
 
       - name: Set up SSH tunnel to RDS via EC2 bastion
+        env:
+          EC2_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/ec2.pem
+          printf '%s\n' "$EC2_KEY" > ~/.ssh/ec2.pem
           chmod 600 ~/.ssh/ec2.pem
+          ssh-keygen -y -f ~/.ssh/ec2.pem > /dev/null  # validate key format
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/ec2.pem -f -N -o StrictHostKeyChecking=no \
+          ssh -i ~/.ssh/ec2.pem -f -N \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no \
             -L 15432:${{ secrets.RDS_HOST }}:5432 \
             ubuntu@${{ secrets.EC2_HOST }}
           echo "SSH tunnel established on localhost:15432"
