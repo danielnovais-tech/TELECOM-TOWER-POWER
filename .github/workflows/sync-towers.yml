@@ -1,0 +1,47 @@
+name: Nightly Tower Sync (AWS → Railway)
+
+on:
+  schedule:
+    - cron: '0 5 * * *'  # 5 AM UTC (2 AM BRT) daily
+  workflow_dispatch:       # allow manual trigger
+
+concurrency:
+  group: tower-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary
+
+      - name: Set up SSH tunnel to RDS via EC2 bastion
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/ec2.pem
+          chmod 600 ~/.ssh/ec2.pem
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/ec2.pem -f -N -o StrictHostKeyChecking=no \
+            -L 15432:${{ secrets.RDS_HOST }}:5432 \
+            ubuntu@${{ secrets.EC2_HOST }}
+          echo "SSH tunnel established on localhost:15432"
+
+      - name: Run tower import
+        env:
+          AWS_DATABASE_URL: postgresql://${{ secrets.RDS_USER }}:${{ secrets.RDS_PASSWORD }}@localhost:15432/${{ secrets.RDS_DBNAME }}
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python3 import_towers.py --source-env AWS --target-env RAILWAY --verbose
+
+      - name: Teardown SSH tunnel
+        if: always()
+        run: |
+          pkill -f "ssh.*15432" || true
+          rm -f ~/.ssh/ec2.pem
