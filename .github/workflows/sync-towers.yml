@@ -43,9 +43,15 @@ jobs:
 
       - name: Run tower import
         env:
-          AWS_DATABASE_URL: postgresql://${{ secrets.RDS_USER }}:${{ secrets.RDS_PASSWORD }}@127.0.0.1:15432/${{ secrets.RDS_DBNAME }}?sslmode=require
+          RDS_USER: ${{ secrets.RDS_USER }}
+          RDS_PASSWORD: ${{ secrets.RDS_PASSWORD }}
+          RDS_DBNAME: ${{ secrets.RDS_DBNAME }}
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
-        run: python3 import_towers.py --source-env AWS --target-env RAILWAY --verbose
+        run: |
+          # URL-encode password to handle special chars like !
+          PW=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['RDS_PASSWORD'], safe=''))")
+          export AWS_DATABASE_URL="postgresql://${RDS_USER}:${PW}@127.0.0.1:15432/${RDS_DBNAME}?sslmode=require"
+          python3 import_towers.py --source-env AWS --target-env RAILWAY --verbose
 
       - name: Teardown SSH tunnel
         if: always()
