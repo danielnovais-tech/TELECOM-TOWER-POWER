@@ -43,7 +43,7 @@ jobs:
 
       - name: Run tower import
         env:
-          AWS_DATABASE_URL: postgresql://${{ secrets.RDS_USER }}:${{ secrets.RDS_PASSWORD }}@localhost:15432/${{ secrets.RDS_DBNAME }}
+          AWS_DATABASE_URL: postgresql://${{ secrets.RDS_USER }}:${{ secrets.RDS_PASSWORD }}@127.0.0.1:15432/${{ secrets.RDS_DBNAME }}?sslmode=require
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python3 import_towers.py --source-env AWS --target-env RAILWAY --verbose
 
