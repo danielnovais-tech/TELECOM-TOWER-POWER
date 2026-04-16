@@ -6,10 +6,27 @@ if [ -f .env ]; then
     chmod 600 .env 2>/dev/null || true
 fi
 
+# ── Load Docker Compose secrets from /run/secrets/ ────────────
+# Secrets mounted as files never appear in `docker inspect`.
+# We bridge them into env vars so the Python app's os.getenv() works unchanged.
+_SECRETS_LOADED=""
+for _sf in /run/secrets/*; do
+    [ -f "$_sf" ] || continue
+    _name=$(basename "$_sf" | tr '[:lower:]-' '[:upper:]_')
+    # Only set if not already provided via -e / environment:
+    if eval "[ -z \"\${${_name}:-}\" ]"; then
+        _val=$(cat "$_sf")
+        export "$_name"="$_val"
+        _SECRETS_LOADED="${_SECRETS_LOADED} ${_name}"
+    fi
+done
+unset _sf _name _val
+
 echo "=== entrypoint.sh ==="
 echo "PORT=${PORT:-8000}"
 echo "DATABASE_URL is set: $([ -n "${DATABASE_URL:-}" ] && echo yes || echo no)"
 echo "REDIS_URL is set: $([ -n "${REDIS_URL:-}" ] && echo yes || echo no)"
+echo "Secrets loaded from files:${_SECRETS_LOADED:- (none)}"
 
 # Build React PWA if source exists but dist does not (non-Docker deploys)
 if [ -d "frontend/src" ] && [ ! -d "frontend_dist" ]; then

@@ -51,12 +51,13 @@ COPY sample_batch_test.csv .
 COPY key_store.json .
 COPY start.sh .
 COPY entrypoint.sh .
+COPY load_secrets.sh .
 
 # Copy built React frontend
 COPY --from=frontend-build /app/dist frontend_dist/
 
 # Create srtm_data directory and fix permissions
-RUN mkdir -p srtm_data job_results && chmod +x start.sh entrypoint.sh && chown -R appuser:appuser /app
+RUN mkdir -p srtm_data job_results && chmod +x start.sh entrypoint.sh load_secrets.sh && chown -R appuser:appuser /app
 
 USER appuser
 

@@ -58,6 +58,19 @@ logger = logging.getLogger("telecom_tower_power")
 # ------------------------------------------------------------
 _SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 
+# ------------------------------------------------------------
+# Scrub secrets from os.environ so they don't linger in /proc/*/environ.
+# All modules that need these values have already captured them above.
+# ------------------------------------------------------------
+for _secret_name in (
+    "DATABASE_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+    "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
+    "SES_SMTP_USERNAME", "SES_SMTP_PASSWORD",
+    "VALID_API_KEYS", "SLACK_WEBHOOK_URL", "POSTGRES_PASSWORD",
+):
+    os.environ.pop(_secret_name, None)
+del _secret_name
+
 def _alert_slack(message: str) -> None:
     """Fire-and-forget Slack alert. Never raises."""
     if not _SLACK_WEBHOOK_URL:
