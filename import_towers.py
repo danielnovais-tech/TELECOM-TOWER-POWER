@@ -98,9 +98,8 @@ def _normalise_url(url: str) -> str:
 
 def _connect(dsn: str, label: str) -> psycopg2.extensions.connection:
     """Open a psycopg2 connection with a timeout and friendly error message."""
-    options = f"connect_timeout={CONNECT_TIMEOUT_S}"
     try:
-        conn = psycopg2.connect(dsn, options=options)
+        conn = psycopg2.connect(dsn, connect_timeout=CONNECT_TIMEOUT_S)
         conn.autocommit = False
         return conn
     except psycopg2.OperationalError as exc:
@@ -373,7 +372,7 @@ def run_import(
     # ── Connect ──────────────────────────────────────────────────
     print("Connecting to source database...")
     src_conn = _connect(source_dsn, "source")
-    src_conn.autocommit = True   # read-only streaming; no transaction needed
+    src_conn.autocommit = False  # named cursor requires a transaction
 
     print("Connecting to target database...")
     tgt_conn = _connect(target_dsn, "target")
