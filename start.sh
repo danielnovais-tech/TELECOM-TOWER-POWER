@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+# Lock down .env if present (owner-read/write only)
+if [ -f .env ]; then
+    chmod 600 .env 2>/dev/null || true
+fi
+
 API_PORT="${PORT:-8000}"
 UI_PORT="${UI_PORT:-8501}"
 

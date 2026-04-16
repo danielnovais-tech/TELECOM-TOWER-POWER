@@ -1,5 +1,11 @@
 #!/bin/sh
 set -u
+
+# Lock down .env if present (owner-read/write only)
+if [ -f .env ]; then
+    chmod 600 .env 2>/dev/null || true
+fi
+
 echo "=== entrypoint.sh ==="
 echo "PORT=${PORT:-8000}"
 echo "DATABASE_URL is set: $([ -n "${DATABASE_URL:-}" ] && echo yes || echo no)"
