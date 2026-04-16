@@ -54,6 +54,29 @@ logging.basicConfig(level=logging.INFO, handlers=[_json_handler])
 logger = logging.getLogger("telecom_tower_power")
 
 # ------------------------------------------------------------
+# Slack alerting
+# ------------------------------------------------------------
+_SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
+
+def _alert_slack(message: str) -> None:
+    """Fire-and-forget Slack alert. Never raises."""
+    if not _SLACK_WEBHOOK_URL:
+        return
+    import threading
+    import urllib.request
+    def _send():
+        try:
+            data = json.dumps({"text": f":rotating_light: *TELECOM TOWER POWER*\n{message}"}).encode()
+            req = urllib.request.Request(
+                _SLACK_WEBHOOK_URL, data=data,
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception:
+            logger.debug("Slack alert failed", exc_info=True)
+    threading.Thread(target=_send, daemon=True).start()
+
+# ------------------------------------------------------------
 # Prometheus metrics
 # ------------------------------------------------------------
 REQUEST_LATENCY = Histogram(
@@ -878,6 +901,11 @@ async def prometheus_middleware(request: Request, call_next):
             "api_key_tier": tier,
         },
     )
+    if response.status_code >= 500:
+        _alert_slack(
+            f"`{request.method} {endpoint}` returned *{response.status_code}* "
+            f"({round(elapsed * 1000)}ms, tier={tier})"
+        )
     return response
 
 # Global platform instance
@@ -964,7 +992,8 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup():
-    # Optionally pre-load some towers from a file
+    tower_count = platform.db.count()
+    _alert_slack(f":white_check_mark: API started — {tower_count:,} towers in DB ({platform.db.backend})")
     pass
 
 @app.on_event("shutdown")

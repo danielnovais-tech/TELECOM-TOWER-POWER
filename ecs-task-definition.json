@@ -81,6 +81,10 @@
         {
           "name": "VALID_API_KEYS",
           "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/VALID_API_KEYS"
+        },
+        {
+          "name": "SLACK_WEBHOOK_URL",
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/SLACK_WEBHOOK_URL"
         }
       ],
       "mountPoints": [
