@@ -1411,6 +1411,9 @@ async def signup_checkout(body: CheckoutRequest):
         raise HTTPException(status_code=503, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("Stripe checkout error: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"checkout_url": url}
 
 @app.post("/stripe/webhook")
