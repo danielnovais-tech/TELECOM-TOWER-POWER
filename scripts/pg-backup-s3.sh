@@ -35,11 +35,12 @@ fi
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 
 # ── Dump ─────────────────────────────────────────────────────────────────
+PG_CONTAINER="${PG_CONTAINER:-telecom-tower-power-postgres-1}"
 TIMESTAMP=$(date +%Y-%m-%d_%H%M)
 DUMP_FILE="/tmp/towers_${TIMESTAMP}.sql.gz"
 
 echo "[$LOG_TAG] $(date -Iseconds) Starting backup..."
-docker exec postgres pg_dump -U telecom -d towers | gzip > "$DUMP_FILE"
+docker exec "$PG_CONTAINER" pg_dump -U telecom -d towers | gzip > "$DUMP_FILE"
 DUMP_SIZE=$(stat -c%s "$DUMP_FILE")
 echo "[$LOG_TAG] Dump size: $((DUMP_SIZE / 1024)) KB"
 
