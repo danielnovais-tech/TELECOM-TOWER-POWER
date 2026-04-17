@@ -1,0 +1,26 @@
+{
+    "$schema": "https://railway.com/railway.schema.json",
+    "build": {
+        "builder": "DOCKERFILE",
+        "dockerfilePath": "Dockerfile",
+        "watchPatterns": [
+            "src/**",
+            "public/**",
+            "index.html",
+            "package.json",
+            "vite.config.js"
+        ]
+    },
+    "deploy": {
+        "healthcheckPath": "/",
+        "healthcheckTimeout": 60,
+        "restartPolicyType": "ON_FAILURE",
+        "restartPolicyMaxRetries": 3,
+        "envVars": {
+            "BACKEND_URL": {
+                "description": "Internal URL of the backend API service (e.g. http://TELECOM-TOWER-POWER.railway.internal:8000)",
+                "required": true
+            }
+        }
+    }
+}
