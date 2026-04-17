@@ -9,6 +9,8 @@ RUN npx vite build
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/nginx.conf.template
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 # Railway sets $PORT at runtime; default to 80 for local
 ENV PORT=80
@@ -16,5 +18,4 @@ ENV BACKEND_URL=http://localhost:8000
 
 EXPOSE ${PORT}
 
-# At startup: substitute env vars into nginx config, then launch nginx
-CMD /bin/sh -c "envsubst '\$PORT \$BACKEND_URL' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+ENTRYPOINT ["/docker-entrypoint.sh"]
