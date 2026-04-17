@@ -120,11 +120,13 @@ class LinkEngine:
 
     @staticmethod
     def terrain_clearance(profile: List[float], d_km: float, f_hz: float,
-                          tx_h: float, rx_h: float) -> float:
+                          tx_h: float, rx_h: float, k_factor: float = 1.33) -> float:
+        """k_factor: effective Earth radius factor (4/3 standard atmosphere)."""
         n = len(profile)
         if n < 2:
             return 1.0
         step = d_km / (n - 1)
+        R_eff = 6371.0 * k_factor  # effective Earth radius in km
         min_clear = float("inf")
         for i, ground in enumerate(profile):
             d_i = i * step
@@ -132,9 +134,14 @@ class LinkEngine:
             if d_i <= 0 or d2 <= 0:
                 continue
             line_h = tx_h + (rx_h - tx_h) * (d_i / d_km)
+            # Earth curvature correction: bulge = d1*d2 / (2*R_eff)
+            d1_m = d_i * 1000
+            d2_m = d2 * 1000
+            earth_bulge = (d1_m * d2_m) / (2 * R_eff * 1000)
+            clearance = line_h - ground - earth_bulge
             fr = LinkEngine.fresnel_radius(d_km, f_hz, d_i, d2)
             if fr > 0:
-                min_clear = min(min_clear, (line_h - ground) / fr)
+                min_clear = min(min_clear, clearance / fr)
         return min_clear if min_clear != float("inf") else 1.0
 
     @staticmethod

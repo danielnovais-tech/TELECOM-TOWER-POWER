@@ -58,6 +58,13 @@ def generate_fresnel_plot(
 
         los_height = tx_asl + (rx_asl - tx_asl) * (distances / distance_km)
 
+        # Earth curvature correction (k=4/3 effective Earth radius)
+        k_factor = 4.0 / 3.0
+        R_eff_m = 6371.0e3 * k_factor  # effective Earth radius in metres
+        d1_arr = distances * 1000       # metres
+        d2_arr = (distance_km - distances) * 1000
+        earth_bulge = (d1_arr * d2_arr) / (2 * R_eff_m)
+
         # Fresnel radius
         c = 299792458
         fresnel_radius = np.zeros_like(distances)
@@ -67,20 +74,22 @@ def generate_fresnel_plot(
             if d1 > 0 and d2 > 0:
                 fresnel_radius[i] = np.sqrt((c * d1 * d2) / (frequency_hz * (d1 + d2)))
 
-        upper_fresnel = los_height + fresnel_radius
-        lower_fresnel = los_height - fresnel_radius
+        # Adjust Fresnel envelope for Earth curvature
+        upper_fresnel = los_height - earth_bulge + fresnel_radius
+        lower_fresnel = los_height - earth_bulge - fresnel_radius
 
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.fill_between(distances, ground, 0, color='sandybrown', alpha=0.6, label='Terrain')
         ax.plot(distances, ground, 'brown', linewidth=1)
-        ax.plot(distances, los_height, 'b--', linewidth=2, label='Line-of-sight')
+        ax.plot(distances, los_height, 'b--', linewidth=1.5, alpha=0.5, label='Geometric LOS')
+        ax.plot(distances, los_height - earth_bulge, 'b-', linewidth=2, label='Effective LOS (k=4/3)')
         ax.fill_between(distances, lower_fresnel, upper_fresnel,
                         color='green', alpha=0.3, label='1st Fresnel Zone')
         ax.plot(0, tx_asl, '^', color='red', markersize=10, zorder=5, label='Tower')
         ax.plot(distance_km, rx_asl, 'v', color='darkgreen', markersize=10, zorder=5, label='Receiver')
         ax.set_xlabel('Distance (km)')
         ax.set_ylabel('Elevation ASL (m)')
-        ax.set_title('Terrain Profile & Fresnel Zone Clearance')
+        ax.set_title('Terrain Profile & Fresnel Zone Clearance (k=4/3)')
         ax.legend(loc='upper right')
         ax.grid(True, linestyle=':', alpha=0.6)
         y_min = min(ground.min(), lower_fresnel.min()) - 20
