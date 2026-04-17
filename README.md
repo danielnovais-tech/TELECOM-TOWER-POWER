@@ -46,11 +46,14 @@ towers.db file automatically — no PostgreSQL required for development.
 | **API** | `telecom_tower_power_api.py` | FastAPI backend — all endpoints, auth, rate limiting |
 | **Database layer** | `tower_db.py` | Dual SQLite/PostgreSQL persistence (auto-detected) |
 | **Job queue** | `job_store.py` | Persistent batch job queue (DB-backed) |
-| **Batch worker** | `batch_worker.py` | Background process — polls jobs, generates PDF ZIPs |
+| **Batch worker (EC2/ECS)** | `batch_worker.py` | Background process — polls jobs, generates PDF ZIPs |
+| **Batch worker (Lambda)** | `sqs_lambda_worker.py` | SQS-triggered Lambda — serverless batch processing |
+| **S3 storage** | `s3_storage.py` | Report upload/download with presigned URLs (3 600 s expiry) |
 | **DB migration** | `migrate_csv_to_db.py` | CLI to load tower CSV into the database |
 | **Schema versioning** | `alembic.ini`, `migrations/` | Alembic database migrations |
 | **Standalone engine** | `telecom_tower_power.py` | Sync library (no server dependency) |
-| **Elevation** | `srtm_elevation.py` | Offline SRTM3 .hgt reader with bilinear interpolation |
+| **Elevation** | `srtm_elevation.py` | SRTM3 .hgt reader — bilinear interp, Redis L2 cache |
+| **Elevation prefetch** | `srtm_prefetch.py` | Pre-download SRTM tiles per country bounding box |
 | **PDF reports** | `pdf_generator.py` | A4 engineering reports with terrain/Fresnel charts |
 | **Billing** | `stripe_billing.py` | Stripe Checkout, webhook handling, key lifecycle |
 | **React UI** | `frontend/src/` | Leaflet map, link analysis, repeater planner |
@@ -208,11 +211,14 @@ X-API-Key: <your-key>
 
 | | Free | Pro | Enterprise |
 |---|---|---|---|
+| **Price** | $0 | R$ 1.000/mês (~$200) | R$ 5.000/mês (~$1 000) |
 | Requests/min | 10 | 100 | 1,000 |
-| Max towers | 20 | 500 | 10,000 |
+| Max towers (per key) | 20 | 500 | 10,000 |
 | PDF export | — | ✓ | ✓ |
 | Batch rows | — | 2,000 | 10,000 |
 | AI assistant | — | ✓ | ✓ |
+
+Tower creation is **rate-limited per API key** — an in-memory counter tracks towers created per key and returns `403` when the tier limit is reached.
 
 ### Endpoints
 
@@ -283,7 +289,8 @@ curl -X POST http://localhost:8000/signup/checkout \
 ### RF Propagation Model
 
 - **Free-Space Path Loss (FSPL)** at 700 / 1800 / 2600 / 3500 MHz
-- **Fresnel zone clearance** — 1st Fresnel radius computed per-link
+- **Earth curvature correction (k = 4/3)** — effective Earth radius $R_{\text{eff}} = 6371 \times 1.33$ km; earth-bulge subtracted at each profile sample point
+- **Fresnel zone clearance** — 1st Fresnel radius computed per-link with earth-bulge correction for long-distance paths
 - **Terrain-aware LOS** — 30-point elevation profile (SRTM3 + Open-Elevation API fallback)
 - **Link budget** — TX power, antenna gains, cable losses, fade margin
 
@@ -298,15 +305,46 @@ The `plan_repeater` endpoint uses a **terrain-aware Dijkstra** algorithm:
 
 ### Elevation Data
 
-Three-layer resolution with automatic failover:
+Four-layer resolution with automatic failover:
 
 | Priority | Source | Resolution | Latency |
 |---|---|---|---|
-| 1 | In-memory cache | exact | ~0 ms |
-| 2 | SRTM `.hgt` tiles | ~90 m | ~1 ms |
-| 3 | Open-Elevation API | variable | ~200 ms |
+| 1 | In-memory tile cache (dict) | exact | ~0 ms |
+| 2 | Redis L2 cache (`SRTM_REDIS_URL`) | exact | ~1 ms |
+| 3 | SRTM `.hgt` tiles on disk | ~90 m | ~2 ms |
+| 4 | Open-Elevation API | variable | ~200 ms |
 
-Place `.hgt` files in `./srtm_data/` (or set `SRTM_DATA_DIR`).
+Redis stores raw tile blobs (key `srtm:{tile}`, 7-day TTL). In Docker Compose, Redis runs with `--maxmemory 256mb --maxmemory-policy allkeys-lru`.
+
+Place `.hgt` files in `./srtm_data/` (or set `SRTM_DATA_DIR`). Use `srtm_prefetch.py` to pre-download all tiles for a country:
+
+```bash
+python srtm_prefetch.py --country BR    # downloads ~240 tiles for Brazil
+```
+
+### Serverless Batch Pipeline (SQS + Lambda)
+
+The platform uses **hybrid batch processing**:
+
+| Batch size | Processing mode | Delivery |
+|---|---|---|
+| ≤ 100 rows | **Synchronous** — API generates ZIP inline | Direct HTTP response |
+| > 100 rows | **Asynchronous** — SQS → Lambda worker → S3 | Presigned URL (1 h expiry) |
+
+```
+Client ─▸ POST /batch_reports ─▸ API
+                                 ├── ≤100 rows → generate ZIP → 200 response
+                                 └── >100 rows → persist job → SQS message
+                                                                   │
+                                     S3 ◂── ZIP ◂── Lambda worker ◂┘
+                                      │
+                  GET /jobs/{id}/download ◂── presigned URL ◂── S3
+```
+
+Resources (SAM `template.yaml`):
+- **SQS queue** `telecom-batch-jobs-{stage}` with DLQ (max 3 retries)
+- **Lambda** `sqs_lambda_worker.handler` (1 024 MB, 900 s timeout)
+- **S3 bucket** for generated report ZIPs
 
 ### PDF Reports
 
@@ -349,6 +387,30 @@ Generated with ReportLab + Matplotlib:
 - Active batch jobs gauge
 - Batch job duration percentiles
 
+### Alerting
+
+**Alertmanager** (`alertmanager.yml`) is configured with three receivers:
+
+| Receiver | Channel | Active |
+|---|---|---|
+| `default` | Slack `#alerts` | Pending — Slack webhook not yet provisioned |
+| `critical` | Slack `#alerts-critical` + SES email | Email active; Slack pending |
+| `warning` | Slack `#alerts-warning` | Pending — Slack webhook not yet provisioned |
+
+> **Note:** `SLACK_WEBHOOK_URL` is currently empty (`secrets/slack_webhook_url`). Only **SES email alerts** on critical severity are operational. Slack integration will activate once the webhook is configured.
+
+**Prometheus alert rules** (`prometheus_alert_rules.yml`) cover: high error rate, high latency, instance down, disk usage.
+
+### Route 53 DNS Failover (scripted, not yet deployed)
+
+`scripts/setup_failover.sh` is a complete script that:
+1. Creates an HTTPS health check on the ALB (`/health` endpoint)
+2. Sets up failover CNAME records for `api.telecomtowerpower.com.br`:
+   - **PRIMARY** → ALB (health-checked, TTL 60 s)
+   - **SECONDARY** → Railway (`web-production-90b1f.up.railway.app`)
+
+The script is ready to run but **has not been executed yet** — automatic DNS failover to Railway is planned, not active.
+
 ---
 
 ## Environment Variables
@@ -357,6 +419,7 @@ Generated with ReportLab + Matplotlib:
 |---|---|---|
 | `DATABASE_URL` | *(none → SQLite)* | PostgreSQL connection string; omit for local SQLite |
 | `SRTM_DATA_DIR` | `./srtm_data` | Path to SRTM `.hgt` tile directory |
+| `SRTM_REDIS_URL` | *(none)* | Redis URL for L2 SRTM tile cache (e.g. `redis://redis:6379/0`) |
 | `CORS_ORIGINS` | `https://app.telecomtowerpower.com` | Comma-separated allowed CORS origins |
 | `MAX_UPLOAD_BYTES` | `10485760` (10 MB) | Maximum request body size |
 | `MAX_BATCH_ROWS` | `100` | Maximum rows per batch CSV upload |
@@ -389,14 +452,54 @@ docker run -p 8000:8000 -v ./srtm_data:/app/srtm_data:ro telecom-tower-power
 docker-compose up
 ```
 
-Starts seven services:
+Starts nine services:
 - **postgres** — PostgreSQL 16 database
+- **pgbouncer** — PgBouncer 1.23 connection pooler (transaction mode, pool 20, max 200, port 6432)
+- **redis** — Redis 7 for SRTM tile L2 cache (256 MB, LRU eviction)
 - **api** — FastAPI on port 8000 with healthcheck
 - **worker** — Background batch job processor
 - **frontend** — Streamlit on port 8501
 - **load-towers** — one-shot CSV → DB seeder
 - **prometheus** — Metrics scraper on port 9090
 - **grafana** — Dashboards on port 3001
+
+### AWS SAM (Lambda + API Gateway)
+
+Serverless deployment via SAM (`template.yaml`):
+
+```bash
+# Build (requires Docker for python3.12 runtime)
+sam build --use-container --build-dir /mnt/sam-workspace/build
+
+# Deploy
+sam deploy --template-file /mnt/sam-workspace/build/template.yaml \
+  --stack-name telecom-tower-power-prod --region sa-east-1 \
+  --resolve-s3 --capabilities CAPABILITY_IAM \
+  --parameter-overrides "Stage=prod DatabaseUrl=postgresql+asyncpg://..."
+```
+
+Creates: API Gateway (HTTP API) → Lambda (FastAPI via Mangum), SQS queue + DLQ, batch-worker Lambda, S3 reports bucket, IAM roles.
+
+The build uses `BuildMethod: makefile` to precisely control which files and dependencies are packaged (183 MB unzipped, 54 MB zipped — well under the 262 MB Lambda limit). `boto3`/`botocore` are excluded (already in the Lambda runtime).
+
+### AWS ECS (Fargate)
+
+Full ECS deployment with ALB:
+
+- **ECS task** (`ecs-task-definition.json`) — API + worker containers
+- **EFS volumes** — shared `srtm-data` and `job-results` across tasks (transit encryption enabled)
+- **ALB** with target group `telecom-tower-power-api-tg` on port 8000
+- **EC2 manage** (`scripts/manage_ec2_alb.sh`) — register/deregister EC2 from ALB for cold standby
+
+> **Operational lesson — stale ALB targets:** If an EC2 instance is terminated without deregistering from the ALB target group, the orphaned target causes intermittent 502 errors. Always run `scripts/manage_ec2_alb.sh deregister` before stopping an instance.
+
+### RDS Proxy (code-ready, not yet deployed)
+
+The codebase fully supports RDS Proxy for Lambda → RDS connection pooling:
+- `sqs_lambda_worker.py` — detects `RDS_PROXY_HOST` env var and switches to IAM auth token generation
+- `template.yaml` — conditional `HasRdsProxy` parameter gates VPC config and `rds-db:connect` IAM policy
+
+RDS Proxy requires a paid AWS account (free-tier restriction). Until deployed, Lambda connects directly via `DATABASE_URL`.
 
 ### Railway
 
@@ -455,7 +558,10 @@ TELECOM-TOWER-POWER/
 ├── migrate_csv_to_db.py         # CSV → DB migration CLI
 ├── stripe_billing.py            # Stripe integration + key store
 ├── pdf_generator.py             # PDF report builder
-├── srtm_elevation.py            # SRTM .hgt tile reader
+├── srtm_elevation.py            # SRTM .hgt tile reader (+ Redis L2 cache)
+├── srtm_prefetch.py             # Pre-download SRTM tiles per country
+├── sqs_lambda_worker.py         # SQS → Lambda batch worker
+├── s3_storage.py                # S3 upload/download + presigned URLs
 ├── load_towers.py               # CSV → API tower loader
 ├── frontend.py                  # Streamlit UI (API-backed)
 ├── streamlit_app.py             # Standalone Streamlit (no API needed)
@@ -467,10 +573,13 @@ TELECOM-TOWER-POWER/
 ├── requirements.txt             # Python dependencies
 ├── LICENSE                      # Commercial license
 ├── Dockerfile                   # Multi-stage Docker build
-├── docker-compose.yml           # Full-stack orchestration (7 services)
+├── docker-compose.yml           # Full-stack orchestration (9 services)
 ├── start.sh                     # Full-stack launcher script
 ├── render.yaml                  # Render deployment config (PG + worker)
 ├── railway.json                 # Railway deployment config
+├── template.yaml                # SAM/CloudFormation (Lambda + API GW + SQS)
+├── Makefile                     # Lambda build (controls package contents)
+├── ecs-task-definition.json     # ECS Fargate task (API + worker + EFS)
 ├── Procfile                     # Heroku/PaaS process file
 ├── .dockerignore
 ├── frontend/                    # React + Leaflet SPA

@@ -18,7 +18,5 @@ alembic
 sqlalchemy
 asyncpg
 aiosqlite
-boto3
 aiofiles
 geopy
-psycopg2-binary

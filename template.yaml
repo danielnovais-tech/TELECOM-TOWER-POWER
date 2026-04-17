@@ -39,15 +39,60 @@ Parameters:
     Type: String
     Default: prod
     AllowedValues: [dev, staging, prod]
+  # ---- RDS Proxy / VPC parameters ----
+  RdsProxyHost:
+    Type: String
+    Description: RDS Proxy endpoint hostname (enables IAM auth + connection pooling)
+    Default: ""
+  RdsProxyPort:
+    Type: String
+    Description: RDS Proxy port
+    Default: "5432"
+  DbName:
+    Type: String
+    Description: Database name on RDS
+    Default: "telecom_tower_power"
+  DbUser:
+    Type: String
+    Description: Database user for RDS Proxy IAM auth
+    Default: "telecom_admin"
+  VpcSubnetIds:
+    Type: CommaDelimitedList
+    Description: VPC subnet IDs for Lambda (required when using RDS Proxy)
+    Default: ""
+  LambdaSecurityGroupId:
+    Type: String
+    Description: Security group ID for Lambda to reach RDS Proxy
+    Default: ""
+  BatchWorkerConcurrency:
+    Type: Number
+    Description: Max concurrent Lambda batch workers (limits DB connections)
+    Default: 5
+    MinValue: 1
+    MaxValue: 50
+
+Conditions:
+  HasRdsProxy: !Not [!Equals [!Ref RdsProxyHost, ""]]
+  HasVpcConfig: !And
+    - !Not [!Equals [!Ref LambdaSecurityGroupId, ""]]
+    - !Not [!Equals [!Select [0, !Ref VpcSubnetIds], ""]]
 
 Resources:
   # ---- Lambda Function (API) ----
   TelecomTowerPowerFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
     Properties:
       Handler: lambda_handler.handler
       CodeUri: .
       Description: Telecom Tower Power FastAPI application
+      VpcConfig:
+        !If
+          - HasVpcConfig
+          - SecurityGroupIds: [!Ref LambdaSecurityGroupId]
+            SubnetIds: !Ref VpcSubnetIds
+          - !Ref "AWS::NoValue"
       Environment:
         Variables:
           DATABASE_URL: !Ref DatabaseUrl
@@ -58,8 +103,16 @@ Resources:
           SRTM_DATA_DIR: /tmp/srtm_data
           S3_BUCKET_NAME: !Ref ReportsBucket
           SQS_QUEUE_URL: !Ref BatchJobQueue
+          RDS_PROXY_HOST: !Ref RdsProxyHost
+          RDS_PROXY_PORT: !Ref RdsProxyPort
+          DB_NAME: !Ref DbName
+          DB_USER: !Ref DbUser
       Policies:
         - AWSLambdaBasicExecutionRole
+        - !If
+          - HasVpcConfig
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - !Ref "AWS::NoValue"
         - Statement:
             - Effect: Allow
               Action:
@@ -70,6 +123,13 @@ Resources:
               Action:
                 - sqs:SendMessage
               Resource: !GetAtt BatchJobQueue.Arn
+        - !If
+          - HasRdsProxy
+          - Statement:
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:*/${DbUser}"
+          - !Ref "AWS::NoValue"
       Events:
         ApiCatchAll:
           Type: HttpApi
@@ -87,22 +147,39 @@ Resources:
   # ---- Lambda Function (SQS Batch Worker) ----
   BatchWorkerFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
     Properties:
       Handler: sqs_lambda_worker.handler
       CodeUri: .
       Description: >
         SQS-triggered Lambda that processes batch PDF generation jobs.
         Reads job from DB, generates PDFs, uploads ZIP to S3.
+        Uses RDS Proxy with IAM auth when RDS_PROXY_HOST is set.
       MemorySize: 1024
       Timeout: 900
+      VpcConfig:
+        !If
+          - HasVpcConfig
+          - SecurityGroupIds: [!Ref LambdaSecurityGroupId]
+            SubnetIds: !Ref VpcSubnetIds
+          - !Ref "AWS::NoValue"
       Environment:
         Variables:
           DATABASE_URL: !Ref DatabaseUrl
           S3_BUCKET_NAME: !Ref ReportsBucket
           S3_PREFIX: "batch-results/"
           SRTM_DATA_DIR: /tmp/srtm_data
+          RDS_PROXY_HOST: !Ref RdsProxyHost
+          RDS_PROXY_PORT: !Ref RdsProxyPort
+          DB_NAME: !Ref DbName
+          DB_USER: !Ref DbUser
       Policies:
         - AWSLambdaBasicExecutionRole
+        - !If
+          - HasVpcConfig
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - !Ref "AWS::NoValue"
         - Statement:
             - Effect: Allow
               Action:
@@ -115,6 +192,13 @@ Resources:
                 - sqs:DeleteMessage
                 - sqs:GetQueueAttributes
               Resource: !GetAtt BatchJobQueue.Arn
+        - !If
+          - HasRdsProxy
+          - Statement:
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:*/${DbUser}"
+          - !Ref "AWS::NoValue"
       Events:
         SQSTrigger:
           Type: SQS
@@ -195,3 +279,7 @@ Outputs:
   ReportsBucketName:
     Description: S3 bucket for generated reports
     Value: !Ref ReportsBucket
+  RdsProxyEndpoint:
+    Condition: HasRdsProxy
+    Description: RDS Proxy endpoint for database connections
+    Value: !Ref RdsProxyHost

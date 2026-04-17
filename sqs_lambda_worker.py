@@ -10,7 +10,11 @@ Architecture:
         → updates batch_jobs in PostgreSQL (via RDS Proxy)
 
 Environment variables:
-    DATABASE_URL        – PostgreSQL connection string (use RDS Proxy endpoint)
+    DATABASE_URL        – PostgreSQL connection string (fallback when RDS Proxy not set)
+    RDS_PROXY_HOST      – RDS Proxy endpoint (enables IAM auth + connection pooling)
+    RDS_PROXY_PORT      – RDS Proxy port (default: 5432)
+    DB_NAME             – Database name (default: telecom_tower_power)
+    DB_USER             – Database user for IAM auth (default: telecom_admin)
     S3_BUCKET_NAME      – S3 bucket for report output
     S3_PREFIX           – Key prefix (default: "batch-results/")
     SRTM_DATA_DIR       – Local dir for SRTM tiles (default: /tmp/srtm_data)
@@ -37,6 +41,14 @@ S3_BUCKET = os.environ.get("S3_BUCKET_NAME", "")
 S3_PREFIX = os.environ.get("S3_PREFIX", "batch-results/")
 SRTM_DATA_DIR = os.environ.get("SRTM_DATA_DIR", "/tmp/srtm_data")
 
+# RDS Proxy config (preferred – connection pooling + IAM auth)
+RDS_PROXY_HOST = os.environ.get("RDS_PROXY_HOST", "")
+RDS_PROXY_PORT = int(os.environ.get("RDS_PROXY_PORT", "5432"))
+DB_NAME = os.environ.get("DB_NAME", "telecom_tower_power")
+DB_USER = os.environ.get("DB_USER", "telecom_admin")
+_USE_RDS_PROXY = bool(RDS_PROXY_HOST)
+
+# Fallback: direct DATABASE_URL (no proxy)
 _RAW_DATABASE_URL = os.environ.get("DATABASE_URL", "")
 DATABASE_URL = _RAW_DATABASE_URL
 if DATABASE_URL:
@@ -48,7 +60,8 @@ if DATABASE_URL:
 # Lazy-initialised clients
 _s3 = None
 _db_conn = None
-_USE_PG = bool(DATABASE_URL)
+_USE_PG = _USE_RDS_PROXY or bool(DATABASE_URL)
+_rds_client = None
 
 
 def _get_s3():
@@ -58,14 +71,63 @@ def _get_s3():
     return _s3
 
 
+def _generate_rds_auth_token() -> str:
+    """Generate a short-lived IAM auth token for RDS Proxy connection."""
+    global _rds_client
+    if _rds_client is None:
+        _rds_client = boto3.client("rds", region_name=os.environ.get("AWS_REGION", "sa-east-1"))
+    return _rds_client.generate_db_auth_token(
+        DBHostname=RDS_PROXY_HOST,
+        Port=RDS_PROXY_PORT,
+        DBUsername=DB_USER,
+    )
+
+
 def _get_db():
-    """Return a psycopg2 connection (reused across invocations in warm Lambda).
-    Only used when DATABASE_URL is set (PostgreSQL)."""
+    """Return a psycopg2 connection, using RDS Proxy IAM auth when available.
+
+    When RDS_PROXY_HOST is set:
+      - Generates a short-lived IAM auth token (valid ~15 min)
+      - Connects with SSL required (RDS Proxy enforces TLS)
+      - Token is regenerated on each new connection (cold start or reconnect)
+
+    When only DATABASE_URL is set:
+      - Falls back to direct psycopg2 connection (password in URL)
+
+    Connection is reused across warm Lambda invocations.
+    """
     global _db_conn
     import psycopg2
-    if _db_conn is None or _db_conn.closed:
+
+    if _db_conn is not None and not _db_conn.closed:
+        try:
+            # Verify connection is still alive (proxy may have closed it)
+            _db_conn.cursor().execute("SELECT 1")
+            return _db_conn
+        except Exception:
+            logger.warning("Stale DB connection detected, reconnecting...")
+            try:
+                _db_conn.close()
+            except Exception:
+                pass
+            _db_conn = None
+
+    if _USE_RDS_PROXY:
+        token = _generate_rds_auth_token()
+        _db_conn = psycopg2.connect(
+            host=RDS_PROXY_HOST,
+            port=RDS_PROXY_PORT,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=token,
+            sslmode="require",
+        )
+        logger.info("Connected to RDS via Proxy (IAM auth): %s", RDS_PROXY_HOST)
+    else:
         _db_conn = psycopg2.connect(DATABASE_URL)
-        _db_conn.autocommit = False
+        logger.info("Connected to database directly (DATABASE_URL)")
+
+    _db_conn.autocommit = False
     return _db_conn
 
 
