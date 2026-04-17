@@ -1654,7 +1654,11 @@ if FRONTEND_DIR.is_dir():
         raw = request.scope.get("path", "")
         decoded = unquote(raw)
         if ".." in decoded:
-            return JSONResponse(status_code=400, content={"detail": "Invalid path"})
+            return Response(
+                status_code=400,
+                content='{"detail":"Invalid path"}',
+                media_type="application/json",
+            )
         return await call_next(request)
 
     @app.middleware("http")
