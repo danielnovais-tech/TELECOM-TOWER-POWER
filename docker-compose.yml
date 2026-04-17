@@ -21,7 +21,7 @@ services:
 
   # ── PgBouncer (connection pooling) ─────────────────────────
   pgbouncer:
-    image: edoburu/pgbouncer:1.23.1-p2
+    image: edoburu/pgbouncer:v1.25.1-p0
     environment:
       - DATABASE_URL=postgres://telecom:${POSTGRES_PASSWORD:-telecom_secret}@postgres:5432/towers
       - POOL_MODE=transaction
