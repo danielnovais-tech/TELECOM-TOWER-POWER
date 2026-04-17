@@ -1,0 +1,20 @@
+{
+  "name": "telecom-tower-power-client",
+  "version": "0.1.0",
+  "description": "TypeScript/JavaScript SDK for the TELECOM TOWER POWER API",
+  "main": "src/index.ts",
+  "scripts": {
+    "generate": "npx openapi --input ../../openapi.json --output src --client fetch --name TelecomTowerPowerClient"
+  },
+  "keywords": [
+    "telecom",
+    "tower",
+    "api",
+    "sdk"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "openapi-typescript-codegen": "^0.30.0"
+  }
+}

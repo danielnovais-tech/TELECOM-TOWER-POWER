@@ -239,3 +239,17 @@ class TelecomTowerAPIClient:
 
     def signup_status(self, email: str) -> dict:
         return self._post("/signup/status", json_body=KeyLookupRequest(email=email).model_dump())
+
+    # -- portal endpoints ---------------------------------------------------
+
+    def portal_profile(self) -> dict:
+        return self._get("/portal/profile")
+
+    def portal_usage(self) -> dict:
+        return self._get("/portal/usage")
+
+    def portal_jobs(self, limit: int = 20) -> dict:
+        return self._get("/portal/jobs", params={"limit": limit})
+
+    def portal_billing(self) -> dict:
+        return self._get("/portal/billing")

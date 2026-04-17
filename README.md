@@ -393,23 +393,24 @@ Generated with ReportLab + Matplotlib:
 
 | Receiver | Channel | Active |
 |---|---|---|
-| `default` | Slack `#alerts` | Pending — Slack webhook not yet provisioned |
-| `critical` | Slack `#alerts-critical` + SES email | Email active; Slack pending |
-| `warning` | Slack `#alerts-warning` | Pending — Slack webhook not yet provisioned |
+| `default` | Slack `#alerts` | ✅ Active |
+| `critical` | Slack `#alerts-critical` + SES email | ✅ Active |
+| `warning` | Slack `#alerts-warning` | ✅ Active |
 
-> **Note:** `SLACK_WEBHOOK_URL` is currently empty (`secrets/slack_webhook_url`). Only **SES email alerts** on critical severity are operational. Slack integration will activate once the webhook is configured.
+> **Slack** is fully operational — `SLACK_WEBHOOK_URL` is configured in SSM, ECS task definition, and Railway env vars. The API also sends fire-and-forget Slack alerts on 5xx errors and startup via `_alert_slack()`.
 
 **Prometheus alert rules** (`prometheus_alert_rules.yml`) cover: high error rate, high latency, instance down, disk usage.
 
-### Route 53 DNS Failover (scripted, not yet deployed)
+### Route 53 DNS Failover
 
-`scripts/setup_failover.sh` is a complete script that:
-1. Creates an HTTPS health check on the ALB (`/health` endpoint)
-2. Sets up failover CNAME records for `api.telecomtowerpower.com.br`:
+Automatic DNS failover is **deployed and active**:
+
+1. **Health check** (`f32babca-ad29-4d2c-9593-a455d11e5ab7`) — HTTPS string-match on ALB `/health`, checks for `"healthy"`, all 10 AWS regions reporting healthy
+2. **Failover CNAME records** for `api.telecomtowerpower.com.br`:
    - **PRIMARY** → ALB (health-checked, TTL 60 s)
-   - **SECONDARY** → Railway (`web-production-90b1f.up.railway.app`)
+   - **SECONDARY** → Railway (`web-production-90b1f.up.railway.app`, TTL 60 s)
 
-The script is ready to run but **has not been executed yet** — automatic DNS failover to Railway is planned, not active.
+If the ALB health check fails, Route 53 automatically routes traffic to Railway within ~60 s.
 
 ---
 

@@ -760,3 +760,170 @@ html, body, #root {
     max-width: 95%;
   }
 }
+
+/* ---------- portal ---------- */
+.portal-page {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 2rem;
+  overflow-y: auto;
+}
+.portal-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 2rem;
+  max-width: 860px;
+  width: 100%;
+}
+.portal-header {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 1.2rem;
+}
+.portal-header h2 {
+  font-size: 1.3rem;
+  margin: 0;
+}
+.portal-tier-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  color: #fff;
+}
+.portal-tabs {
+  display: flex;
+  gap: 0.4rem;
+  border-bottom: 1px solid #334155;
+  padding-bottom: 0.5rem;
+  margin-bottom: 1.2rem;
+}
+.portal-tabs button {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.portal-tabs button:hover {
+  color: #e2e8f0;
+  background: rgba(255,255,255,0.04);
+}
+.portal-tabs button.active {
+  color: #38bdf8;
+  border-bottom: 2px solid #38bdf8;
+}
+.portal-section h3 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  margin: 1.2rem 0 0.6rem;
+}
+.portal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.8rem;
+}
+.portal-stat {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.portal-stat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+.portal-stat-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.portal-stat-value.mono {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+.portal-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  color: #fff;
+  text-transform: capitalize;
+}
+.portal-table-wrap {
+  overflow-x: auto;
+  margin-top: 0.6rem;
+}
+.portal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.portal-table th {
+  text-align: left;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid #334155;
+}
+.portal-table td {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid rgba(51,65,85,0.5);
+  color: #cbd5e1;
+}
+.portal-table td.mono {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.78rem;
+}
+.portal-table tbody tr:hover {
+  background: rgba(255,255,255,0.02);
+}
+.portal-link {
+  color: #38bdf8;
+  text-decoration: none;
+}
+.portal-link:hover {
+  text-decoration: underline;
+}
+.portal-empty {
+  color: #64748b;
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 2rem 0;
+}
+.portal-error {
+  padding: 0.6rem 0.8rem;
+  background: #450a0a;
+  border: 1px solid #991b1b;
+  border-radius: 6px;
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 768px) {
+  .portal-page {
+    padding: 1rem;
+  }
+  .portal-grid {
+    grid-template-columns: 1fr;
+  }
+}

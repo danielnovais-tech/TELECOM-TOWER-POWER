@@ -39,6 +39,9 @@ ec2.telecomtowerpower.com.br {
         handle /profile* {
                 reverse_proxy localhost:8000
         }
+        handle /portal* {
+                reverse_proxy localhost:8000
+        }
         handle /webhook* {
                 reverse_proxy localhost:8001
         }

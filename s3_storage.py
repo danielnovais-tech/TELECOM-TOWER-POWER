@@ -44,7 +44,9 @@ def _get_s3_client():
     return _s3_client
 
 
-def _s3_key(job_id: str) -> str:
+def _s3_key(job_id: str, tier: str = "") -> str:
+    if tier:
+        return f"{S3_PREFIX}{tier}/{job_id}.zip"
     return f"{S3_PREFIX}{job_id}.zip"
 
 
@@ -61,14 +63,18 @@ def _local_path(job_id: str) -> str:
 # ------------------------------------------------------------------
 
 
-def upload_result(job_id: str, zip_data: bytes) -> str:
+def upload_result(job_id: str, zip_data: bytes, tier: str = "") -> str:
     """Store a ZIP result and return its storage location.
 
     Returns an S3 key (``s3://bucket/key``) when S3 is configured,
     otherwise a local file path.
+
+    When *tier* is provided (e.g. ``"pro"``, ``"enterprise"``), the object
+    is stored under a tier-specific prefix so that S3 lifecycle rules can
+    apply different retention periods per tier.
     """
     if S3_BUCKET:
-        key = _s3_key(job_id)
+        key = _s3_key(job_id, tier=tier)
         _get_s3_client().put_object(
             Bucket=S3_BUCKET,
             Key=key,

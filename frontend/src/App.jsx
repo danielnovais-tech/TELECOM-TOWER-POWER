@@ -4,6 +4,7 @@ import Sidebar from "./Sidebar";
 import Signup from "./Signup";
 import SignupSuccess from "./SignupSuccess";
 import BedrockPlayground from "./BedrockPlayground";
+import Portal from "./Portal";
 import { fetchTowers, fetchHealth, setApiKey, onRateLimitChange } from "./api";
 import "./App.css";
 
@@ -93,6 +94,9 @@ export default function App() {
           <button className={page === "signup" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("signup"); }}>
             Get API Key
           </button>
+          <button className={page === "portal" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("portal"); }}>
+            My Account
+          </button>
         </nav>
       </header>
 
@@ -145,6 +149,8 @@ export default function App() {
             </button>
           </div>
         </div>
+      ) : page === "portal" ? (
+        <Portal />
       ) : (
         <Signup onKeyReceived={(key) => { setApiKey(key); setPage("map"); }} />
       )}

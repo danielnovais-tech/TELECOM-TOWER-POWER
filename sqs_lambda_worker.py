@@ -395,7 +395,7 @@ def _fetch_job(job_id: str) -> Optional[Dict[str, Any]]:
 
 # ── Core job processor ───────────────────────────────────────────
 
-def _process_single_job(job_id: str):
+def _process_single_job(job_id: str, tier: str = ""):
     """Process one batch job: generate PDFs → ZIP → S3."""
     from pdf_generator import build_pdf_report
     from srtm_elevation import SRTMReader
@@ -472,8 +472,9 @@ def _process_single_job(job_id: str):
     zip_buf.seek(0)
     zip_bytes = zip_buf.getvalue()
 
-    # Upload to S3
-    s3_key = f"{S3_PREFIX}{job_id}/report.zip"
+    # Upload to S3 (tier-prefixed for lifecycle retention rules)
+    tier_segment = f"{tier}/" if tier else ""
+    s3_key = f"{S3_PREFIX}{tier_segment}{job_id}/report.zip"
     _get_s3().put_object(
         Bucket=S3_BUCKET,
         Key=s3_key,
@@ -541,7 +542,7 @@ def handler(event, context):
                             receivers_json, len(body["receivers"]),
                         )
 
-            _process_single_job(job_id)
+            _process_single_job(job_id, tier=body.get("tier", ""))
 
         except Exception:
             logger.exception("Failed to process SQS message %s", message_id)

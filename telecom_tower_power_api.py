@@ -757,6 +757,14 @@ api_key_header = APIKeyHeader(name="X-API-Key")
 # ---- Per-key tower creation counter ----
 _towers_created_per_key: Dict[str, int] = {}
 
+# ---- Per-key cumulative request counter (for usage portal) ----
+_usage_counters: Dict[str, Dict] = {}
+
+def _track_usage(api_key: str):
+    """Increment per-key request counter."""
+    entry = _usage_counters.setdefault(api_key, {"requests": 0, "since": time.time()})
+    entry["requests"] += 1
+
 # ---- Sliding-window rate limiter (per API key) ----
 _rate_buckets: Dict[str, collections.deque] = {}
 
@@ -797,6 +805,7 @@ async def verify_api_key(request: Request, api_key: str = Security(api_key_heade
         else:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
     remaining, limit = _check_rate_limit(api_key, key_data["tier"])
+    _track_usage(api_key)
     request.state.tier = key_data["tier"].value
     request.state.rate_limit_remaining = remaining
     request.state.rate_limit_limit = limit
@@ -1159,6 +1168,7 @@ async def export_report_pdf(tower_id: str, lat: float, lon: float, height_m: flo
 
 @app.post("/batch_reports")
 async def batch_reports(
+    request: Request,
     tower_id: str,
     csv_file: UploadFile = File(...),
     receiver_height_m: float = 10.0,
@@ -1223,11 +1233,13 @@ async def batch_reports(
             for rx in receivers
         ]
         receivers_json = json.dumps(receivers_list)
+        _caller_key = request.headers.get("x-api-key", "")
         job_store.create_job(
             job_id=job_id,
             tower_id=tower_id,
             receivers_json=receivers_json,
             total=len(receivers),
+            api_key=_caller_key,
         )
 
         # Publish to SQS if configured (serverless Lambda worker path)
@@ -1237,6 +1249,7 @@ async def batch_reports(
                 MessageBody=json.dumps({
                     "job_id": job_id,
                     "tower_id": tower_id,
+                    "tier": key_data["tier"].value,
                 }),
             )
 
@@ -1535,6 +1548,131 @@ async def signup_status(body: KeyLookupRequest, request: Request):
         "email": info["email"],
         "has_subscription": info.get("stripe_subscription_id") is not None,
     }
+
+# ------------------------------------------------------------
+# Customer self-service portal
+# ------------------------------------------------------------
+
+@app.get("/portal/profile")
+async def portal_profile(
+    request: Request,
+    key_data: Dict = Depends(verify_api_key),
+):
+    """Return the caller's profile: masked API key, tier, limits, and account info."""
+    raw_key = request.headers.get("x-api-key", "")
+    masked = raw_key[:8] + "…" + raw_key[-4:] if len(raw_key) > 12 else raw_key
+    tier = key_data["tier"]
+    limits = TIER_LIMITS[tier]
+    info = stripe_billing.lookup_key(raw_key) or {}
+    return {
+        "api_key_masked": masked,
+        "tier": tier.value,
+        "email": info.get("email") or key_data.get("owner", ""),
+        "limits": {
+            "requests_per_min": limits["requests_per_min"],
+            "max_towers": limits["max_towers"],
+            "max_batch_rows": limits["max_batch_rows"],
+            "pdf_export": limits["pdf_export"],
+        },
+        "towers_created": _towers_created_per_key.get(raw_key, 0),
+        "has_subscription": bool(info.get("stripe_subscription_id")),
+        "created": info.get("created"),
+    }
+
+
+@app.get("/portal/usage")
+async def portal_usage(
+    request: Request,
+    key_data: Dict = Depends(verify_api_key),
+):
+    """Return usage statistics for the caller's API key."""
+    raw_key = request.headers.get("x-api-key", "")
+    tier = key_data["tier"]
+    limits = TIER_LIMITS[tier]
+    usage = _usage_counters.get(raw_key, {"requests": 0, "since": time.time()})
+    bucket = _rate_buckets.get(raw_key, collections.deque())
+    # Count requests in current window
+    now = time.monotonic()
+    current_window = sum(1 for ts in bucket if ts > now - 60.0)
+    return {
+        "requests_total": usage["requests"],
+        "tracking_since": usage["since"],
+        "requests_current_minute": current_window,
+        "rate_limit": limits["requests_per_min"],
+        "towers_created": _towers_created_per_key.get(raw_key, 0),
+        "towers_limit": limits["max_towers"],
+    }
+
+
+@app.get("/portal/jobs")
+async def portal_jobs(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    key_data: Dict = Depends(verify_api_key),
+):
+    """Return the caller's batch jobs (most recent first)."""
+    raw_key = request.headers.get("x-api-key", "")
+    jobs = job_store.list_jobs_by_api_key(raw_key, limit=limit)
+    return {
+        "jobs": [
+            {
+                "id": j["id"],
+                "status": j["status"],
+                "progress": j["progress"],
+                "total": j["total"],
+                "tower_id": j["tower_id"],
+                "result_path": j.get("result_path"),
+                "error": j.get("error"),
+                "created_at": j["created_at"],
+                "updated_at": j["updated_at"],
+            }
+            for j in jobs
+        ],
+        "count": len(jobs),
+    }
+
+
+@app.get("/portal/billing")
+async def portal_billing(
+    request: Request,
+    key_data: Dict = Depends(verify_api_key),
+):
+    """Return billing information from Stripe for the caller."""
+    raw_key = request.headers.get("x-api-key", "")
+    info = stripe_billing.lookup_key(raw_key) or {}
+    customer_id = info.get("stripe_customer_id")
+
+    result = {
+        "tier": key_data["tier"].value,
+        "has_subscription": bool(info.get("stripe_subscription_id")),
+        "stripe_customer_id": customer_id,
+        "invoices": [],
+    }
+
+    # Fetch recent invoices from Stripe if customer exists
+    if customer_id and stripe_billing.STRIPE_SECRET_KEY:
+        try:
+            invoices = stripe_billing.stripe.Invoice.list(
+                customer=customer_id, limit=10
+            )
+            result["invoices"] = [
+                {
+                    "id": inv.id,
+                    "amount_due": inv.amount_due,
+                    "amount_paid": inv.amount_paid,
+                    "currency": inv.currency,
+                    "status": inv.status,
+                    "created": inv.created,
+                    "invoice_url": inv.hosted_invoice_url,
+                    "pdf_url": inv.invoice_pdf,
+                }
+                for inv in invoices.auto_paging_iter()
+            ]
+        except Exception as exc:
+            logger.warning("Failed to fetch Stripe invoices for %s: %s", customer_id, exc)
+
+    return result
+
 
 # ------------------------------------------------------------
 # SRTM tile management (enterprise)

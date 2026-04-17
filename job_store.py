@@ -62,13 +62,15 @@ class _SQLiteJobStore:
                     receivers   TEXT NOT NULL,
                     result_path TEXT,
                     error       TEXT,
+                    api_key     TEXT,
                     created_at  REAL NOT NULL,
                     updated_at  REAL NOT NULL
                 )
             """)
 
     def create_job(self, job_id: str, tower_id: str,
-                   receivers_json: str, total: int) -> Dict[str, Any]:
+                   receivers_json: str, total: int,
+                   api_key: Optional[str] = None) -> Dict[str, Any]:
         now = time.time()
         row = {
             "id": job_id,
@@ -79,6 +81,7 @@ class _SQLiteJobStore:
             "receivers": receivers_json,
             "result_path": None,
             "error": None,
+            "api_key": api_key,
             "created_at": now,
             "updated_at": now,
         }
@@ -86,11 +89,11 @@ class _SQLiteJobStore:
             conn.execute(
                 """INSERT INTO batch_jobs
                    (id, status, progress, total, tower_id, receivers,
-                    result_path, error, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    result_path, error, api_key, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (row["id"], row["status"], row["progress"], row["total"],
                  row["tower_id"], row["receivers"], row["result_path"],
-                 row["error"], row["created_at"], row["updated_at"]),
+                 row["error"], row["api_key"], row["created_at"], row["updated_at"]),
             )
         return row
 
@@ -160,6 +163,17 @@ class _SQLiteJobStore:
                 ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_jobs_by_api_key(self, api_key: str,
+                            limit: int = 50) -> List[Dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, status, progress, total, tower_id, result_path, "
+                "error, created_at, updated_at FROM batch_jobs "
+                "WHERE api_key = ? ORDER BY created_at DESC LIMIT ?",
+                (api_key, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
 
 # ── PostgreSQL backend ───────────────────────────────────────────
 
@@ -195,13 +209,15 @@ class _PgJobStore:
                         receivers   TEXT NOT NULL,
                         result_path TEXT,
                         error       TEXT,
+                        api_key     TEXT,
                         created_at  DOUBLE PRECISION NOT NULL,
                         updated_at  DOUBLE PRECISION NOT NULL
                     )
                 """)
 
     def create_job(self, job_id: str, tower_id: str,
-                   receivers_json: str, total: int) -> Dict[str, Any]:
+                   receivers_json: str, total: int,
+                   api_key: Optional[str] = None) -> Dict[str, Any]:
         now = time.time()
         row = {
             "id": job_id,
@@ -212,6 +228,7 @@ class _PgJobStore:
             "receivers": receivers_json,
             "result_path": None,
             "error": None,
+            "api_key": api_key,
             "created_at": now,
             "updated_at": now,
         }
@@ -220,11 +237,11 @@ class _PgJobStore:
                 cur.execute(
                     """INSERT INTO batch_jobs
                        (id, status, progress, total, tower_id, receivers,
-                        result_path, error, created_at, updated_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        result_path, error, api_key, created_at, updated_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (row["id"], row["status"], row["progress"], row["total"],
                      row["tower_id"], row["receivers"], row["result_path"],
-                     row["error"], row["created_at"], row["updated_at"]),
+                     row["error"], row["api_key"], row["created_at"], row["updated_at"]),
                 )
         return row
 
@@ -302,6 +319,20 @@ class _PgJobStore:
                         "SELECT * FROM batch_jobs ORDER BY created_at DESC LIMIT %s",
                         (limit,),
                     )
+                rows = cur.fetchall()
+        return [dict(r) for r in rows]
+
+    def list_jobs_by_api_key(self, api_key: str,
+                            limit: int = 50) -> List[Dict[str, Any]]:
+        assert psycopg2 is not None
+        with self._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT id, status, progress, total, tower_id, result_path, "
+                    "error, created_at, updated_at FROM batch_jobs "
+                    "WHERE api_key = %s ORDER BY created_at DESC LIMIT %s",
+                    (api_key, limit),
+                )
                 rows = cur.fetchall()
         return [dict(r) for r in rows]
 

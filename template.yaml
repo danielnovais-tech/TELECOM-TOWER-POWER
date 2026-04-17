@@ -253,9 +253,18 @@ Resources:
       BucketName: !Sub "telecom-tower-power-reports-${AWS::AccountId}-${Stage}"
       LifecycleConfiguration:
         Rules:
-          - Id: ExpireOldReports
+          - Id: ExpireProReports
             Status: Enabled
+            Prefix: "batch-results/pro/"
             ExpirationInDays: 30
+          - Id: ExpireFreeReports
+            Status: Enabled
+            Prefix: "batch-results/free/"
+            ExpirationInDays: 30
+          - Id: ExpireEnterpriseReports
+            Status: Enabled
+            Prefix: "batch-results/enterprise/"
+            ExpirationInDays: 365
 
 Outputs:
   ApiUrl:

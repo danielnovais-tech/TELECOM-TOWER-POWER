@@ -722,8 +722,13 @@
     "/jobs/{job_id}": {
       "get": {
         "summary": "Get Job Status",
-        "description": "Poll the status of a background batch job.",
+        "description": "Poll the status of a background batch job (Pro/Enterprise only).",
         "operationId": "get_job_status_jobs__job_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -760,8 +765,13 @@
     "/jobs/{job_id}/download": {
       "get": {
         "summary": "Download Job Result",
-        "description": "Download the ZIP file produced by a completed batch job.",
+        "description": "Download the ZIP file produced by a completed batch job (Pro/Enterprise only).\n\nIf the result is stored in S3, returns a redirect to a presigned URL.\nIf stored locally, streams the file directly.",
         "operationId": "download_job_result_jobs__job_id__download_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "job_id",
@@ -978,6 +988,118 @@
         }
       }
     },
+    "/portal/profile": {
+      "get": {
+        "summary": "Portal Profile",
+        "description": "Return the caller's profile: masked API key, tier, limits, and account info.",
+        "operationId": "portal_profile_portal_profile_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/portal/usage": {
+      "get": {
+        "summary": "Portal Usage",
+        "description": "Return usage statistics for the caller's API key.",
+        "operationId": "portal_usage_portal_usage_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/portal/jobs": {
+      "get": {
+        "summary": "Portal Jobs",
+        "description": "Return the caller's batch jobs (most recent first).",
+        "operationId": "portal_jobs_portal_jobs_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/portal/billing": {
+      "get": {
+        "summary": "Portal Billing",
+        "description": "Return billing information from Stripe for the caller.",
+        "operationId": "portal_billing_portal_billing_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
     "/srtm/status/{country}": {
       "get": {
         "summary": "Srtm Tile Status",
@@ -1062,6 +1184,70 @@
           }
         ]
       }
+    },
+    "/bedrock/chat": {
+      "post": {
+        "summary": "Bedrock Chat",
+        "description": "Send a prompt to an Amazon Bedrock base foundation model and return\nthe generated response.  Supports Titan, Claude, and Llama model families.\nRequires PRO or ENTERPRISE tier.",
+        "operationId": "bedrock_chat_bedrock_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BedrockChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/bedrock/models": {
+      "get": {
+        "summary": "Bedrock Models",
+        "description": "List available Bedrock foundation models for the AI playground.",
+        "operationId": "bedrock_models_bedrock_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1070,11 +1256,83 @@
         "type": "string",
         "enum": [
           "700MHz",
+          "850MHz",
+          "900MHz",
           "1800MHz",
+          "2100MHz",
           "2600MHz",
           "3500MHz"
         ],
         "title": "Band"
+      },
+      "BedrockChatRequest": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Prompt",
+            "description": "User prompt"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id",
+            "description": "Bedrock model ID override"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4096.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens",
+            "description": "Max response tokens"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature",
+            "description": "Sampling temperature"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context",
+            "description": "Analysis context JSON"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "BedrockChatRequest"
       },
       "Body_batch_reports_batch_reports_post": {
         "properties": {

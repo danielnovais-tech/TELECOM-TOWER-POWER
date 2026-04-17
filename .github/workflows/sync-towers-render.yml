@@ -1,0 +1,77 @@
+name: Nightly Tower Sync (AWS → Render)
+
+on:
+  schedule:
+    - cron: '15 5 * * *'  # 5:15 AM UTC (2:15 AM BRT) — after Railway sync
+  workflow_dispatch:
+
+concurrency:
+  group: tower-sync-render
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary
+
+      - name: Set up SSH tunnel to RDS via EC2 bastion
+        env:
+          EC2_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$EC2_KEY" > ~/.ssh/ec2.pem
+          chmod 600 ~/.ssh/ec2.pem
+          ssh-keygen -y -f ~/.ssh/ec2.pem > /dev/null  # validate key format
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/ec2.pem -f -N \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=no \
+            -L 15432:${{ secrets.RDS_HOST }}:5432 \
+            ubuntu@${{ secrets.EC2_HOST }}
+          echo "SSH tunnel established on localhost:15432"
+
+      - name: Run tower import to Render
+        env:
+          RDS_USER: ${{ secrets.RDS_USER }}
+          RDS_PASSWORD: ${{ secrets.RDS_PASSWORD }}
+          RDS_DBNAME: ${{ secrets.RDS_DBNAME }}
+          DATABASE_URL: ${{ secrets.RENDER_DATABASE_URL }}
+        run: |
+          PW=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['RDS_PASSWORD'], safe=''))")
+          export AWS_DATABASE_URL="postgresql://${RDS_USER}:${PW}@127.0.0.1:15432/${RDS_DBNAME}?sslmode=require"
+          python3 import_towers.py --source-env AWS --target-env RENDER --verbose
+
+      - name: Notify Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            EMOJI=":white_check_mark:"
+            MSG="Render tower sync completed successfully"
+          else
+            EMOJI=":x:"
+            MSG="Render tower sync FAILED — check https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+            curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"${EMOJI} *tower-sync-render*: ${MSG}\"}" || true
+          fi
+
+      - name: Teardown SSH tunnel
+        if: always()
+        run: |
+          pkill -f "ssh.*15432" || true
+          rm -f ~/.ssh/ec2.pem
