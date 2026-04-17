@@ -1648,6 +1648,16 @@ if FRONTEND_DIR.is_dir():
     )
 
     @app.middleware("http")
+    async def reject_path_traversal(request: Request, call_next):
+        """Block requests with path-traversal sequences."""
+        from urllib.parse import unquote
+        raw = request.scope.get("path", "")
+        decoded = unquote(raw)
+        if ".." in decoded:
+            return JSONResponse(status_code=400, content={"detail": "Invalid path"})
+        return await call_next(request)
+
+    @app.middleware("http")
     async def api_prefix_rewrite(request: Request, call_next):
         """Rewrite /api/xxx → /xxx so the React PWA (which uses /api prefix) works."""
         path = request.scope["path"]

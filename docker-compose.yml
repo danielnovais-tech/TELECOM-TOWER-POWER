@@ -58,7 +58,7 @@ services:
       - S3_REGION=${S3_REGION:-us-east-1}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
-      - ENABLE_DEMO_KEYS=${ENABLE_DEMO_KEYS:-true}
+      - ENABLE_DEMO_KEYS=${ENABLE_DEMO_KEYS:-false}
     secrets:
       - database_url
       - aws_access_key_id
@@ -309,7 +309,7 @@ services:
     ports:
       - "3001:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password
       - GF_UNIFIED_ALERTING_ENABLED=true
       - GF_ALERTING_ENABLED=false
       - GF_SMTP_ENABLED=true
@@ -318,6 +318,7 @@ services:
       - GF_SMTP_PASSWORD__FILE=/run/secrets/ses_smtp_password
       - GF_SMTP_FROM_ADDRESS=${SMTP_FROM:-alerts@telecomtowerpower.com.br}
     secrets:
+      - grafana_admin_password
       - ses_smtp_username
       - ses_smtp_password
       - slack_webhook_url
@@ -361,3 +362,5 @@ secrets:
     file: ./secrets/valid_api_keys
   slack_webhook_url:
     file: ./secrets/slack_webhook_url
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password

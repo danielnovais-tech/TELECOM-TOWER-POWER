@@ -70,5 +70,29 @@
     "stripe_customer_id": null,
     "stripe_subscription_id": null,
     "created": 1776293980.9482954
+  },
+  "ttp_yVW7Jstf0zaVScp9o__SiZKYEtMy6gqepa2MO0SmWmc": {
+    "tier": "free",
+    "owner": "test-signup-366705b8@test.invalid",
+    "email": "test-signup-366705b8@test.invalid",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776384446.656635
+  },
+  "ttp_MDRlJ9YRMDiMk3zIlvoRdaDCWW9Z0a6DCx4X-mA-V2k": {
+    "tier": "free",
+    "owner": "test-free-01e593f5@test.invalid",
+    "email": "test-free-01e593f5@test.invalid",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776384488.8281426
+  },
+  "ttp_tYHv0jGONrfz70glnF9i2EIarza80T7YdL_Rdvsbi7s": {
+    "tier": "free",
+    "owner": "test-signup-2d3f5eb9@test.invalid",
+    "email": "test-signup-2d3f5eb9@test.invalid",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776384489.1873467
   }
 }

@@ -21,6 +21,27 @@ S3_PREFIX="backups/ec2-postgres"
 RETENTION_DAYS=14
 LOG_TAG="pg-backup-s3"
 CRED_FILE="/etc/pg-backup-s3.env"
+SLACK_WEBHOOK_FILE="/run/secrets/slack_webhook_url"
+
+# ── Slack notification helper ────────────────────────────────────────────
+_slack_url=""
+if [[ -f "$SLACK_WEBHOOK_FILE" ]]; then
+  _slack_url=$(cat "$SLACK_WEBHOOK_FILE")
+elif [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+  _slack_url="$SLACK_WEBHOOK_URL"
+fi
+
+notify_slack() {
+  local emoji="$1" msg="$2"
+  if [[ -z "$_slack_url" ]]; then return 0; fi
+  curl -sf -X POST "$_slack_url" \
+    -H 'Content-Type: application/json' \
+    -d "{\"text\":\"${emoji} *pg-backup-s3*: ${msg}\"}" \
+    >/dev/null 2>&1 || true
+}
+
+# Notify on any non-zero exit (trap fires before set -e aborts)
+trap 'notify_slack ":x:" "Backup FAILED (exit $?) at $(date -Iseconds). Check /var/log/pg-backup.log"' ERR
 
 # ── Resolve AWS credentials ──────────────────────────────────────────────
 # Prefer instance profile (IMDS) — requires host-installed aws CLI.
@@ -97,3 +118,4 @@ run_aws s3 ls "s3://${BUCKET}/${S3_PREFIX}/" \
 # ── Cleanup ──────────────────────────────────────────────────────────────
 rm -f "$DUMP_FILE"
 echo "[$LOG_TAG] $(date -Iseconds) Backup complete."
+notify_slack ":white_check_mark:" "Backup OK — s3://${BUCKET}/${S3_KEY} ($((DUMP_SIZE / 1024)) KB)"

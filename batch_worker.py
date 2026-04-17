@@ -25,7 +25,7 @@ from job_store import JobStore, JOB_RESULTS_DIR
 from tower_db import TowerStore
 from pdf_generator import build_pdf_report
 from srtm_elevation import SRTMReader
-from prometheus_client import Histogram, Gauge
+from prometheus_client import Counter, Histogram, Gauge
 
 # Re-use the same metric names so a shared /metrics scrape sees worker data
 BATCH_JOB_DURATION = Histogram(
@@ -36,6 +36,18 @@ BATCH_JOB_DURATION = Histogram(
 BATCH_JOBS_ACTIVE = Gauge(
     "batch_jobs_active",
     "Number of background batch jobs currently running",
+)
+BATCH_JOBS_FAILED = Counter(
+    "batch_jobs_failed_total",
+    "Total batch jobs that ended in failure",
+)
+BATCH_JOBS_COMPLETED = Counter(
+    "batch_jobs_completed_total",
+    "Total batch jobs that completed successfully",
+)
+BATCH_QUEUE_DEPTH = Gauge(
+    "batch_jobs_queued",
+    "Number of batch jobs currently in queued state",
 )
 
 logging.basicConfig(
@@ -339,10 +351,12 @@ def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
                     zf.writestr(filename, pdf_results[idx])
 
         getattr(job_store, "complete_job")(job_id, result_path)
+        BATCH_JOBS_COMPLETED.inc()
         logger.info("Job %s completed: %d PDFs → %s", job_id, len(receivers_data), result_path)
 
     except Exception as exc:
         getattr(job_store, "fail_job")(job_id, str(exc))
+        BATCH_JOBS_FAILED.inc()
         logger.exception("Job %s failed", job_id)
         # Clean up partial file
         if os.path.exists(result_path):
@@ -366,6 +380,13 @@ def run_worker(poll_interval: float = 3.0) -> None:
 
     while True:
         try:
+            # Update queue depth metric each poll cycle
+            try:
+                queued = job_store.list_jobs(status="queued", limit=10000)
+                BATCH_QUEUE_DEPTH.set(len(queued))
+            except Exception:
+                pass  # don't let metric collection block the worker
+
             job = job_store.claim_next_job()
             if job is None:
                 time.sleep(poll_interval)

@@ -1,0 +1,82 @@
+name: Nightly Railway Postgres Backup
+
+on:
+  schedule:
+    - cron: '30 5 * * *'  # 5:30 AM UTC (2:30 AM BRT) — after tower sync
+  workflow_dispatch:
+
+concurrency:
+  group: railway-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -yqq postgresql-client
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Dump Railway Postgres
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          TIMESTAMP=$(date +%Y-%m-%d_%H%M)
+          DUMP_FILE="/tmp/railway_towers_${TIMESTAMP}.sql.gz"
+          echo "Dumping Railway Postgres..."
+          pg_dump "$DATABASE_URL" --no-owner --no-acl | gzip > "$DUMP_FILE"
+          DUMP_KB=$(( $(stat -c%s "$DUMP_FILE") / 1024 ))
+          echo "Dump size: ${DUMP_KB} KB"
+          echo "DUMP_FILE=$DUMP_FILE" >> "$GITHUB_ENV"
+          echo "DUMP_KB=$DUMP_KB" >> "$GITHUB_ENV"
+          echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"
+
+      - name: Upload to S3
+        run: |
+          S3_KEY="backups/railway-postgres/railway_towers_${TIMESTAMP}.sql.gz"
+          aws s3 cp "$DUMP_FILE" "s3://telecom-tower-power-results/${S3_KEY}"
+          echo "Uploaded s3://telecom-tower-power-results/${S3_KEY}"
+          echo "S3_KEY=$S3_KEY" >> "$GITHUB_ENV"
+
+      - name: Prune backups older than 14 days
+        run: |
+          CUTOFF=$(date -d "-14 days" +%Y-%m-%d)
+          echo "Pruning backups older than $CUTOFF..."
+          aws s3 ls s3://telecom-tower-power-results/backups/railway-postgres/ \
+            | while read -r line; do
+                FILE_DATE=$(echo "$line" | awk '{print $1}')
+                FILE_NAME=$(echo "$line" | awk '{print $4}')
+                if [[ -n "$FILE_NAME" && "$FILE_DATE" < "$CUTOFF" ]]; then
+                  echo "  Deleting $FILE_NAME (from $FILE_DATE)"
+                  aws s3 rm "s3://telecom-tower-power-results/backups/railway-postgres/${FILE_NAME}"
+                fi
+              done
+
+      - name: Notify Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            EMOJI=":white_check_mark:"
+            MSG="Railway backup OK — s3://telecom-tower-power-results/${S3_KEY} (${DUMP_KB} KB)"
+          else
+            EMOJI=":x:"
+            MSG="Railway backup FAILED — check https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+            curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+              -H 'Content-Type: application/json' \
+              -d "{\"text\":\"${EMOJI} *railway-pg-backup*: ${MSG}\"}" || true
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/railway_towers_*.sql.gz
