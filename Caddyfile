@@ -53,3 +53,8 @@ ec2.telecomtowerpower.com.br {
                 reverse_proxy localhost:3000
         }
 }
+
+# ── Grafana (monitoring dashboard) ───────────────────────────
+monitoring.telecomtowerpower.com.br {
+        reverse_proxy localhost:3001
+}

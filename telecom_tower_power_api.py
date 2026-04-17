@@ -1012,6 +1012,16 @@ async def health_check():
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
+@app.get("/debug/error500", include_in_schema=False)
+async def debug_error500():
+    """Return a 500 error for testing Prometheus alert rules.
+
+    Only available when ENABLE_DEBUG_ENDPOINTS=true (disabled by default).
+    """
+    if os.getenv("ENABLE_DEBUG_ENDPOINTS", "false").lower() not in ("1", "true", "yes"):
+        raise HTTPException(status_code=404, detail="Not found")
+    raise HTTPException(status_code=500, detail="Synthetic 500 for alert testing")
+
 @app.on_event("startup")
 async def startup():
     # Fail stale running jobs from previous deploys
