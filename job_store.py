@@ -336,6 +336,19 @@ class _PgJobStore:
                 rows = cur.fetchall()
         return [dict(r) for r in rows]
 
+    def fail_stale_jobs(self, max_age_seconds: int = 600) -> int:
+        """Mark running jobs older than *max_age_seconds* as failed."""
+        cutoff = time.time() - max_age_seconds
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE batch_jobs SET status = 'failed', "
+                    "error = 'stale: recovered on startup', updated_at = %s "
+                    "WHERE status = 'running' AND updated_at < %s",
+                    (time.time(), cutoff),
+                )
+                return cur.rowcount
+
 
 # ── Factory ──────────────────────────────────────────────────────
 

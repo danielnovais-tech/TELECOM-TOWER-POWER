@@ -1014,6 +1014,13 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup():
+    # Fail stale running jobs from previous deploys
+    try:
+        recovered = job_store.fail_stale_jobs(max_age_seconds=600)
+        if recovered:
+            _alert_slack(f":warning: Recovered {recovered} stale running job(s) on startup")
+    except Exception:
+        pass
     tower_count = platform.db.count()
     _alert_slack(f":white_check_mark: API started — {tower_count:,} towers in DB ({platform.db.backend})")
     pass
