@@ -1,0 +1,41 @@
+{
+    "Budgets": [
+        {
+            "BudgetName": "MonthlySpendBudget",
+            "BudgetLimit": {
+                "Amount": "10.0",
+                "Unit": "USD"
+            },
+            "CostTypes": {
+                "IncludeTax": true,
+                "IncludeSubscription": true,
+                "UseBlended": false,
+                "IncludeRefund": false,
+                "IncludeCredit": false,
+                "IncludeUpfront": true,
+                "IncludeRecurring": true,
+                "IncludeOtherSubscription": true,
+                "IncludeSupport": true,
+                "IncludeDiscount": true,
+                "UseAmortized": false
+            },
+            "TimeUnit": "MONTHLY",
+            "TimePeriod": {
+                "Start": "2026-03-31T21:00:00-03:00",
+                "End": "2087-06-14T21:00:00-03:00"
+            },
+            "CalculatedSpend": {
+                "ActualSpend": {
+                    "Amount": "21.969",
+                    "Unit": "USD"
+                }
+            },
+            "BudgetType": "COST",
+            "LastUpdatedTime": "2026-04-17T17:56:44.790000-03:00",
+            "HealthStatus": {
+                "Status": "HEALTHY",
+                "LastUpdatedTime": "2026-04-17T17:56:44.223000-03:00"
+            }
+        }
+    ]
+}
