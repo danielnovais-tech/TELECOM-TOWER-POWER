@@ -63,4 +63,9 @@ else
     wait "$ALEMBIC_PID" 2>/dev/null || echo "WARN: alembic exited with error (exit $?), continuing..."
 fi
 echo "Starting uvicorn..."
-exec uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port "${PORT:-8000}"
+if [ "${SERVICE_TYPE:-}" = "webhook" ]; then
+    echo "SERVICE_TYPE=webhook → starting stripe_webhook_service"
+    exec uvicorn stripe_webhook_service:app --host 0.0.0.0 --port "${PORT:-8080}"
+else
+    exec uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port "${PORT:-8000}"
+fi
