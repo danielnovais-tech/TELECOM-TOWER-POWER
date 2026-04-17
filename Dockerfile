@@ -62,11 +62,10 @@ RUN mkdir -p srtm_data job_results && chmod +x start.sh entrypoint.sh load_secre
 USER appuser
 
 # PORT is set by Railway/Render at runtime; default 8000 for local use
-ENV PORT=8000
-EXPOSE ${PORT}
+EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["sh", "-c", "python -c \"import urllib.request,os; urllib.request.urlopen('http://localhost:'+os.environ.get('PORT','8000')+'/health')\""]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request,os; urllib.request.urlopen('http://localhost:'+os.environ.get('PORT','8000')+'/health')"
 
 # Default: API only. Use start.sh for full-stack (API + UI).
 CMD ["./entrypoint.sh"]
