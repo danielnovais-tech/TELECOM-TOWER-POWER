@@ -830,10 +830,13 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 
 MAX_BATCH_ROWS = int(os.getenv("MAX_BATCH_ROWS", "5000"))
 
 _DEFAULT_ORIGINS = (
+    "https://www.telecomtowerpower.com.br,"
+    "https://telecomtowerpower.com.br,"
     "https://app.telecomtowerpower.com.br,"
     "https://api.telecomtowerpower.com.br,"
     "https://app.telecomtowerpower.com,"
     "https://dashboard.telecomtowerpower.com,"
+    "https://frontend-production-3542d.up.railway.app,"
     "http://localhost:3000,"
     "http://localhost:8000"
 )

@@ -23,7 +23,7 @@ import {
  * @typedef {components["schemas"]["Band"]} Band
  */
 
-const BASE = "/api";
+const BASE = import.meta.env.VITE_API_BASE || "/api";
 let apiKey =
   localStorage.getItem("api_key") ||
   import.meta.env.VITE_API_KEY ||
