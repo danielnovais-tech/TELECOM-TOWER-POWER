@@ -5,7 +5,7 @@
         "dockerfilePath": "Dockerfile"
     },
     "deploy": {
-        "startCommand": "/bin/sh -c \"envsubst '\\$PORT \\$BACKEND_URL' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'\"",
+        "startCommand": "/docker-entrypoint.sh",
         "healthcheckPath": "/",
         "healthcheckTimeout": 60,
         "restartPolicyType": "ON_FAILURE",
