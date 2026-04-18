@@ -186,13 +186,14 @@ class _SQLiteJobStore:
     def release_stale_jobs(self, max_age_seconds: int = 300) -> int:
         """Reset running jobs whose updated_at is older than max_age_seconds
         back to 'queued' so another worker can pick them up."""
-        cutoff = time.time() - max_age_seconds
+        now = time.time()
+        cutoff = now - max_age_seconds
         with self._conn() as conn:
             cur = conn.execute(
                 "UPDATE batch_jobs SET status = 'queued', error = NULL, "
                 "updated_at = ? "
                 "WHERE status = 'running' AND updated_at < ?",
-                (time.time(), cutoff),
+                (now, cutoff),
             )
             return cur.rowcount
 
@@ -371,14 +372,15 @@ class _PgJobStore:
     def release_stale_jobs(self, max_age_seconds: int = 300) -> int:
         """Reset running jobs whose updated_at is older than max_age_seconds
         back to 'queued' so another worker can pick them up."""
-        cutoff = time.time() - max_age_seconds
+        now = time.time()
+        cutoff = now - max_age_seconds
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE batch_jobs SET status = 'queued', error = NULL, "
                     "updated_at = %s "
                     "WHERE status = 'running' AND updated_at < %s",
-                    (time.time(), cutoff),
+                    (now, cutoff),
                 )
                 return cur.rowcount
 

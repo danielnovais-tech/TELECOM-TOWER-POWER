@@ -312,7 +312,7 @@ def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
     def _heartbeat_loop():
         while not _stop_heartbeat.wait(timeout=_heartbeat_interval):
             try:
-                getattr(job_store, "heartbeat_job")(job_id)
+                job_store.heartbeat_job(job_id)
                 logger.debug("Heartbeat sent for job %s", job_id)
             except Exception:
                 logger.warning("Heartbeat failed for job %s", job_id, exc_info=True)
@@ -325,7 +325,7 @@ def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
     # Look up tower from DB
     tower_row = tower_store.get(tower_id)
     if tower_row is None:
-        getattr(job_store, "fail_job")(job_id, f"Tower {tower_id} not found in DB")
+        job_store.fail_job(job_id, f"Tower {tower_id} not found in DB")
         _stop_heartbeat.set()
         _heartbeat_thread.join(timeout=2)
         return
@@ -369,7 +369,7 @@ def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
                     pdf_results[idx] = pdf_bytes
                 completed += 1
                 if completed % 10 == 0 or completed == len(receivers_data):
-                    getattr(job_store, "update_progress")(job_id, completed)
+                    job_store.update_progress(job_id, completed)
 
         # Write ZIP in original order
         with zipfile.ZipFile(result_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -378,12 +378,12 @@ def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
                     filename = f"report_{tower_id}_{idx + 1:03d}.pdf"
                     zf.writestr(filename, pdf_results[idx])
 
-        getattr(job_store, "complete_job")(job_id, result_path)
+        job_store.complete_job(job_id, result_path)
         BATCH_JOBS_COMPLETED.inc()
         logger.info("Job %s completed: %d PDFs → %s", job_id, len(receivers_data), result_path)
 
     except Exception as exc:
-        getattr(job_store, "fail_job")(job_id, str(exc))
+        job_store.fail_job(job_id, str(exc))
         BATCH_JOBS_FAILED.inc()
         logger.exception("Job %s failed", job_id)
         # Clean up partial file

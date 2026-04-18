@@ -117,6 +117,10 @@ BATCH_JOB_DURATION = Histogram(
     "Time to process a batch job from start to finish",
     buckets=(1, 5, 10, 30, 60, 120, 300, 600),
 )
+STALE_JOBS_REAPED = Counter(
+    "stale_jobs_reaped_total",
+    "Total stale running jobs released back to queue by the reaper",
+)
 
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
@@ -1025,6 +1029,9 @@ async def debug_error500():
         raise HTTPException(status_code=404, detail="Not found")
     raise HTTPException(status_code=500, detail="Synthetic 500 for alert testing")
 
+_reaper_shutdown = asyncio.Event()
+_reaper_task = None
+
 async def _stale_job_reaper(interval_seconds: int = 60,
                             max_age_seconds: int = 300) -> None:
     """Periodically release running jobs whose worker has stopped heartbeating.
@@ -1032,11 +1039,16 @@ async def _stale_job_reaper(interval_seconds: int = 60,
     Runs as a background asyncio task for the lifetime of the API process.
     Jobs are reset to 'queued' (not failed) so another worker can retry them.
     """
-    while True:
-        await asyncio.sleep(interval_seconds)
+    while not _reaper_shutdown.is_set():
+        try:
+            await asyncio.wait_for(_reaper_shutdown.wait(), timeout=interval_seconds)
+            break  # shutdown signalled
+        except asyncio.TimeoutError:
+            pass  # normal timeout — do reaper work
         try:
             released = job_store.release_stale_jobs(max_age_seconds=max_age_seconds)
             if released:
+                STALE_JOBS_REAPED.inc(released)
                 logger.warning(
                     "Stale job reaper: released %d job(s) back to queue "
                     "(no heartbeat for >%ds)",
@@ -1063,9 +1075,10 @@ async def startup():
     _alert_slack(f":white_check_mark: API started — {tower_count:,} towers in DB ({platform.db.backend})")
 
     # Launch background reaper: releases jobs with no heartbeat back to queue
+    global _reaper_task
     _reaper_interval = int(os.getenv("STALE_JOB_REAPER_INTERVAL", "60"))
     _stale_job_timeout = int(os.getenv("STALE_JOB_TIMEOUT", "300"))
-    asyncio.create_task(
+    _reaper_task = asyncio.create_task(
         _stale_job_reaper(
             interval_seconds=_reaper_interval,
             max_age_seconds=_stale_job_timeout,
@@ -1075,6 +1088,13 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    _reaper_shutdown.set()
+    if _reaper_task:
+        _reaper_task.cancel()
+        try:
+            await _reaper_task
+        except asyncio.CancelledError:
+            pass
     await platform.close()
 
 @app.post("/towers", status_code=201)
