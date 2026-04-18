@@ -1,78 +1,9 @@
 # ── Direct HTTPS access (Caddy manages TLS cert) ────────────
-ec2.telecomtowerpower.com.br {
-        # API routes → Railway backend
-        handle /api/* {
-                uri strip_prefix /api
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /health* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /calculate* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /towers* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /batch* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /jobs* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /docs* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /openapi.json {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /stripe* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /usage* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /api-key* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /signup* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /login* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /profile* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /portal* {
+www.telecomtowerpower.com.br {
+        # Matcher for all API routes proxied to the Railway backend
+        @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup* /login* /profile* /portal*
+
+        handle @api_routes {
                 reverse_proxy https://web-production-90b1f.up.railway.app {
                         header_up Host web-production-90b1f.up.railway.app
                 }
@@ -91,79 +22,10 @@ ec2.telecomtowerpower.com.br {
 
 # ── ALB traffic (HTTP, ALB terminates TLS) ───────────────────
 :80 {
-        # API routes → Railway backend
-        handle /api/* {
-                uri strip_prefix /api
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /health* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /calculate* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /towers* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /batch* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /jobs* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /docs* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /openapi.json {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /stripe* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /usage* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /api-key* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /signup* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /login* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /profile* {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /portal* {
+        # Matcher for all API routes proxied to the Railway backend
+        @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup* /login* /profile* /portal*
+
+        handle @api_routes {
                 reverse_proxy https://web-production-90b1f.up.railway.app {
                         header_up Host web-production-90b1f.up.railway.app
                 }
