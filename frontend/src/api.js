@@ -121,14 +121,27 @@ export async function fetchHealth() {
 
 export async function fetchTowers(operator = null) {
   try {
-    const res = await client.GET("/towers", {
-      params: { query: { limit: 200, ...(operator ? { operator } : {}) } },
-    });
-    const towers = unwrap(res)?.towers;
-    if (towers && towers.length) {
-      cacheTowers(towers).catch(() => {});
+    const PAGE_SIZE = 1000;
+    let allTowers = [];
+    let offset = 0;
+    let total = Infinity;
+
+    while (offset < total) {
+      const res = await client.GET("/towers", {
+        params: { query: { limit: PAGE_SIZE, offset, ...(operator ? { operator } : {}) } },
+      });
+      const data = unwrap(res);
+      const towers = data?.towers ?? [];
+      if (data?.total != null) total = data.total;
+      allTowers = allTowers.concat(towers);
+      offset += towers.length;
+      if (towers.length < PAGE_SIZE) break;
     }
-    return towers;
+
+    if (allTowers.length) {
+      cacheTowers(allTowers).catch(() => {});
+    }
+    return allTowers;
   } catch (e) {
     // Offline fallback: serve from IndexedDB
     const cached = await getCachedTowers();

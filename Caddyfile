@@ -1,5 +1,61 @@
+# ── Direct HTTPS access (Caddy manages TLS cert) ────────────
 ec2.telecomtowerpower.com.br {
-        # API (default)
+        handle /health* {
+                reverse_proxy localhost:8000
+        }
+        handle /calculate* {
+                reverse_proxy localhost:8000
+        }
+        handle /towers* {
+                reverse_proxy localhost:8000
+        }
+        handle /batch* {
+                reverse_proxy localhost:8000
+        }
+        handle /jobs* {
+                reverse_proxy localhost:8000
+        }
+        handle /docs* {
+                reverse_proxy localhost:8000
+        }
+        handle /openapi.json {
+                reverse_proxy localhost:8000
+        }
+        handle /stripe* {
+                reverse_proxy localhost:8000
+        }
+        handle /usage* {
+                reverse_proxy localhost:8000
+        }
+        handle /api-key* {
+                reverse_proxy localhost:8000
+        }
+        handle /signup* {
+                reverse_proxy localhost:8000
+        }
+        handle /login* {
+                reverse_proxy localhost:8000
+        }
+        handle /profile* {
+                reverse_proxy localhost:8000
+        }
+        handle /portal* {
+                reverse_proxy localhost:8000
+        }
+        handle /webhook* {
+                reverse_proxy localhost:8001
+        }
+        handle /grafana* {
+                reverse_proxy localhost:3001
+        }
+        # React frontend as default
+        handle {
+                reverse_proxy localhost:3000
+        }
+}
+
+# ── ALB traffic (HTTP, ALB terminates TLS) ───────────────────
+:80 {
         handle /health* {
                 reverse_proxy localhost:8000
         }

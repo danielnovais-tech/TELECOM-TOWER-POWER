@@ -24,11 +24,11 @@ export default function BedrockPlayground({ analysisResult, selectedTower }) {
       })
       .catch(() => {
         setModels([
-          { model_id: "amazon.titan-text-express-v1", provider: "Amazon", name: "Titan Text Express" },
-          { model_id: "amazon.titan-text-lite-v1", provider: "Amazon", name: "Titan Text Lite" },
-          { model_id: "anthropic.claude-3-haiku-20240307-v1:0", provider: "Anthropic", name: "Claude 3 Haiku" },
+          { model_id: "amazon.nova-micro-v1:0", provider: "Amazon", name: "Nova Micro" },
+          { model_id: "amazon.nova-lite-v1:0", provider: "Amazon", name: "Nova Lite" },
+          { model_id: "anthropic.claude-haiku-4-5-20251001-v1:0", provider: "Anthropic", name: "Claude Haiku 4.5" },
         ]);
-        if (!selectedModel) setSelectedModel("amazon.titan-text-express-v1");
+        if (!selectedModel) setSelectedModel("amazon.nova-micro-v1:0");
       });
   }, []);
 

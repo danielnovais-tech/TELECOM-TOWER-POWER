@@ -7,7 +7,7 @@ recommendations, RF planning guidance, and general telecom Q&A.
 
 Environment variables:
     BEDROCK_REGION       – AWS region for Bedrock (default: us-east-1)
-    BEDROCK_MODEL_ID     – Foundation model ID (default: amazon.titan-text-express-v1)
+    BEDROCK_MODEL_ID     – Foundation model ID (default: amazon.nova-micro-v1:0)
     BEDROCK_MAX_TOKENS   – Max tokens in response (default: 1024)
     BEDROCK_TEMPERATURE  – Sampling temperature 0-1 (default: 0.7)
 """
@@ -23,7 +23,7 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger(__name__)
 
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "amazon.titan-text-express-v1")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "amazon.nova-micro-v1:0")
 BEDROCK_MAX_TOKENS = int(os.getenv("BEDROCK_MAX_TOKENS", "1024"))
 BEDROCK_TEMPERATURE = float(os.getenv("BEDROCK_TEMPERATURE", "0.7"))
 
@@ -85,6 +85,20 @@ def _build_llama_body(prompt: str, max_tokens: int, temperature: float) -> dict:
     }
 
 
+def _build_nova_body(prompt: str, max_tokens: int, temperature: float) -> dict:
+    """Build request body for Amazon Nova models on Bedrock."""
+    return {
+        "schemaVersion": "messages-v1",
+        "system": [{"text": SYSTEM_PROMPT}],
+        "messages": [{"role": "user", "content": [{"text": prompt}]}],
+        "inferenceConfig": {
+            "maxNewTokens": max_tokens,
+            "temperature": temperature,
+            "topP": 0.9,
+        },
+    }
+
+
 def _build_request_body(
     model_id: str, prompt: str, max_tokens: int, temperature: float
 ) -> dict:
@@ -94,6 +108,8 @@ def _build_request_body(
         return _build_claude_body(prompt, max_tokens, temperature)
     if "llama" in mid or "meta" in mid:
         return _build_llama_body(prompt, max_tokens, temperature)
+    if "nova" in mid:
+        return _build_nova_body(prompt, max_tokens, temperature)
     # Default: Titan
     full_prompt = f"{SYSTEM_PROMPT}\n\nUser: {prompt}\n\nAssistant:"
     return _build_titan_body(full_prompt, max_tokens, temperature)
@@ -110,6 +126,12 @@ def _extract_response_text(model_id: str, response_body: dict) -> str:
         )
     if "llama" in mid or "meta" in mid:
         return response_body.get("generation", "")
+    if "nova" in mid:
+        # Nova uses messages-v1 response format
+        output = response_body.get("output", {})
+        message = output.get("message", {})
+        content = message.get("content", [])
+        return "".join(block.get("text", "") for block in content)
     # Titan
     results = response_body.get("results", [])
     if results:
@@ -189,29 +211,29 @@ def list_available_models() -> list[dict]:
     """
     static_models = [
         {
-            "model_id": "amazon.titan-text-express-v1",
+            "model_id": "amazon.nova-micro-v1:0",
             "provider": "Amazon",
-            "name": "Titan Text Express",
+            "name": "Nova Micro",
         },
         {
-            "model_id": "amazon.titan-text-lite-v1",
+            "model_id": "amazon.nova-lite-v1:0",
             "provider": "Amazon",
-            "name": "Titan Text Lite",
+            "name": "Nova Lite",
         },
         {
-            "model_id": "anthropic.claude-3-haiku-20240307-v1:0",
+            "model_id": "amazon.nova-pro-v1:0",
+            "provider": "Amazon",
+            "name": "Nova Pro",
+        },
+        {
+            "model_id": "anthropic.claude-haiku-4-5-20251001-v1:0",
             "provider": "Anthropic",
-            "name": "Claude 3 Haiku",
+            "name": "Claude Haiku 4.5",
         },
         {
-            "model_id": "anthropic.claude-3-sonnet-20240229-v1:0",
+            "model_id": "anthropic.claude-sonnet-4-20250514-v1:0",
             "provider": "Anthropic",
-            "name": "Claude 3 Sonnet",
-        },
-        {
-            "model_id": "meta.llama3-8b-instruct-v1:0",
-            "provider": "Meta",
-            "name": "Llama 3 8B Instruct",
+            "name": "Claude Sonnet 4",
         },
     ]
 
