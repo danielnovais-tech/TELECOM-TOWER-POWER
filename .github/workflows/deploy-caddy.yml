@@ -1,0 +1,57 @@
+name: Deploy Caddyfile to EC2
+
+on:
+  push:
+    branches: [main]
+    paths: [Caddyfile]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-caddy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Push SSH key via EC2 Instance Connect
+        run: |
+          ssh-keygen -t rsa -b 2048 -f /tmp/ec2_key -N "" -q
+          aws ec2-instance-connect send-ssh-public-key \
+            --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+            --instance-os-user ubuntu \
+            --ssh-public-key file:///tmp/ec2_key.pub
+
+      - name: Pull repo and reload Caddy on EC2
+        run: |
+          ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} \
+            'cd /home/ubuntu/TELECOM-TOWER-POWER && git pull origin main && sudo caddy reload --config Caddyfile'
+
+      - name: Verify health endpoint
+        run: |
+          sleep 3
+          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" https://www.telecomtowerpower.com.br/health)
+          echo "Health check returned HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Health check failed with HTTP $STATUS"
+            exit 1
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/ec2_key /tmp/ec2_key.pub
