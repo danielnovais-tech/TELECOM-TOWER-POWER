@@ -1,26 +1,8 @@
-# ── Direct HTTPS access (Caddy manages TLS cert) ────────────
-www.telecomtowerpower.com.br {
-        # Matcher for all API routes proxied to the Railway backend
-        @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup* /login* /profile* /portal*
-
-        handle @api_routes {
-                reverse_proxy https://web-production-90b1f.up.railway.app {
-                        header_up Host web-production-90b1f.up.railway.app
-                }
-        }
-        handle /webhook* {
-                reverse_proxy localhost:8001
-        }
-        handle /grafana* {
-                reverse_proxy localhost:3001
-        }
-        # React frontend as default
-        handle {
-                reverse_proxy localhost:3000
-        }
-}
-
 # ── ALB traffic (HTTP, ALB terminates TLS) ───────────────────
+# www.telecomtowerpower.com.br routes through ALB which terminates TLS
+# and forwards HTTP to EC2:80. All www traffic is handled by the :80 block.
+# Do NOT add a bare "www.telecomtowerpower.com.br" block — Caddy would
+# auto-enable HTTPS and create an HTTP→HTTPS redirect loop with the ALB.
 :80 {
         # Matcher for all API routes proxied to the Railway backend
         @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup* /login* /profile* /portal*
