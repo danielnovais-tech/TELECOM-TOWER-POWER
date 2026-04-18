@@ -174,6 +174,28 @@ class _SQLiteJobStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def heartbeat_job(self, job_id: str) -> None:
+        """Touch updated_at for a running job to signal the worker is alive."""
+        now = time.time()
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE batch_jobs SET updated_at = ? WHERE id = ?",
+                (now, job_id),
+            )
+
+    def release_stale_jobs(self, max_age_seconds: int = 300) -> int:
+        """Reset running jobs whose updated_at is older than max_age_seconds
+        back to 'queued' so another worker can pick them up."""
+        cutoff = time.time() - max_age_seconds
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE batch_jobs SET status = 'queued', error = NULL, "
+                "updated_at = ? "
+                "WHERE status = 'running' AND updated_at < ?",
+                (time.time(), cutoff),
+            )
+            return cur.rowcount
+
 
 # ── PostgreSQL backend ───────────────────────────────────────────
 
@@ -335,6 +357,30 @@ class _PgJobStore:
                 )
                 rows = cur.fetchall()
         return [dict(r) for r in rows]
+
+    def heartbeat_job(self, job_id: str) -> None:
+        """Touch updated_at for a running job to signal the worker is alive."""
+        now = time.time()
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE batch_jobs SET updated_at = %s WHERE id = %s",
+                    (now, job_id),
+                )
+
+    def release_stale_jobs(self, max_age_seconds: int = 300) -> int:
+        """Reset running jobs whose updated_at is older than max_age_seconds
+        back to 'queued' so another worker can pick them up."""
+        cutoff = time.time() - max_age_seconds
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE batch_jobs SET status = 'queued', error = NULL, "
+                    "updated_at = %s "
+                    "WHERE status = 'running' AND updated_at < %s",
+                    (time.time(), cutoff),
+                )
+                return cur.rowcount
 
     def fail_stale_jobs(self, max_age_seconds: int = 600) -> int:
         """Mark running jobs older than *max_age_seconds* as failed."""

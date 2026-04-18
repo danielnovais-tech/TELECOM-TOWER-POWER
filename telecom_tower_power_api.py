@@ -1025,9 +1025,34 @@ async def debug_error500():
         raise HTTPException(status_code=404, detail="Not found")
     raise HTTPException(status_code=500, detail="Synthetic 500 for alert testing")
 
+async def _stale_job_reaper(interval_seconds: int = 60,
+                            max_age_seconds: int = 300) -> None:
+    """Periodically release running jobs whose worker has stopped heartbeating.
+
+    Runs as a background asyncio task for the lifetime of the API process.
+    Jobs are reset to 'queued' (not failed) so another worker can retry them.
+    """
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            released = job_store.release_stale_jobs(max_age_seconds=max_age_seconds)
+            if released:
+                logger.warning(
+                    "Stale job reaper: released %d job(s) back to queue "
+                    "(no heartbeat for >%ds)",
+                    released, max_age_seconds,
+                )
+                _alert_slack(
+                    f":recycle: Released {released} stale running job(s) back to queue "
+                    f"(no heartbeat for >{max_age_seconds}s)"
+                )
+        except Exception:
+            logger.exception("Stale job reaper encountered an error")
+
+
 @app.on_event("startup")
 async def startup():
-    # Fail stale running jobs from previous deploys
+    # Fail stale running jobs from previous deploys (one-time cleanup on boot)
     try:
         recovered = job_store.fail_stale_jobs(max_age_seconds=600)
         if recovered:
@@ -1036,7 +1061,17 @@ async def startup():
         pass
     tower_count = platform.db.count()
     _alert_slack(f":white_check_mark: API started — {tower_count:,} towers in DB ({platform.db.backend})")
-    pass
+
+    # Launch background reaper: releases jobs with no heartbeat back to queue
+    _reaper_interval = int(os.getenv("STALE_JOB_REAPER_INTERVAL", "60"))
+    _stale_job_timeout = int(os.getenv("STALE_JOB_TIMEOUT", "300"))
+    asyncio.create_task(
+        _stale_job_reaper(
+            interval_seconds=_reaper_interval,
+            max_age_seconds=_stale_job_timeout,
+        ),
+        name="stale-job-reaper",
+    )
 
 @app.on_event("shutdown")
 async def shutdown():

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -302,10 +303,31 @@ def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
     start_time = time.monotonic()
     BATCH_JOBS_ACTIVE.inc()
 
+    # ── Heartbeat thread ─────────────────────────────────────────
+    # Keeps updated_at fresh every 30 s so the stale-job reaper won't
+    # reclaim this job while it is legitimately running.
+    _heartbeat_interval = int(os.getenv("JOB_HEARTBEAT_INTERVAL", "30"))
+    _stop_heartbeat = threading.Event()
+
+    def _heartbeat_loop():
+        while not _stop_heartbeat.wait(timeout=_heartbeat_interval):
+            try:
+                getattr(job_store, "heartbeat_job")(job_id)
+                logger.debug("Heartbeat sent for job %s", job_id)
+            except Exception:
+                logger.warning("Heartbeat failed for job %s", job_id, exc_info=True)
+
+    _heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop, name=f"heartbeat-{job_id}", daemon=True
+    )
+    _heartbeat_thread.start()
+
     # Look up tower from DB
     tower_row = tower_store.get(tower_id)
     if tower_row is None:
         getattr(job_store, "fail_job")(job_id, f"Tower {tower_id} not found in DB")
+        _stop_heartbeat.set()
+        _heartbeat_thread.join(timeout=2)
         return
 
     tower_dict = {
@@ -368,6 +390,8 @@ def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
         if os.path.exists(result_path):
             os.remove(result_path)
     finally:
+        _stop_heartbeat.set()
+        _heartbeat_thread.join(timeout=2)
         BATCH_JOB_DURATION.observe(time.monotonic() - start_time)
         BATCH_JOBS_ACTIVE.dec()
 
