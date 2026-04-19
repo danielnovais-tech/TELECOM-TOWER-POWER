@@ -1,5 +1,8 @@
 #!/bin/sh
 set -e
+ailway/code-change-o_8XQN
+envsubst '$PORT $BACKEND_URL' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf
+
 railway/code-change-WejzE2
 # Extract DNS resolver from container's resolv.conf for nginx dynamic resolution
 RESOLVER=$(grep -m1 nameserver /etc/resolv.conf | awk '{print $2}')
@@ -20,6 +23,7 @@ export RESOLVER=$(awk '/^nameserver/{
 main
 echo "Using DNS resolver: $RESOLVER"
 envsubst '$PORT $BACKEND_URL $RESOLVER' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf
+main
 
 # Inject runtime config so the React app can read BACKEND_URL at runtime
 cat > /usr/share/nginx/html/config.js <<EOF
