@@ -121,7 +121,7 @@ export async function fetchHealth() {
 
 export async function fetchTowers(operator = null) {
   try {
-    const PAGE_SIZE = 1000;
+    const PAGE_SIZE = 50000;
     let allTowers = [];
     let offset = 0;
     let total = Infinity;

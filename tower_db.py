@@ -129,7 +129,7 @@ class _SQLiteStore:
         return self._row_to_dict(row) if row else None
 
     def list_all(self, operator: Optional[str] = None,
-                 limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
+                 limit: int = 50000, offset: int = 0) -> List[Dict[str, Any]]:
         with self._conn() as conn:
             if operator:
                 rows = conn.execute(
@@ -303,7 +303,7 @@ class _PgStore:
         return self._row_to_dict(row)
 
     def list_all(self, operator: Optional[str] = None,
-                 limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
+                 limit: int = 50000, offset: int = 0) -> List[Dict[str, Any]]:
         assert psycopg2 is not None
         with self._conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

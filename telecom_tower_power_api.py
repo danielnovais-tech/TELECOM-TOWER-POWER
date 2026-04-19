@@ -452,7 +452,7 @@ class TelecomTowerPower:
         return self._row_to_tower(row)
 
     def list_towers(self, operator: Optional[str] = None,
-                    limit: int = 100, offset: int = 0) -> List[Tower]:
+                    limit: int = 50000, offset: int = 0) -> List[Tower]:
         rows = self.db.list_all(operator=operator, limit=limit, offset=offset)
         return [self._row_to_tower(r) for r in rows]
 
@@ -1140,7 +1140,7 @@ async def get_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
 @app.get("/towers")
 async def list_towers(
     operator: Optional[str] = None,
-    limit: int = Query(default=100, ge=1, le=1000),
+    limit: int = Query(default=1000, ge=1, le=50000),
     offset: int = Query(default=0, ge=0),
     key_data: Dict = Depends(verify_api_key),
 ):

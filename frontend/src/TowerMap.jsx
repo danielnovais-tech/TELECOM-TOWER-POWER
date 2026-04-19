@@ -1,7 +1,10 @@
-import { useEffect, useState, useCallback } from "react";
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents } from "react-leaflet";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import "leaflet.markercluster/dist/MarkerCluster.css";
+import "leaflet.markercluster/dist/MarkerCluster.Default.css";
+import "leaflet.markercluster";
 
 /* ---------- custom icons ---------- */
 const towerIcon = new L.Icon({
@@ -25,6 +28,53 @@ const repeaterIcon = new L.Icon({
 /* ---------- click handler component ---------- */
 function ClickHandler({ onMapClick }) {
   useMapEvents({ click: (e) => onMapClick(e.latlng) });
+  return null;
+}
+
+/* ---------- clustered tower layer ---------- */
+function ClusteredTowers({ towers, onTowerSelect }) {
+  const map = useMap();
+  const clusterRef = useRef(null);
+  const prevTowersRef = useRef(null);
+
+  useEffect(() => {
+    if (prevTowersRef.current === towers) return;
+    prevTowersRef.current = towers;
+
+    if (clusterRef.current) {
+      map.removeLayer(clusterRef.current);
+    }
+
+    const cluster = L.markerClusterGroup({
+      chunkedLoading: true,
+      chunkInterval: 100,
+      chunkDelay: 10,
+      maxClusterRadius: 60,
+      disableClusteringAtZoom: 16,
+      spiderfyOnMaxZoom: true,
+    });
+
+    const markers = towers.map((t) => {
+      const m = L.marker([t.lat, t.lon], { icon: towerIcon });
+      m.bindPopup(
+        `<strong>${t.id}</strong><br/>${t.operator} &middot; ${t.height_m}m<br/>${(t.bands || []).join(", ")}<br/>${t.power_dbm} dBm`
+      );
+      m.on("click", () => onTowerSelect(t));
+      return m;
+    });
+
+    cluster.addLayers(markers);
+    map.addLayer(cluster);
+    clusterRef.current = cluster;
+
+    return () => {
+      if (clusterRef.current) {
+        map.removeLayer(clusterRef.current);
+        clusterRef.current = null;
+      }
+    };
+  }, [towers, map, onTowerSelect]);
+
   return null;
 }
 
@@ -74,22 +124,8 @@ export default function TowerMap({
       />
       <ClickHandler onMapClick={onMapClick} />
 
-      {/* towers */}
-      {towers.map((t) => (
-        <Marker
-          key={t.id}
-          position={[t.lat, t.lon]}
-          icon={towerIcon}
-          eventHandlers={{ click: () => onTowerSelect(t) }}
-        >
-          <Popup>
-            <strong>{t.id}</strong><br />
-            {t.operator} &middot; {t.height_m}m<br />
-            {(t.bands || []).join(", ")}<br />
-            {t.power_dbm} dBm
-          </Popup>
-        </Marker>
-      ))}
+      {/* towers – clustered for performance */}
+      <ClusteredTowers towers={towers} onTowerSelect={onTowerSelect} />
 
       {/* receiver */}
       {receiverPos && (

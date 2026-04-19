@@ -21,6 +21,16 @@ export default function Sidebar({
   const [maxHops, setMaxHops] = useState(3);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [towerSearch, setTowerSearch] = useState("");
+  const [visibleCount, setVisibleCount] = useState(200);
+
+  const filteredTowers = towerSearch
+    ? towers.filter(
+        (t) =>
+          t.id.toLowerCase().includes(towerSearch.toLowerCase()) ||
+          t.operator.toLowerCase().includes(towerSearch.toLowerCase())
+      )
+    : towers;
 
   // Batch state
   const [batchFile, setBatchFile] = useState(null);
@@ -184,7 +194,7 @@ export default function Sidebar({
         <h3>System</h3>
         {healthStatus ? (
           <div className="health-ok">
-            <span className="dot green" /> Healthy &middot; {healthStatus.towers_loaded} towers
+            <span className="dot green" /> Healthy &middot; {(healthStatus.towers_in_db ?? healthStatus.towers_loaded ?? 0).toLocaleString()} towers
           </div>
         ) : (
           <div className="health-err"><span className="dot red" /> Connecting&hellip;</div>
@@ -402,14 +412,34 @@ export default function Sidebar({
 
       {/* tower list */}
       <section className="panel">
-        <h3>All Towers ({towers.length})</h3>
+        <h3>All Towers ({towers.length.toLocaleString()})</h3>
+        <input
+          type="text"
+          placeholder="Search towers…"
+          value={towerSearch}
+          onChange={(e) => setTowerSearch(e.target.value)}
+          style={{
+            width: "100%", padding: "0.35rem 0.5rem", marginBottom: "0.4rem",
+            background: "#1e293b", border: "1px solid #334155", borderRadius: "4px",
+            color: "#e2e8f0", fontSize: "0.8rem", boxSizing: "border-box",
+          }}
+        />
         <ul className="tower-list">
-          {towers.map((t) => (
+          {filteredTowers.slice(0, visibleCount).map((t) => (
             <li key={t.id} className={selectedTower?.id === t.id ? "active" : ""}>
               <strong>{t.id}</strong> — {t.operator}
             </li>
           ))}
         </ul>
+        {filteredTowers.length > visibleCount && (
+          <button
+            className="btn"
+            style={{ width: "100%", marginTop: "0.3rem", fontSize: "0.75rem", padding: "0.3rem" }}
+            onClick={() => setVisibleCount((c) => c + 200)}
+          >
+            Show more ({(filteredTowers.length - visibleCount).toLocaleString()} remaining)
+          </button>
+        )}
       </section>
     </div>
   );
