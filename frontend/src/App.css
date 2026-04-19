@@ -743,6 +743,134 @@ html, body, #root {
   min-width: 70px;
 }
 
+/* Mode selector */
+.bedrock-modes {
+  display: flex;
+  gap: 0.3rem;
+}
+.mode-btn {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.mode-btn:hover { border-color: #2563eb; color: #e2e8f0; }
+.mode-btn.active { background: #1e3a5f; border-color: #2563eb; color: #38bdf8; }
+
+/* Context enriched display */
+.ctx-feasible { color: #4ade80; font-weight: 600; }
+.ctx-unfeasible { color: #f87171; font-weight: 600; }
+
+/* Clear conversation button */
+.btn-clear {
+  width: 100%;
+  padding: 0.4rem;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-clear:hover { border-color: #ef4444; color: #f87171; }
+
+/* Feature cards on empty state */
+.bedrock-features {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+  margin: 1.2rem auto;
+  max-width: 600px;
+  text-align: left;
+}
+.feature-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.feature-card strong {
+  color: #38bdf8;
+  font-size: 0.82rem;
+}
+.feature-card span {
+  color: #94a3b8;
+  font-size: 0.73rem;
+  line-height: 1.45;
+}
+
+/* Message badges */
+.msg-badge {
+  display: inline-block;
+  font-size: 0.6rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  margin-left: 0.5rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.badge-compare { background: #1e3a5f; color: #38bdf8; }
+.badge-suggest { background: #1a2e1a; color: #4ade80; }
+
+/* Markdown rendered content */
+.md-rendered { white-space: normal; word-break: break-word; }
+.md-rendered strong { color: #f1f5f9; }
+.md-rendered em { color: #cbd5e1; }
+.md-rendered .md-h2 { display: block; font-size: 1.05rem; margin: 0.8rem 0 0.3rem; color: #38bdf8; }
+.md-rendered .md-h3 { display: block; font-size: 0.95rem; margin: 0.6rem 0 0.2rem; color: #38bdf8; }
+.md-rendered .md-h4 { display: block; font-size: 0.88rem; margin: 0.4rem 0 0.2rem; color: #94a3b8; }
+.md-rendered .md-li { display: block; padding-left: 1rem; position: relative; margin: 0.15rem 0; }
+.md-rendered .md-li::before { content: "•"; position: absolute; left: 0.2rem; color: #475569; }
+.md-rendered .md-li-num { display: block; padding-left: 1rem; margin: 0.15rem 0; }
+.md-rendered .md-code-block {
+  display: block;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 0.5rem 0.7rem;
+  margin: 0.4rem 0;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.78rem;
+  overflow-x: auto;
+  white-space: pre;
+  color: #e2e8f0;
+}
+.md-rendered .md-inline-code {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem;
+  font-family: 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.78rem;
+  color: #fbbf24;
+}
+.md-rendered .md-hr { border: none; border-top: 1px solid #334155; margin: 0.6rem 0; }
+
+/* Typing animation */
+.typing-dots span {
+  animation: blink 1.4s infinite;
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0; }
+  40% { opacity: 1; }
+}
+
 /* Bedrock mobile */
 @media (max-width: 768px) {
   .bedrock-playground {
@@ -758,6 +886,9 @@ html, body, #root {
   }
   .bedrock-msg {
     max-width: 95%;
+  }
+  .bedrock-features {
+    grid-template-columns: 1fr;
   }
 }
 

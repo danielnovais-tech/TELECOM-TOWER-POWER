@@ -1841,6 +1841,107 @@ async def bedrock_models(
         raise HTTPException(status_code=502, detail=f"Bedrock error: {exc}")
 
 
+class BedrockScenarioRequest(BaseModel):
+    scenarios: List[Dict] = Field(..., min_length=2, max_length=10, description="List of scenario dicts to compare")
+    question: Optional[str] = Field(None, max_length=4000, description="Optional custom question")
+    model_id: Optional[str] = Field(None, description="Bedrock model ID override")
+    max_tokens: Optional[int] = Field(None, ge=1, le=4096)
+    temperature: Optional[float] = Field(None, ge=0.0, le=1.0)
+
+
+@app.post("/bedrock/compare")
+async def bedrock_compare_scenarios(
+    body: BedrockScenarioRequest,
+    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+):
+    """
+    Compare multiple RF scenarios using AI analysis.
+    Accepts 2-10 scenarios (e.g. different frequencies, antenna heights)
+    and returns an engineering comparison with recommendations.
+    Requires PRO or ENTERPRISE tier.
+    """
+    from bedrock_service import compare_scenarios
+    try:
+        result = compare_scenarios(
+            scenarios=body.scenarios,
+            question=body.question,
+            model_id=body.model_id,
+            max_tokens=body.max_tokens,
+            temperature=body.temperature,
+        )
+        return result
+    except Exception as exc:
+        logger.error("Bedrock compare error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Bedrock model error: {exc}")
+
+
+class BedrockBatchAnalysisRequest(BaseModel):
+    batch_results: List[Dict] = Field(..., min_length=1, max_length=500, description="Link analysis results to analyze")
+    question: Optional[str] = Field(None, max_length=4000)
+    model_id: Optional[str] = Field(None)
+    max_tokens: Optional[int] = Field(None, ge=1, le=4096)
+    temperature: Optional[float] = Field(None, ge=0.0, le=1.0)
+
+
+@app.post("/bedrock/batch-analyze")
+async def bedrock_batch_analyze(
+    body: BedrockBatchAnalysisRequest,
+    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+):
+    """
+    Analyze a batch of link analysis results with AI.
+    Processes up to 500 link results and provides consolidated
+    coverage assessment, worst-link identification, and prioritized
+    remediation recommendations.
+    Requires PRO or ENTERPRISE tier.
+    """
+    from bedrock_service import analyze_batch
+    try:
+        result = analyze_batch(
+            batch_results=body.batch_results,
+            question=body.question,
+            model_id=body.model_id,
+            max_tokens=body.max_tokens,
+            temperature=body.temperature,
+        )
+        return result
+    except Exception as exc:
+        logger.error("Bedrock batch-analyze error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Bedrock model error: {exc}")
+
+
+class BedrockAntennaRequest(BaseModel):
+    analysis: Dict = Field(..., description="Link analysis result")
+    tower: Dict = Field(..., description="Tower information")
+    target_clearance: float = Field(0.6, ge=0.0, le=1.0, description="Target Fresnel zone clearance fraction")
+    model_id: Optional[str] = Field(None)
+
+
+@app.post("/bedrock/suggest-height")
+async def bedrock_suggest_height(
+    body: BedrockAntennaRequest,
+    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+):
+    """
+    AI-powered antenna height recommendation based on link analysis
+    and terrain profile. Calculates the optimal height for the desired
+    Fresnel zone clearance.
+    Requires PRO or ENTERPRISE tier.
+    """
+    from bedrock_service import suggest_antenna_height
+    try:
+        result = suggest_antenna_height(
+            analysis=body.analysis,
+            tower=body.tower,
+            target_clearance=body.target_clearance,
+            model_id=body.model_id,
+        )
+        return result
+    except Exception as exc:
+        logger.error("Bedrock suggest-height error: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Bedrock model error: {exc}")
+
+
 # ------------------------------------------------------------
 # Run the server (if executed directly)
 # ------------------------------------------------------------

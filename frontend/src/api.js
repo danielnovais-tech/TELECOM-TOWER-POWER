@@ -336,3 +336,57 @@ export async function fetchBedrockModels() {
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 }
+
+/**
+ * Compare multiple RF scenarios using AI analysis.
+ * @param {{ scenarios: Array<Object>, question?: string, model_id?: string, max_tokens?: number, temperature?: number }} body
+ */
+export async function bedrockCompare(body) {
+  const r = await fetch(`${BASE}/bedrock/compare`, {
+    method: "POST",
+    headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (r.status === 429) throw new RateLimitError(rateLimit.limit);
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(detail || `${r.status} ${r.statusText}`);
+  }
+  return r.json();
+}
+
+/**
+ * Analyze a batch of link analysis results with AI.
+ * @param {{ batch_results: Array<Object>, question?: string, model_id?: string, max_tokens?: number, temperature?: number }} body
+ */
+export async function bedrockBatchAnalyze(body) {
+  const r = await fetch(`${BASE}/bedrock/batch-analyze`, {
+    method: "POST",
+    headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (r.status === 429) throw new RateLimitError(rateLimit.limit);
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(detail || `${r.status} ${r.statusText}`);
+  }
+  return r.json();
+}
+
+/**
+ * AI-powered antenna height recommendation.
+ * @param {{ analysis: Object, tower: Object, target_clearance?: number, model_id?: string }} body
+ */
+export async function bedrockSuggestHeight(body) {
+  const r = await fetch(`${BASE}/bedrock/suggest-height`, {
+    method: "POST",
+    headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (r.status === 429) throw new RateLimitError(rateLimit.limit);
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(detail || `${r.status} ${r.statusText}`);
+  }
+  return r.json();
+}
