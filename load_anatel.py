@@ -8,6 +8,13 @@ published as Excel spreadsheets.  The data lists every licensed base station
 **no geographic coordinates**.  This script geocodes each municipality via
 Nominatim and loads the results.
 
+Imported dataset stats (ERBs_com_equipamentos_v2.xlsx):
+    - 443,396 raw records → 105,240 unique stations after deduplication
+    - 12 operators: Claro, Vivo, TIM, Oi, Algar, Brisanet, Unifique,
+      Sercomtel, and others
+    - 5,570 municipalities geocoded across all 27 Brazilian states
+    - Default parameters: 35 m height, 43 dBm power, 700/1800 MHz bands
+
 Data source:
     https://github.com/LuSrodri/ERBs_per_city_per_operators_brazil
     File: ERBs_com_equipamentos_v2.xlsx

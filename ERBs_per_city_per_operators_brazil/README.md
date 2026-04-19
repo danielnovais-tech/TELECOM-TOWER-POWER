@@ -52,6 +52,16 @@ Esta base de dados pode ser utilizada para:
 - Uma mesma estação pode ter múltiplos equipamentos (diferentes códigos)
 - Os dados refletem autorizações e licenças concedidas pela Anatel
 
+## Estatísticas do Dataset
+
+| Métrica | Valor |
+|---------|-------|
+| Registros brutos | 443.396 |
+| Estações únicas (NumEstacao) | 105.240 |
+| Operadoras | 12 (Claro, Vivo, TIM, Oi, Algar, Brisanet, Unifique, Sercomtel, entre outras) |
+| Municípios | 5.570 (todos os 27 estados brasileiros) |
+| Parâmetros padrão de importação | 35 m altura, 43 dBm potência, bandas 700/1800 MHz |
+
 ## Lei de Acesso à Informação (LAI)
 
 A Lei nº 12.527/2011 garante o direito constitucional de acesso às informações públicas. Esta base de dados foi disponibilizada em conformidade com os princípios de:
