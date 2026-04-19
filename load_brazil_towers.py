@@ -288,7 +288,8 @@ def _enrich_anatel_from_ocid(store: TowerStore, threshold_m: float = 2000.0,
 # ── Regeocode: improve ANATEL tower coordinates ──────────────────
 
 def _regeocode_anatel(store: TowerStore, threshold_m: float = 5000.0,
-                      dry_run: bool = False) -> None:
+                      dry_run: bool = False,
+                      report_path: str | None = None) -> None:
     """Improve ANATEL tower coordinates by snapping to nearby OpenCelliD towers.
 
     Strategy (applied per ANATEL tower, in priority order):
@@ -334,14 +335,24 @@ def _regeocode_anatel(store: TowerStore, threshold_m: float = 5000.0,
     spiral_only = 0
     updates: list[dict] = []
 
+    # Validation tracking
+    snap_distances: list[float] = []          # metres to OCID ref
+    per_operator: dict[str, dict] = defaultdict(lambda: {"same": 0, "any": 0, "spiral": 0})
+    report_rows: list[dict] = []              # for CSV report
+    spiral_report_idx: dict[str, int] = {}    # tower_id → report_rows index
+
     # Group ANATEL towers by municipality centroid (rounded to 3 decimals)
     # for deterministic spiral placement of unmatched towers
     centroid_groups: dict[tuple[float, float], list[dict]] = defaultdict(list)
 
-    for at in anatel_towers:
+    n_anatel = len(anatel_towers)
+    for idx, at in enumerate(anatel_towers):
+        if idx % 10000 == 0:
+            print(f"  Processing {idx:,}/{n_anatel:,} ...", flush=True)
         gx = int(at["lat"] / GRID_SIZE)
         gy = int(at["lon"] / GRID_SIZE)
         op = at["operator"]
+        old_lat, old_lon = at["lat"], at["lon"]
 
         # Strategy 1: Same-operator snap (3x3 grid neighbourhood)
         best_dist = threshold_m + 1
@@ -364,6 +375,17 @@ def _regeocode_anatel(store: TowerStore, threshold_m: float = 5000.0,
             at["lat"] = round(new_lat, 6)
             at["lon"] = round(new_lon, 6)
             snapped_same_op += 1
+            snap_distances.append(best_dist)
+            per_operator[op]["same"] += 1
+            if report_path:
+                report_rows.append({
+                    "id": at["id"], "operator": op,
+                    "strategy": "same_op",
+                    "snap_dist_m": round(best_dist, 1),
+                    "ocid_ref": best_ocid["id"],
+                    "old_lat": old_lat, "old_lon": old_lon,
+                    "new_lat": at["lat"], "new_lon": at["lon"],
+                })
             updates.append(at)
             continue
 
@@ -388,14 +410,37 @@ def _regeocode_anatel(store: TowerStore, threshold_m: float = 5000.0,
             at["lat"] = round(new_lat, 6)
             at["lon"] = round(new_lon, 6)
             snapped_any_op += 1
+            snap_distances.append(best_dist)
+            per_operator[op]["any"] += 1
+            if report_path:
+                report_rows.append({
+                    "id": at["id"], "operator": op,
+                    "strategy": "any_op",
+                    "snap_dist_m": round(best_dist, 1),
+                    "ocid_ref": best_ocid["id"],
+                    "old_lat": old_lat, "old_lon": old_lon,
+                    "new_lat": at["lat"], "new_lon": at["lon"],
+                })
             updates.append(at)
             continue
 
         # Strategy 3: No OCID nearby — use spiral placement
         centroid_key = (round(at["lat"], 3), round(at["lon"], 3))
         centroid_groups[centroid_key].append(at)
+        per_operator[op]["spiral"] += 1
+        if report_path:
+            spiral_report_idx[at["id"]] = len(report_rows)
+            report_rows.append({
+                "id": at["id"], "operator": op,
+                "strategy": "spiral",
+                "snap_dist_m": "",
+                "ocid_ref": "",
+                "old_lat": old_lat, "old_lon": old_lon,
+                "new_lat": "", "new_lon": "",  # filled below
+            })
 
     # Apply spiral placement to unmatched groups
+    spiral_idx = 0
     for (clat, clon), towers in centroid_groups.items():
         for i, at in enumerate(towers):
             # Fermat spiral: r grows with sqrt(i), angle by golden ratio
@@ -405,17 +450,62 @@ def _regeocode_anatel(store: TowerStore, threshold_m: float = 5000.0,
             at["lon"] = round(clon + r_deg * math.sin(angle), 6)
             spiral_only += 1
             updates.append(at)
+            # Backfill report rows for spiral towers
+            if report_path and at["id"] in spiral_report_idx:
+                report_rows[spiral_report_idx[at["id"]]]["new_lat"] = at["lat"]
+                report_rows[spiral_report_idx[at["id"]]]["new_lon"] = at["lon"]
 
+    # ── Results summary ──────────────────────────────────────────
+    total_snapped = snapped_same_op + snapped_any_op
     print(f"\n  Snapped to same-operator OCID:  {snapped_same_op:,}")
     print(f"  Snapped to any-operator OCID:   {snapped_any_op:,}")
     print(f"  Spiral placement (no OCID):     {spiral_only:,}")
     print(f"  Total to update:                {len(updates):,}")
+
+    # Snap distance statistics
+    if snap_distances:
+        snap_distances.sort()
+        avg_d = sum(snap_distances) / len(snap_distances)
+        med_d = snap_distances[len(snap_distances) // 2]
+        p90_d = snap_distances[int(len(snap_distances) * 0.9)]
+        print(f"\n  Snap distance (OCID-matched towers only):")
+        print(f"    Min:     {snap_distances[0]:>8,.0f} m")
+        print(f"    Median:  {med_d:>8,.0f} m")
+        print(f"    Mean:    {avg_d:>8,.0f} m")
+        print(f"    P90:     {p90_d:>8,.0f} m")
+        print(f"    Max:     {snap_distances[-1]:>8,.0f} m")
+
+        # Distance histogram
+        buckets = [0, 100, 500, 1000, 2000, 5000]
+        print(f"\n  Distance distribution:")
+        for i in range(len(buckets)):
+            lo = buckets[i]
+            hi = buckets[i + 1] if i + 1 < len(buckets) else float("inf")
+            cnt = sum(1 for d in snap_distances if lo <= d < hi)
+            pct = cnt / len(snap_distances) * 100
+            label = f"{lo:,}–{hi:,.0f}m" if hi < float("inf") else f">{lo:,}m"
+            bar = "█" * int(pct / 2)
+            print(f"    {label:>12s}  {cnt:>6,}  ({pct:5.1f}%)  {bar}")
+
+    # Per-operator breakdown
+    if per_operator:
+        print(f"\n  Per-operator breakdown:")
+        print(f"    {'Operator':12s} {'Same-Op':>8s} {'Any-Op':>8s} {'Spiral':>8s} {'Total':>8s} {'Match%':>7s}")
+        print(f"    {'-'*12} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*7}")
+        for op in sorted(per_operator, key=lambda o: -(per_operator[o]["same"] + per_operator[o]["any"] + per_operator[o]["spiral"])):
+            s = per_operator[op]
+            t = s["same"] + s["any"] + s["spiral"]
+            matched = s["same"] + s["any"]
+            pct = matched / t * 100 if t else 0
+            print(f"    {op:12s} {s['same']:>8,} {s['any']:>8,} {s['spiral']:>8,} {t:>8,} {pct:>6.1f}%")
 
     if dry_run:
         print(f"\n  [DRY RUN] Would update {len(updates):,} towers. Samples:")
         for t in updates[:8]:
             print(f"    {t['id']:30s}  {t['operator']:10s}  "
                   f"({t['lat']:.6f}, {t['lon']:.6f})")
+        if report_path:
+            _write_regeocode_report(report_rows, report_path)
         return
 
     # Write in batches
@@ -438,178 +528,20 @@ def _regeocode_anatel(store: TowerStore, threshold_m: float = 5000.0,
     top = coords.most_common(3)
     print(f"  Max towers at same point: {top[0][1]}" if top else "")
 
-
-def _offset_point(lat: float, lon: float, dist_m: float,
-                  bearing_deg: float) -> tuple[float, float]:
-    """Move a point by *dist_m* metres at *bearing_deg* degrees."""
-    R = 6_371_000
-    d = dist_m / R
-    br = math.radians(bearing_deg)
-    lat1 = math.radians(lat)
-    lon1 = math.radians(lon)
-    lat2 = math.asin(
-        math.sin(lat1) * math.cos(d)
-        + math.cos(lat1) * math.sin(d) * math.cos(br)
-    )
-    lon2 = lon1 + math.atan2(
-        math.sin(br) * math.sin(d) * math.cos(lat1),
-        math.cos(d) - math.sin(lat1) * math.sin(lat2),
-    )
-    return math.degrees(lat2), math.degrees(lon2)
+    if report_path:
+        _write_regeocode_report(report_rows, report_path)
 
 
-# ── Regeocode: improve ANATEL tower coordinates ──────────────────
-
-def _regeocode_anatel(store: TowerStore, threshold_m: float = 5000.0,
-                      dry_run: bool = False) -> None:
-    """Improve ANATEL tower coordinates by snapping to nearby OpenCelliD towers.
-
-    Strategy (applied per ANATEL tower, in priority order):
-      1. **Same-operator snap**: Find the nearest OpenCelliD tower with the
-         same operator within *threshold_m*. Place the ANATEL tower near it
-         (50-300m offset to avoid exact overlap).
-      2. **Any-operator snap**: If no same-operator OCID tower exists, use the
-         nearest OCID tower of any operator (with larger offset, 200-500m).
-      3. **Improved jitter**: If no OCID towers at all in the area, keep the
-         municipality centroid but distribute towers using a deterministic
-         spiral pattern instead of random jitter (more realistic spread).
-    """
-    _print_separator(
-        f"Regeocode (ANATEL → OpenCelliD snap, threshold={threshold_m:.0f}m)"
-    )
-
-    total = store.count()
-    all_towers = store.list_all(limit=total)
-    ocid_towers = [t for t in all_towers if t["id"].startswith("OCID_")]
-    anatel_towers = [t for t in all_towers if t["id"].startswith("ANATEL_")]
-
-    if not anatel_towers:
-        print("  No ANATEL towers to regeocode.")
-        return
-    if not ocid_towers:
-        print("  No OpenCelliD towers for snapping. Applying spiral jitter only.")
-
-    print(f"  ANATEL towers:   {len(anatel_towers):,}")
-    print(f"  OpenCelliD refs: {len(ocid_towers):,}")
-
-    # Build spatial grid index for OCID towers (all operators)
-    GRID_SIZE = 0.05  # ~5.5 km cells
-    grid_all: dict[tuple[int, int], list[dict]] = defaultdict(list)
-    grid_op: dict[tuple[int, int, str], list[dict]] = defaultdict(list)
-    for t in ocid_towers:
-        gx = int(t["lat"] / GRID_SIZE)
-        gy = int(t["lon"] / GRID_SIZE)
-        grid_all[(gx, gy)].append(t)
-        grid_op[(gx, gy, t["operator"])].append(t)
-
-    snapped_same_op = 0
-    snapped_any_op = 0
-    spiral_only = 0
-    updates: list[dict] = []
-
-    # Group ANATEL towers by municipality centroid (rounded to 3 decimals)
-    # for deterministic spiral placement of unmatched towers
-    centroid_groups: dict[tuple[float, float], list[dict]] = defaultdict(list)
-
-    for at in anatel_towers:
-        gx = int(at["lat"] / GRID_SIZE)
-        gy = int(at["lon"] / GRID_SIZE)
-        op = at["operator"]
-
-        # Strategy 1: Same-operator snap (3x3 grid neighbourhood)
-        best_dist = threshold_m + 1
-        best_ocid = None
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for ot in grid_op.get((gx + dx, gy + dy, op), []):
-                    d = _haversine_m(at["lat"], at["lon"], ot["lat"], ot["lon"])
-                    if d < best_dist:
-                        best_dist = d
-                        best_ocid = ot
-
-        if best_ocid is not None:
-            # Place near the OCID tower with 50-300m offset
-            offset_m = 50 + (hash(at["id"]) % 250)
-            bearing = (hash(at["id"] + "b") % 360)
-            new_lat, new_lon = _offset_point(
-                best_ocid["lat"], best_ocid["lon"], offset_m, bearing
-            )
-            at["lat"] = round(new_lat, 6)
-            at["lon"] = round(new_lon, 6)
-            snapped_same_op += 1
-            updates.append(at)
-            continue
-
-        # Strategy 2: Any-operator snap (3x3 grid neighbourhood)
-        best_dist = threshold_m + 1
-        best_ocid = None
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for ot in grid_all.get((gx + dx, gy + dy), []):
-                    d = _haversine_m(at["lat"], at["lon"], ot["lat"], ot["lon"])
-                    if d < best_dist:
-                        best_dist = d
-                        best_ocid = ot
-
-        if best_ocid is not None:
-            # Larger offset (200-500m) since different operator
-            offset_m = 200 + (hash(at["id"]) % 300)
-            bearing = (hash(at["id"] + "b") % 360)
-            new_lat, new_lon = _offset_point(
-                best_ocid["lat"], best_ocid["lon"], offset_m, bearing
-            )
-            at["lat"] = round(new_lat, 6)
-            at["lon"] = round(new_lon, 6)
-            snapped_any_op += 1
-            updates.append(at)
-            continue
-
-        # Strategy 3: No OCID nearby — use spiral placement
-        centroid_key = (round(at["lat"], 3), round(at["lon"], 3))
-        centroid_groups[centroid_key].append(at)
-
-    # Apply spiral placement to unmatched groups
-    for (clat, clon), towers in centroid_groups.items():
-        for i, at in enumerate(towers):
-            # Fermat spiral: r grows with sqrt(i), angle by golden ratio
-            r_deg = 0.003 + 0.001 * math.sqrt(i + 1)  # ~300m base + growth
-            angle = i * 2.399963  # golden angle in radians
-            at["lat"] = round(clat + r_deg * math.cos(angle), 6)
-            at["lon"] = round(clon + r_deg * math.sin(angle), 6)
-            spiral_only += 1
-            updates.append(at)
-
-    print(f"\n  Snapped to same-operator OCID:  {snapped_same_op:,}")
-    print(f"  Snapped to any-operator OCID:   {snapped_any_op:,}")
-    print(f"  Spiral placement (no OCID):     {spiral_only:,}")
-    print(f"  Total to update:                {len(updates):,}")
-
-    if dry_run:
-        print(f"\n  [DRY RUN] Would update {len(updates):,} towers. Samples:")
-        for t in updates[:8]:
-            print(f"    {t['id']:30s}  {t['operator']:10s}  "
-                  f"({t['lat']:.6f}, {t['lon']:.6f})")
-        return
-
-    # Write in batches
-    batch_size = 5000
-    written = 0
-    for i in range(0, len(updates), batch_size):
-        batch = updates[i:i + batch_size]
-        store.upsert_many(batch)
-        written += len(batch)
-    print(f"  Updated {written:,} ANATEL tower coordinates")
-
-    # Post-update stats
-    updated_all = store.list_all(limit=store.count())
-    updated_anatel = [t for t in updated_all if t["id"].startswith("ANATEL_")]
-    from collections import Counter
-    coords = Counter(
-        (round(t["lat"], 4), round(t["lon"], 4)) for t in updated_anatel
-    )
-    print(f"\n  Coordinate uniqueness: {len(coords):,} unique / {len(updated_anatel):,} total")
-    top = coords.most_common(3)
-    print(f"  Max towers at same point: {top[0][1]}" if top else "")
+def _write_regeocode_report(rows: list[dict], path: str) -> None:
+    """Write regeocode validation report to CSV."""
+    import csv
+    fields = ["id", "operator", "strategy", "snap_dist_m", "ocid_ref",
+              "old_lat", "old_lon", "new_lat", "new_lon"]
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"\n  Validation report written: {path} ({len(rows):,} rows)")
 
 
 def _offset_point(lat: float, lon: float, dist_m: float,
@@ -768,6 +700,10 @@ def main():
         help="Max snap distance in metres for regeocode (default: 5000)",
     )
     parser.add_argument(
+        "--regeocode-report", type=str, default=None,
+        help="Write regeocode validation CSV report to this path",
+    )
+    parser.add_argument(
         "--dedup", action="store_true",
         help="Deduplicate cross-source towers within --dedup-threshold metres",
     )
@@ -808,7 +744,8 @@ def main():
 
     if args.regeocode and not has_ocid and not has_anatel:
         _regeocode_anatel(store, threshold_m=args.regeocode_threshold,
-                          dry_run=args.dry_run)
+                          dry_run=args.dry_run,
+                          report_path=args.regeocode_report)
         return
 
     if not has_ocid and not has_anatel:
@@ -869,7 +806,8 @@ def main():
 
     if args.regeocode and not args.dry_run:
         _regeocode_anatel(store, threshold_m=args.regeocode_threshold,
-                          dry_run=args.dry_run)
+                          dry_run=args.dry_run,
+                          report_path=args.regeocode_report)
 
     if args.dedup and not args.dry_run:
         _dedup_sources(store, prefer=args.prefer,

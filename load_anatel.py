@@ -95,6 +95,18 @@ _OPERATOR_MAP = {
     "NEXTEL": "Nextel",
     "NEXTEL TELECOMUNICACOES": "Nextel",
     "NEXTEL TELECOMUNICAÇÕES": "Nextel",
+    "BRISANET": "Brisanet",
+    "BRISANET SERVICOS DE TELECOMUNICACOES S.A.": "Brisanet",
+    "BRISANET SERVICOS DE TELECOMUNICACOES S/A": "Brisanet",
+    "BRISANET TELECOMUNICACOES": "Brisanet",
+    "UNIFIQUE": "Unifique",
+    "UNIFIQUE TELECOMUNICACOES S/A": "Unifique",
+    "UNIFIQUE TELECOMUNICACOES S.A.": "Unifique",
+    "IEZ": "Iez!",
+    "IEZ!": "Iez!",
+    "IEZ! TELECOM": "Iez!",
+    "GIGA MAIS": "Giga Mais",
+    "GIGA MAIS FIBRA": "Giga Mais",
 }
 
 # Default tower parameters for ANATEL data (no radio-specific info)
