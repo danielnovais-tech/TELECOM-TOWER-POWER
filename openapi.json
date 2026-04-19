@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "TELECOM TOWER POWER API",
-    "description": "Cell tower coverage, link analysis, and repeater planning. 140,488 towers across Brazil — 105,240 from ANATEL (12 operators, 5,570 municipalities) plus OpenCelliD data. Requires an API key via the `X-API-Key` header.",
+    "description": "Cell tower coverage, link analysis, and repeater planning. 140,906 towers across Brazil — 105,240 from ANATEL (12 operators, 5,570 municipalities) plus OpenCelliD data. Requires an API key via the `X-API-Key` header.",
     "version": "0.1.0"
   },
   "paths": {
