@@ -7,7 +7,7 @@ COPY frontend/ .
 RUN npx vite build
 
 # ── Stage 2: Python application ────────────────────────────
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 # Prevent Python from buffering stdout/stderr (important for container logs)
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -45,6 +45,9 @@ COPY frontend.py .
 COPY api_client.py .
 COPY streamlit_app.py .
 COPY load_towers.py .
+COPY load_opencellid.py .
+COPY load_brazil_towers.py .
+COPY geocoder_br.py .
 COPY towers_brazil.csv .
 COPY sample_receivers.csv .
 COPY sample_batch_test.csv .

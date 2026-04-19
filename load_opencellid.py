@@ -342,8 +342,8 @@ def main():
         help="Max towers to load (0 = all)",
     )
     parser.add_argument(
-        "--min-samples", type=int, default=2,
-        help="Skip cells with fewer than N measurement samples (default: 2)",
+        "--min-samples", type=int, default=1,
+        help="Skip cells with fewer than N measurement samples (default: 1)",
     )
     parser.add_argument(
         "--batch-size", type=int, default=5000,
