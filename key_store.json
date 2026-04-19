@@ -158,5 +158,21 @@
     "stripe_customer_id": null,
     "stripe_subscription_id": null,
     "created": 1776568984.617006
+  },
+  "ttp_gwBe3jSjmeALrzrn8vDMHlmGSpSLlPioIPy1Lu5rZGE": {
+    "tier": "free",
+    "owner": "test-free-9d6c7bc4@test.invalid",
+    "email": "test-free-9d6c7bc4@test.invalid",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776572690.8041236
+  },
+  "ttp_Eg777Rns_zdq0E7E99FhLLsvKGpLUFsW8m61WSjq0B0": {
+    "tier": "free",
+    "owner": "test-signup-e615e443@test.invalid",
+    "email": "test-signup-e615e443@test.invalid",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1776572691.0593867
   }
 }
