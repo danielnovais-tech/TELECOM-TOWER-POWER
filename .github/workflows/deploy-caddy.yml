@@ -45,12 +45,14 @@ jobs:
       - name: Verify health endpoint
         run: |
           sleep 3
-          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" https://www.telecomtowerpower.com.br/health)
-          echo "Health check returned HTTP $STATUS"
-          if [ "$STATUS" != "200" ]; then
-            echo "::error::Health check failed with HTTP $STATUS"
-            exit 1
-          fi
+          for HOST in www.telecomtowerpower.com.br app.telecomtowerpower.com.br; do
+            STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://${HOST}/health")
+            echo "Health check ${HOST} returned HTTP $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              echo "::error::Health check failed for ${HOST} with HTTP $STATUS"
+              exit 1
+            fi
+          done
 
       - name: Cleanup
         if: always()

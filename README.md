@@ -414,6 +414,16 @@ Automatic DNS failover is **deployed and active**:
 
 If the ALB health check fails, Route 53 automatically routes traffic to Railway within ~60 s.
 
+### Route 53 DNS Records
+
+| Subdomain | Type | Target | Purpose |
+|---|---|---|---|
+| `app.telecomtowerpower.com.br` | A (alias) | ALB | React frontend (canonical) |
+| `www.telecomtowerpower.com.br` | A (alias) | ALB | React frontend |
+| `api.telecomtowerpower.com.br` | CNAME (failover) | ALB / Railway | API backend |
+| `monitoring.telecomtowerpower.com.br` | A (alias) | ALB | Grafana dashboard |
+| `prometheus.telecomtowerpower.com.br` | A (alias) | ALB | Prometheus |
+
 ---
 
 ## Environment Variables
@@ -423,7 +433,7 @@ If the ALB health check fails, Route 53 automatically routes traffic to Railway 
 | `DATABASE_URL` | *(none → SQLite)* | PostgreSQL connection string; omit for local SQLite |
 | `SRTM_DATA_DIR` | `./srtm_data` | Path to SRTM `.hgt` tile directory |
 | `SRTM_REDIS_URL` | *(none)* | Redis URL for L2 SRTM tile cache (e.g. `redis://redis:6379/0`) |
-| `CORS_ORIGINS` | `https://app.telecomtowerpower.com` | Comma-separated allowed CORS origins |
+| `CORS_ORIGINS` | `https://app.telecomtowerpower.com.br` | Comma-separated allowed CORS origins |
 | `MAX_UPLOAD_BYTES` | `10485760` (10 MB) | Maximum request body size |
 | `MAX_BATCH_ROWS` | `100` | Maximum rows per batch CSV upload |
 | `RATE_LIMIT_FREE` | `10` | Requests/min for free tier |

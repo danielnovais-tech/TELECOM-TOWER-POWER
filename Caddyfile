@@ -1,11 +1,20 @@
 # ── ALB traffic (HTTP, ALB terminates TLS) ───────────────────
-# www.telecomtowerpower.com.br routes through ALB which terminates TLS
-# and forwards HTTP to EC2:80. All www traffic is handled by the :80 block.
-# Do NOT add a bare "www.telecomtowerpower.com.br" block — Caddy would
-# auto-enable HTTPS and create an HTTP→HTTPS redirect loop with the ALB.
+# www.telecomtowerpower.com.br and app.telecomtowerpower.com.br route
+# through ALB which terminates TLS and forwards HTTP to EC2:80.
+# All traffic is handled by the :80 block.
+# Do NOT add bare domain blocks — Caddy would auto-enable HTTPS and
+# create an HTTP→HTTPS redirect loop with the ALB.
 :80 {
-        # Matcher for all API routes proxied to the Railway backend
-        @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup* /login* /profile* /portal*
+        # ── api.telecomtowerpower.com.br → all traffic to Railway API ──
+        @api_host host api.telecomtowerpower.com.br
+        handle @api_host {
+                reverse_proxy https://web-production-90b1f.up.railway.app {
+                        header_up Host web-production-90b1f.up.railway.app
+                }
+        }
+
+        # ── www / app frontend: selective API routing + React SPA ──
+        @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup* /login* /profile* /portal* /analyze* /plan_repeater* /export_report* /bedrock* /srtm*
 
         handle @api_routes {
                 reverse_proxy https://web-production-90b1f.up.railway.app {

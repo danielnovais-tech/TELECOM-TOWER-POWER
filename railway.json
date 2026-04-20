@@ -55,7 +55,7 @@
       "FRONTEND_URL": {
         "description": "Frontend URL for Stripe Checkout redirects",
         "required": false,
-        "default": "https://your-app.up.railway.app"
+        "default": "https://app.telecomtowerpower.com.br"
       },
       "VALID_API_KEYS": {
         "description": "JSON dict of static API keys, e.g. {\"key\":\"tier\"}",
