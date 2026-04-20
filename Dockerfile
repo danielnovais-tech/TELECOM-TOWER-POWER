@@ -64,7 +64,7 @@ RUN mkdir -p srtm_data job_results && chmod +x start.sh entrypoint.sh load_secre
 
 USER appuser
 
-# PORT is set by Railway/Render at runtime; default 8000 for local use
+# PORT is set by Railway at runtime; default 8000 for local use
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

@@ -8,7 +8,7 @@ set -euo pipefail
 #   telecom-tower-power-render — S3 batch-results + EC2 backup (shared)
 #
 # After:
-#   telecom-tower-power-render    — S3 batch-results only (Render/Railway/ECS)
+#   telecom-tower-power-render    — S3 batch-results only (Railway/ECS)
 #   telecom-tower-power-ec2-backup — S3 backups only (EC2 cron)
 #
 # Usage:
@@ -16,7 +16,7 @@ set -euo pipefail
 #
 # Prerequisites:
 #   - AWS CLI configured with IAM admin permissions
-#   - After running: rotate Render credentials, deploy new EC2 backup creds
+#   - After running: rotate app credentials, deploy new EC2 backup creds
 # ============================================================================
 
 BUCKET="telecom-tower-power-results"
@@ -208,10 +208,10 @@ cat <<'NEXT'
        EOF
        sudo chmod 600 /etc/pg-backup-s3.env
 
-  2. Rotate the Render user's access key (optional but recommended):
+  2. Rotate the app user's access key (optional but recommended):
 
        aws iam create-access-key --user-name telecom-tower-power-render
-       # Update Render/Railway/ECS with new key
+       # Update Railway/ECS with new key
        # Then delete the old key:
        aws iam delete-access-key --user-name telecom-tower-power-render \
            --access-key-id <OLD_KEY_ID>
