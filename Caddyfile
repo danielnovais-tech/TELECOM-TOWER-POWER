@@ -38,3 +38,8 @@
 monitoring.telecomtowerpower.com.br {
         reverse_proxy localhost:3001
 }
+
+# ── Prometheus (metrics) ─────────────────────────────────────
+prometheus.telecomtowerpower.com.br {
+        reverse_proxy localhost:9090
+}

@@ -1,0 +1,99 @@
+name: EC2 Diagnostics
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ec2-diagnose
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Push SSH key via EC2 Instance Connect
+        run: |
+          ssh-keygen -t rsa -b 2048 -f /tmp/ec2_key -N "" -q
+          aws ec2-instance-connect send-ssh-public-key \
+            --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+            --instance-os-user ubuntu \
+            --ssh-public-key file:///tmp/ec2_key.pub
+
+      - name: Run diagnostics on EC2
+        run: |
+          ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} << 'DIAG'
+          set -x
+          echo "========================================"
+          echo "  EC2 DIAGNOSTICS — $(date -u)"
+          echo "========================================"
+
+          echo ""
+          echo "=== 1. Docker containers status ==="
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>&1 || sudo docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>&1
+
+          echo ""
+          echo "=== 2. Firewall (ufw) ==="
+          sudo ufw status 2>&1 || echo "ufw not available"
+
+          echo ""
+          echo "=== 3. Firewall (iptables) ==="
+          sudo iptables -L -n 2>&1 | head -40
+
+          echo ""
+          echo "=== 4. Listening ports (9090, 3001, 80) ==="
+          sudo ss -tulnp | grep -E '9090|3001|:80' 2>&1
+
+          echo ""
+          echo "=== 5. Systemd services ==="
+          systemctl is-active caddy 2>&1 && echo "caddy: active" || echo "caddy: not a systemd service"
+          systemctl is-active prometheus 2>&1 && echo "prometheus: active" || echo "prometheus: not a systemd service"
+          systemctl is-active grafana-server 2>&1 && echo "grafana-server: active" || echo "grafana-server: not a systemd service"
+
+          echo ""
+          echo "=== 6. Caddy config on EC2 ==="
+          cat /home/ubuntu/TELECOM-TOWER-POWER/Caddyfile 2>&1 || echo "Caddyfile not found at expected path"
+
+          echo ""
+          echo "=== 7. Local curl tests ==="
+          echo "--- Prometheus localhost:9090 ---"
+          curl -sI --max-time 3 http://localhost:9090/ 2>&1 | head -5
+          echo "--- Grafana localhost:3001 ---"
+          curl -sI --max-time 3 http://localhost:3001/ 2>&1 | head -5
+          echo "--- Caddy localhost:80 ---"
+          curl -sI --max-time 3 http://localhost:80/ 2>&1 | head -5
+
+          echo ""
+          echo "=== 8. Docker logs (prometheus, last 20 lines) ==="
+          docker logs --tail 20 $(docker ps -aqf "name=prometheus" 2>/dev/null) 2>&1 || sudo docker logs --tail 20 $(sudo docker ps -aqf "name=prometheus" 2>/dev/null) 2>&1 || echo "No prometheus container found"
+
+          echo ""
+          echo "=== 9. EC2 Security Group (instance metadata) ==="
+          TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
+          curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/security-groups 2>/dev/null || echo "metadata unavailable"
+
+          echo ""
+          echo "=== 10. docker-compose services ==="
+          cd /home/ubuntu/TELECOM-TOWER-POWER 2>/dev/null && docker compose ps 2>&1 || sudo docker-compose ps 2>&1 || echo "docker-compose not found or not in expected dir"
+
+          echo ""
+          echo "======== DIAGNOSTICS COMPLETE ========"
+          DIAG
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/ec2_key /tmp/ec2_key.pub
