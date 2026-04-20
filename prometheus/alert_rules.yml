@@ -39,3 +39,16 @@ groups:
           description: >
             The 99th-percentile request latency has exceeded 2 seconds
             for 5 minutes. Current p99: {{ $value | printf "%.2f" }}s.
+
+      # ── Batch Job Failures ──────────────────────────────────
+      # Fires when any batch job fails (critical for /batch_reports).
+      - alert: BatchJobFailures
+        expr: sum(increase(batch_jobs_failed_total[5m])) > 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Batch job failures detected ({{ $value | printf \"%.0f\" }} in 5min)"
+          description: >
+            One or more batch jobs have failed in the last 5 minutes.
+            Check worker logs and SQS dead-letter queue.
