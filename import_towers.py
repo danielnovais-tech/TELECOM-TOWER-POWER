@@ -61,7 +61,6 @@ SPOT_CHECK_COUNT = 5        # number of random towers to verify after import
 _ENV_PRESETS: dict[str, list[str]] = {
     "AWS":     ["AWS_DATABASE_URL", "AWS_DB_URL"],
     "RAILWAY": ["DATABASE_URL", "RAILWAY_DATABASE_URL", "RAILWAY_DB_URL"],
-    "RENDER":  ["RENDER_DATABASE_URL", "RENDER_DB_URL", "DATABASE_URL"],
     "SOURCE":  ["SOURCE_DATABASE_URL", "SOURCE_DB_URL"],
     "TARGET":  ["TARGET_DATABASE_URL", "TARGET_DB_URL", "DATABASE_URL"],
 }

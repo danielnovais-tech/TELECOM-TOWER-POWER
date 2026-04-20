@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ============================================================================
 # Telecom Tower Power — Environment Secrets Setup
-# Sets secrets on: Render (API), Railway (CLI), AWS (SSM Parameter Store)
+# Sets secrets on: Railway (CLI), AWS (SSM Parameter Store)
 # ============================================================================
 
 # ── Secret Values ────────────────────────────────────────────────────────────
@@ -14,7 +14,7 @@ set -euo pipefail
 #   Pro/Enterprise:    All of the above + S3_*, STRIPE_*, AWS_*
 #
 # Note: DATABASE_URL and REDIS_URL are auto-injected by platform add-ons
-#       (Render PostgreSQL, Railway Postgres plugin, etc.) — do NOT set manually.
+#       (Railway Postgres plugin, etc.) — do NOT set manually.
 
 # ── Required for ALL tiers ─────────────────────────────────────────
 VALID_API_KEYS='{"ttp_free_c35024654d83b243d3132064dfbde04b":"free","demo-key-free-001":"free"}'
@@ -25,7 +25,7 @@ STRIPE_WEBHOOK_SECRET="whsec_REPLACE_ME"
 STRIPE_PRICE_PRO="price_1TLuIl3HxrWvYaypEFUDbR58"
 STRIPE_PRICE_ENTERPRISE="price_1TLuJp3HxrWvYaypRCcqZr4g"
 
-# AWS credentials — IAM user: telecom-tower-power-render
+# AWS credentials — IAM user for S3 access
 # Scoped to s3://telecom-tower-power-results/batch-results/* ONLY.
 # EC2 backups use a SEPARATE IAM user (telecom-tower-power-ec2-backup)
 # with credentials stored in /etc/pg-backup-s3.env on the EC2 instance.
@@ -37,133 +37,11 @@ S3_REGION="sa-east-1"
 
 # ── App config ───────────────────────────────────────────────────
 FRONTEND_URL="https://app.telecomtowerpower.com.br"
-CORS_ORIGINS="https://app.telecomtowerpower.com.br,https://www.telecomtowerpower.com.br,https://api.telecomtowerpower.com.br,https://telecom-tower-power-ui.onrender.com,https://app.telecomtowerpower.com"
+CORS_ORIGINS="https://app.telecomtowerpower.com.br,https://www.telecomtowerpower.com.br,https://api.telecomtowerpower.com.br,https://app.telecomtowerpower.com"
 MAX_BATCH_ROWS="500"
-
-# ── Render Service IDs ───────────────────────────────────────────────────────
-# Find your service IDs at: https://dashboard.render.com → select service → Settings → ID
-RENDER_API_SERVICE_ID="srv-d78n5qtm5p6s73epli50"       # telecom-tower-power-api
-RENDER_WORKER_SERVICE_ID="${RENDER_WORKER_SERVICE_ID:-}" # telecom-tower-power-rq-worker (set if you have one)
-RENDER_UI_SERVICE_ID="srv-d78rss14tr6s73cfkdu0"         # telecom-tower-power-ui (Streamlit)
-
-# ── Render API Key (get from https://dashboard.render.com/account/api-keys) ──
-RENDER_API_KEY="${RENDER_API_KEY:-}"
 
 # ── AWS SSM prefix ───────────────────────────────────────────────────────────
 SSM_PREFIX="/telecom-tower-power/prod"
-
-# ============================================================================
-# RENDER — Set env vars via REST API
-# ============================================================================
-set_render_secrets() {
-    if [[ -z "$RENDER_API_KEY" ]]; then
-        echo "✗ RENDER_API_KEY not set."
-        echo ""
-        echo "  To get your API key:"
-        echo "    1. Go to https://dashboard.render.com/account/api-keys"
-        echo "    2. Click 'Create API Key'"
-        echo "    3. Copy the key (starts with rnd_...)"
-        echo ""
-        echo "  Then run:"
-        echo "    export RENDER_API_KEY=rnd_xxxxxxxxxxxx"
-        echo "    $0 render"
-        return 1
-    fi
-
-    local had_errors=0
-
-    # ── API Service ──────────────────────────────────────────
-    echo "▶ Setting Render env vars on API service ($RENDER_API_SERVICE_ID)..."
-
-    local api_response
-    local api_http_code
-    api_response=$(curl -sS -w "\n%{http_code}" -X PUT \
-        "https://api.render.com/v1/services/${RENDER_API_SERVICE_ID}/env-vars" \
-        -H "Authorization: Bearer ${RENDER_API_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "$(cat <<EOF
-[
-  {"key": "STRIPE_SECRET_KEY",      "value": "${STRIPE_SECRET_KEY}"},
-  {"key": "STRIPE_WEBHOOK_SECRET",  "value": "${STRIPE_WEBHOOK_SECRET}"},
-  {"key": "STRIPE_PRICE_PRO",       "value": "${STRIPE_PRICE_PRO}"},
-  {"key": "STRIPE_PRICE_ENTERPRISE","value": "${STRIPE_PRICE_ENTERPRISE}"},
-  {"key": "AWS_ACCESS_KEY_ID",      "value": "${AWS_ACCESS_KEY_ID}"},
-  {"key": "AWS_SECRET_ACCESS_KEY",  "value": "${AWS_SECRET_ACCESS_KEY}"},
-  {"key": "S3_BUCKET_NAME",         "value": "${S3_BUCKET_NAME}"},
-  {"key": "S3_REGION",              "value": "${S3_REGION}"},
-  {"key": "FRONTEND_URL",           "value": "${FRONTEND_URL}"},
-  {"key": "CORS_ORIGINS",           "value": "${CORS_ORIGINS}"},
-  {"key": "MAX_BATCH_ROWS",         "value": "${MAX_BATCH_ROWS}"},
-  {"key": "VALID_API_KEYS",         "value": "$(echo "$VALID_API_KEYS" | sed 's/"/\\"/g')"}
-]
-EOF
-)")
-
-    api_http_code=$(echo "$api_response" | tail -1)
-    local api_body
-    api_body=$(echo "$api_response" | sed '$d')
-
-    if [[ "$api_http_code" -ge 200 && "$api_http_code" -lt 300 ]]; then
-        echo "  ✓ API service: ${api_http_code} OK"
-    else
-        echo "  ✗ API service FAILED (HTTP ${api_http_code}):"
-        echo "$api_body" | python3 -m json.tool 2>/dev/null || echo "    $api_body"
-        if [[ "$api_http_code" == "401" ]]; then
-            echo ""
-            echo "  → Unauthorized. Your RENDER_API_KEY is invalid or expired."
-            echo "    Get a new one at: https://dashboard.render.com/account/api-keys"
-        elif [[ "$api_http_code" == "404" ]]; then
-            echo ""
-            echo "  → Service not found. Check RENDER_API_SERVICE_ID ($RENDER_API_SERVICE_ID)"
-        fi
-        had_errors=1
-    fi
-
-    echo ""
-
-    # ── Worker Service (RQ worker needs S3 creds) ────────────
-    if [[ -z "$RENDER_WORKER_SERVICE_ID" ]]; then
-        echo "⏭  Skipping worker service (RENDER_WORKER_SERVICE_ID not set)"
-    else
-        echo "▶ Setting Render env vars on worker service ($RENDER_WORKER_SERVICE_ID)..."
-
-    local worker_response
-    local worker_http_code
-    worker_response=$(curl -sS -w "\n%{http_code}" -X PUT \
-        "https://api.render.com/v1/services/${RENDER_WORKER_SERVICE_ID}/env-vars" \
-        -H "Authorization: Bearer ${RENDER_API_KEY}" \
-        -H "Content-Type: application/json" \
-        -d "$(cat <<EOF
-[
-  {"key": "AWS_ACCESS_KEY_ID",      "value": "${AWS_ACCESS_KEY_ID}"},
-  {"key": "AWS_SECRET_ACCESS_KEY",  "value": "${AWS_SECRET_ACCESS_KEY}"},
-  {"key": "S3_BUCKET_NAME",         "value": "${S3_BUCKET_NAME}"},
-  {"key": "S3_REGION",              "value": "${S3_REGION}"}
-]
-EOF
-)")
-
-    worker_http_code=$(echo "$worker_response" | tail -1)
-    local worker_body
-    worker_body=$(echo "$worker_response" | sed '$d')
-
-    if [[ "$worker_http_code" -ge 200 && "$worker_http_code" -lt 300 ]]; then
-        echo "  ✓ Worker service: ${worker_http_code} OK"
-    else
-        echo "  ✗ Worker service FAILED (HTTP ${worker_http_code}):"
-        echo "$worker_body" | python3 -m json.tool 2>/dev/null || echo "    $worker_body"
-        had_errors=1
-    fi
-    fi  # end RENDER_WORKER_SERVICE_ID check
-
-    echo ""
-    if [[ $had_errors -eq 0 ]]; then
-        echo "✓ Render secrets set successfully. Redeploy services to pick up changes."
-    else
-        echo "✗ Render secrets had errors — see above. Fix authentication and retry."
-        return 1
-    fi
-}
 
 # ============================================================================
 # RAILWAY — Set env vars via CLI
@@ -264,31 +142,23 @@ set_aws_secrets() {
 # MAIN — Run one or all platforms
 # ============================================================================
 usage() {
-    echo "Usage: $0 [render|railway|aws|all]"
+    echo "Usage: $0 [railway|aws|all]"
     echo ""
-    echo "  render   — Set env vars on Render services via API"
     echo "  railway  — Set env vars on Railway via CLI"
     echo "  aws      — Store secrets in AWS SSM Parameter Store"
-    echo "  all      — Run all three"
-    echo ""
-    echo "Environment:"
-    echo "  RENDER_API_KEY  — Required for 'render' (get from Render dashboard)"
+    echo "  all      — Run both"
     echo ""
     echo "Note: DATABASE_URL and REDIS_URL are auto-provided by platform add-ons."
     echo "      Do NOT set them manually."
 }
 
 case "${1:-all}" in
-    render)  set_render_secrets ;;
     railway) set_railway_secrets ;;
     aws)     set_aws_secrets ;;
     all)
         echo "═══════════════════════════════════════════════════"
         echo " Setting secrets on all platforms"
         echo "═══════════════════════════════════════════════════"
-        echo ""
-        echo "── RENDER ─────────────────────────────────────────"
-        set_render_secrets || true
         echo ""
         echo "── RAILWAY ────────────────────────────────────────"
         set_railway_secrets || true

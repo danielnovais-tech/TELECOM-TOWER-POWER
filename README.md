@@ -554,14 +554,6 @@ RDS Proxy requires a paid AWS account (free-tier restriction). Until deployed, L
 
 Push to a Railway project — `railway.json` configures Dockerfile build, healthcheck, and restart policy.
 
-### Render
-
-Push to Render — `render.yaml` defines:
-- **PostgreSQL database** — provisioned automatically
-- **API web service** — seeds towers on build, connects to PG via `DATABASE_URL`
-- **Background worker** — polls the job queue
-- **Streamlit UI** — frontend web service
-
 ### Heroku / Generic PaaS
 
 Uses the `Procfile`:
@@ -624,7 +616,6 @@ TELECOM-TOWER-POWER/
 ├── Dockerfile                   # Multi-stage Docker build
 ├── docker-compose.yml           # Full-stack orchestration (9 services)
 ├── start.sh                     # Full-stack launcher script
-├── render.yaml                  # Render deployment config (PG + worker)
 ├── railway.json                 # Railway deployment config
 ├── template.yaml                # SAM/CloudFormation (Lambda + API GW + SQS)
 ├── Makefile                     # Lambda build (controls package contents)
