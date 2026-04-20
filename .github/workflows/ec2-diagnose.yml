@@ -1,6 +1,9 @@
 name: EC2 Diagnostics
 
 on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/ec2-diagnose.yml]
   workflow_dispatch:
 
 concurrency:
