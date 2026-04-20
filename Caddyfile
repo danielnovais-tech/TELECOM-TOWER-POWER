@@ -1,6 +1,7 @@
 # ── ALB traffic (HTTP, ALB terminates TLS) ───────────────────
 # www.telecomtowerpower.com.br and app.telecomtowerpower.com.br route
 # through ALB which terminates TLS and forwards HTTP to EC2:80.
+# api.telecomtowerpower.com.br also routes through ALB (failover CNAME).
 # All traffic is handled by the :80 block.
 # Do NOT add bare domain blocks — Caddy would auto-enable HTTPS and
 # create an HTTP→HTTPS redirect loop with the ALB.
