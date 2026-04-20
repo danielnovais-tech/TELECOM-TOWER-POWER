@@ -1,0 +1,111 @@
+name: Fix ALB Prometheus Rule
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/fix-alb-prometheus.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: fix-alb-prometheus
+  cancel-in-progress: true
+
+jobs:
+  fix-alb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Inspect ALB and add prometheus listener rule
+        run: |
+          set -euo pipefail
+          ALB_ARN="arn:aws:elasticloadbalancing:sa-east-1:490083271496:loadbalancer/app/telecom-tower-power-alb/f61f282ff7c0570b"
+
+          echo "=== 1. List ALB Listeners ==="
+          LISTENERS=$(aws elbv2 describe-listeners --load-balancer-arn "$ALB_ARN" --query 'Listeners[*].[ListenerArn,Port,Protocol]' --output json)
+          echo "$LISTENERS" | jq .
+
+          # Get HTTPS (443) listener ARN
+          HTTPS_LISTENER_ARN=$(echo "$LISTENERS" | jq -r '.[] | select(.[1] == 443) | .[0]')
+          echo ""
+          echo "HTTPS Listener ARN: $HTTPS_LISTENER_ARN"
+
+          if [ -z "$HTTPS_LISTENER_ARN" ] || [ "$HTTPS_LISTENER_ARN" = "null" ]; then
+            echo "::error::No HTTPS listener found on ALB"
+            exit 1
+          fi
+
+          echo ""
+          echo "=== 2. List existing listener rules ==="
+          RULES=$(aws elbv2 describe-rules --listener-arn "$HTTPS_LISTENER_ARN" --output json)
+          echo "$RULES" | jq '.Rules[] | {RuleArn: .RuleArn, Priority: .Priority, Conditions: .Conditions, Actions: .Actions}'
+
+          echo ""
+          echo "=== 3. List all target groups ==="
+          aws elbv2 describe-target-groups --load-balancer-arn "$ALB_ARN" --query 'TargetGroups[*].[TargetGroupName,Port,TargetGroupArn]' --output table
+
+          echo ""
+          echo "=== 4. Check if prometheus rule already exists ==="
+          PROM_RULE=$(echo "$RULES" | jq -r '.Rules[] | select(.Conditions[]? | .Values[]? == "prometheus.telecomtowerpower.com.br") | .RuleArn')
+          if [ -n "$PROM_RULE" ] && [ "$PROM_RULE" != "null" ]; then
+            echo "Prometheus rule already exists: $PROM_RULE"
+            echo "No changes needed."
+            exit 0
+          fi
+          echo "No prometheus rule found. Will create one."
+
+          echo ""
+          echo "=== 5. Find the port-80 target group (Caddy) ==="
+          # Look for a target group on port 80 or the default one used by www/app
+          # First, get the default action's target group
+          DEFAULT_TG=$(echo "$RULES" | jq -r '.Rules[] | select(.IsDefault == true) | .Actions[0].TargetGroupArn // empty')
+          echo "Default rule target group: $DEFAULT_TG"
+
+          # Also check for any target group on port 80
+          TG_80=$(aws elbv2 describe-target-groups --load-balancer-arn "$ALB_ARN" --query 'TargetGroups[?Port==`80`].TargetGroupArn' --output text)
+          echo "Port 80 target group: $TG_80"
+
+          # Use port 80 TG if available, otherwise use default
+          TARGET_TG="${TG_80:-$DEFAULT_TG}"
+          if [ -z "$TARGET_TG" ] || [ "$TARGET_TG" = "None" ] || [ "$TARGET_TG" = "null" ]; then
+            echo "::error::Could not find a suitable target group for Caddy (port 80)"
+            echo ""
+            echo "All target groups:"
+            aws elbv2 describe-target-groups --load-balancer-arn "$ALB_ARN" --output json | jq '.TargetGroups[] | {Name: .TargetGroupName, Port: .Port, Arn: .TargetGroupArn}'
+            exit 1
+          fi
+          echo "Will use target group: $TARGET_TG"
+
+          echo ""
+          echo "=== 6. Find next available priority ==="
+          # Get all non-default priorities and find the next one
+          MAX_PRIORITY=$(echo "$RULES" | jq -r '.Rules[] | select(.IsDefault != true) | .Priority' | sort -n | tail -1)
+          NEXT_PRIORITY=$((MAX_PRIORITY + 1))
+          echo "Max existing priority: $MAX_PRIORITY, will use: $NEXT_PRIORITY"
+
+          echo ""
+          echo "=== 7. Create listener rule for prometheus.telecomtowerpower.com.br ==="
+          aws elbv2 create-rule \
+            --listener-arn "$HTTPS_LISTENER_ARN" \
+            --priority "$NEXT_PRIORITY" \
+            --conditions '[{"Field":"host-header","Values":["prometheus.telecomtowerpower.com.br"]}]' \
+            --actions "[{\"Type\":\"forward\",\"TargetGroupArn\":\"$TARGET_TG\"}]" \
+            --output json | jq '.Rules[] | {RuleArn: .RuleArn, Priority: .Priority, Conditions: .Conditions}'
+
+          echo ""
+          echo "=== 8. Verify rule was created ==="
+          aws elbv2 describe-rules --listener-arn "$HTTPS_LISTENER_ARN" --output json | \
+            jq '.Rules[] | select(.Conditions[]? | .Values[]? == "prometheus.telecomtowerpower.com.br")'
+
+          echo ""
+          echo "✅ ALB rule created. prometheus.telecomtowerpower.com.br → Caddy:80 → localhost:9090"
