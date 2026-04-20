@@ -1,0 +1,102 @@
+name: Deploy Docker Stack to EC2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'telecom_tower_power_api.py'
+      - 'telecom_tower_power.py'
+      - 'telecom_tower_power_db.py'
+      - 'batch_worker.py'
+      - 'worker.py'
+      - 'sqs_lambda_worker.py'
+      - 'pdf_generator.py'
+      - 'srtm_elevation.py'
+      - 'stripe_billing.py'
+      - 'stripe_webhook_service.py'
+      - 'models.py'
+      - 'job_store.py'
+      - 'tower_db.py'
+      - 's3_storage.py'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'entrypoint.sh'
+      - 'start.sh'
+      - 'load_secrets.sh'
+      - 'frontend/**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ec2-docker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Push SSH key via EC2 Instance Connect
+        run: |
+          ssh-keygen -t rsa -b 2048 -f /tmp/ec2_key -N "" -q
+          aws ec2-instance-connect send-ssh-public-key \
+            --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+            --instance-os-user ubuntu \
+            --ssh-public-key file:///tmp/ec2_key.pub
+
+      - name: Deploy on EC2
+        run: |
+          ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} << 'DEPLOY'
+          set -euo pipefail
+          cd /home/ubuntu/TELECOM-TOWER-POWER
+
+          echo "==> Pulling latest code..."
+          git pull origin main
+
+          echo "==> Rebuilding Docker images..."
+          docker compose build --no-cache api
+
+          echo "==> Rolling restart (api + worker containers)..."
+          docker compose up -d --no-deps api
+          docker compose up -d --no-deps stripe-webhook 2>/dev/null || true
+
+          echo "==> Waiting for health check..."
+          sleep 10
+          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+          echo "API health check: HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "ERROR: API health check failed"
+            docker compose logs --tail=30 api
+            exit 1
+          fi
+          echo "==> Deploy complete"
+          DEPLOY
+
+      - name: Verify external endpoints
+        run: |
+          sleep 5
+          for HOST in api.telecomtowerpower.com.br app.telecomtowerpower.com.br; do
+            STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://${HOST}/health")
+            echo "Health check ${HOST}/health: HTTP $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              echo "::warning::Health check failed for ${HOST} with HTTP $STATUS"
+            fi
+          done
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/ec2_key /tmp/ec2_key.pub
