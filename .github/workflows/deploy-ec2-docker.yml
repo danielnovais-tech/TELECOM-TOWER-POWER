@@ -23,8 +23,13 @@ on:
       - 'docker-compose.yml'
       - 'entrypoint.sh'
       - 'start.sh'
+      - 'Caddyfile'
       - 'load_secrets.sh'
       - 'frontend/**'
+      - 'prometheus/**'
+      - 'grafana/**'
+      - 'alertmanager/**'
+      - 'redis-metrics-collector/**'
   workflow_dispatch:
 
 concurrency:
@@ -64,15 +69,32 @@ jobs:
           set -euo pipefail
           cd /home/ubuntu/TELECOM-TOWER-POWER
 
+          echo "==> OS package updates..."
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+          sudo apt-get autoremove -y -qq
+
           echo "==> Pulling latest code..."
           git pull origin main
 
+          echo "==> Pulling latest Docker base images..."
+          docker compose pull --quiet postgres redis 2>/dev/null || true
+          docker pull python:3.12-slim   2>/dev/null || true
+          docker pull node:22-alpine     2>/dev/null || true
+
           echo "==> Rebuilding Docker images..."
           docker compose build --no-cache api
+          docker compose build frontend-react 2>/dev/null || true
 
-          echo "==> Rolling restart (api + worker containers)..."
+          echo "==> Rolling restart (all application containers)..."
           docker compose up -d --no-deps api
-          docker compose up -d --no-deps stripe-webhook 2>/dev/null || true
+          docker compose up -d --no-deps worker          2>/dev/null || true
+          docker compose up -d --no-deps rq-worker       2>/dev/null || true
+          docker compose up -d --no-deps stripe-webhook  2>/dev/null || true
+          docker compose up -d --no-deps frontend-react  2>/dev/null || true
+
+          echo "==> Pruning unused Docker images..."
+          docker image prune -f 2>/dev/null || true
 
           echo "==> Waiting for health check..."
           sleep 10

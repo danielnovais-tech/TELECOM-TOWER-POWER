@@ -43,52 +43,75 @@ jobs:
           echo "========================================"
 
           echo ""
-          echo "=== 1. Docker containers status ==="
+          echo "=== 1. System info ==="
+          uname -a
+          lsb_release -a 2>/dev/null || cat /etc/os-release 2>/dev/null | head -5
+          uptime
+
+          echo ""
+          echo "=== 2. Disk usage ==="
+          df -h / /var/lib/docker 2>/dev/null || df -h /
+
+          echo ""
+          echo "=== 3. Memory usage ==="
+          free -h
+
+          echo ""
+          echo "=== 4. OS packages needing update ==="
+          sudo apt-get update -qq 2>&1 | tail -2
+          UPGRADABLE=$(apt list --upgradable 2>/dev/null | grep -v "^Listing" | head -30)
+          if [ -z "$UPGRADABLE" ]; then
+            echo "All packages up to date"
+          else
+            echo "$UPGRADABLE"
+            echo "---"
+            echo "$(echo "$UPGRADABLE" | wc -l) packages can be upgraded"
+          fi
+
+          echo ""
+          echo "=== 5. Docker version ==="
+          docker --version
+          docker compose version 2>/dev/null || docker-compose --version 2>/dev/null
+
+          echo ""
+          echo "=== 6. Docker containers status ==="
           docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>&1 || sudo docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>&1
 
           echo ""
-          echo "=== 2. Firewall (ufw) ==="
+          echo "=== 7. Docker images ==="
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}" 2>&1
+
+          echo ""
+          echo "=== 8. Docker disk usage ==="
+          docker system df 2>&1
+
+          echo ""
+          echo "=== 9. Git status (EC2 repo) ==="
+          cd /home/ubuntu/TELECOM-TOWER-POWER 2>/dev/null && git log --oneline -3 && git status -s
+
+          echo ""
+          echo "=== 10. Firewall (ufw) ==="
           sudo ufw status 2>&1 || echo "ufw not available"
 
           echo ""
-          echo "=== 3. Firewall (iptables) ==="
-          sudo iptables -L -n 2>&1 | head -40
+          echo "=== 11. Listening ports (9090, 3001, 80, 8000, 8001) ==="
+          sudo ss -tulnp | grep -E '9090|3001|:80|8000|8001' 2>&1
 
           echo ""
-          echo "=== 4. Listening ports (9090, 3001, 80) ==="
-          sudo ss -tulnp | grep -E '9090|3001|:80' 2>&1
-
+          echo "=== 12. Local curl tests ==="
+          echo "--- API localhost:8000/health ---"
+          curl -sS --max-time 3 http://localhost:8000/health 2>&1
           echo ""
-          echo "=== 5. Systemd services ==="
-          systemctl is-active caddy 2>&1 && echo "caddy: active" || echo "caddy: not a systemd service"
-          systemctl is-active prometheus 2>&1 && echo "prometheus: active" || echo "prometheus: not a systemd service"
-          systemctl is-active grafana-server 2>&1 && echo "grafana-server: active" || echo "grafana-server: not a systemd service"
-
-          echo ""
-          echo "=== 6. Caddy config on EC2 ==="
-          cat /home/ubuntu/TELECOM-TOWER-POWER/Caddyfile 2>&1 || echo "Caddyfile not found at expected path"
-
-          echo ""
-          echo "=== 7. Local curl tests ==="
           echo "--- Prometheus localhost:9090 ---"
-          curl -sI --max-time 3 http://localhost:9090/ 2>&1 | head -5
+          curl -sI --max-time 3 http://localhost:9090/ 2>&1 | head -3
           echo "--- Grafana localhost:3001 ---"
-          curl -sI --max-time 3 http://localhost:3001/ 2>&1 | head -5
+          curl -sI --max-time 3 http://localhost:3001/ 2>&1 | head -3
           echo "--- Caddy localhost:80 ---"
-          curl -sI --max-time 3 http://localhost:80/ 2>&1 | head -5
+          curl -sI --max-time 3 http://localhost:80/ 2>&1 | head -3
 
           echo ""
-          echo "=== 8. Docker logs (prometheus, last 20 lines) ==="
-          docker logs --tail 20 $(docker ps -aqf "name=prometheus" 2>/dev/null) 2>&1 || sudo docker logs --tail 20 $(sudo docker ps -aqf "name=prometheus" 2>/dev/null) 2>&1 || echo "No prometheus container found"
-
-          echo ""
-          echo "=== 9. EC2 Security Group (instance metadata) ==="
-          TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
-          curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/security-groups 2>/dev/null || echo "metadata unavailable"
-
-          echo ""
-          echo "=== 10. docker-compose services ==="
-          cd /home/ubuntu/TELECOM-TOWER-POWER 2>/dev/null && docker compose ps 2>&1 || sudo docker-compose ps 2>&1 || echo "docker-compose not found or not in expected dir"
+          echo "=== 13. docker-compose services ==="
+          cd /home/ubuntu/TELECOM-TOWER-POWER 2>/dev/null && docker compose ps 2>&1 || echo "docker-compose not found"
 
           echo ""
           echo "======== DIAGNOSTICS COMPLETE ========"
