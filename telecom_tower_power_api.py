@@ -146,7 +146,7 @@ class Band(str, Enum):
             "3500MHz": 3.5e9,
         }[self.value]
 
-@dataclass
+@dataclass(frozen=True)
 class Tower:
     id: str
     lat: float
@@ -156,17 +156,39 @@ class Tower:
     bands: List[Band]
     power_dbm: float = 43.0
 
+    def __post_init__(self):
+        if not self.id:
+            raise ValueError("Tower.id must be a non-empty string")
+        if not (-90 <= self.lat <= 90):
+            raise ValueError(f"Tower.lat must be in [-90, 90], got {self.lat}")
+        if not (-180 <= self.lon <= 180):
+            raise ValueError(f"Tower.lon must be in [-180, 180], got {self.lon}")
+        if self.height_m < 0:
+            raise ValueError(f"Tower.height_m must be >= 0, got {self.height_m}")
+        if not self.bands:
+            raise ValueError("Tower.bands must contain at least one Band")
+        if not (0 <= self.power_dbm <= 80):
+            raise ValueError(f"Tower.power_dbm must be in [0, 80], got {self.power_dbm}")
+
     def primary_freq_hz(self) -> float:
         return self.bands[0].to_hz()
 
-@dataclass
+@dataclass(frozen=True)
 class Receiver:
     lat: float
     lon: float
     height_m: float = 10.0
     antenna_gain_dbi: float = 12.0
 
-@dataclass
+    def __post_init__(self):
+        if not (-90 <= self.lat <= 90):
+            raise ValueError(f"Receiver.lat must be in [-90, 90], got {self.lat}")
+        if not (-180 <= self.lon <= 180):
+            raise ValueError(f"Receiver.lon must be in [-180, 180], got {self.lon}")
+        if self.height_m < 0:
+            raise ValueError(f"Receiver.height_m must be >= 0, got {self.height_m}")
+
+@dataclass(frozen=True)
 class LinkResult:
     feasible: bool
     signal_dbm: float
