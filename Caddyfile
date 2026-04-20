@@ -2,7 +2,12 @@
 # www.telecomtowerpower.com.br and app.telecomtowerpower.com.br route
 # through ALB which terminates TLS and forwards HTTP to EC2:80.
 # api.telecomtowerpower.com.br also routes through ALB (failover CNAME).
-# All traffic is handled by the :80 block.
+# All default-rule traffic is handled by the :80 block below.
+#
+# Direct ALB target-group rules (bypass Caddy entirely):
+#   monitoring.telecomtowerpower.com.br → ttp-grafana-tg:3001
+#   prometheus.telecomtowerpower.com.br → ttp-prometheus-tg:9090
+#
 # Do NOT add bare domain blocks — Caddy would auto-enable HTTPS and
 # create an HTTP→HTTPS redirect loop with the ALB.
 :80 {
@@ -12,12 +17,6 @@
                 reverse_proxy https://web-production-90b1f.up.railway.app {
                         header_up Host web-production-90b1f.up.railway.app
                 }
-        }
-
-        # ── prometheus.telecomtowerpower.com.br → Prometheus UI ──
-        @prometheus_host host prometheus.telecomtowerpower.com.br
-        handle @prometheus_host {
-                reverse_proxy localhost:9090
         }
 
         # ── www / app frontend: selective API routing + React SPA ──
@@ -38,11 +37,4 @@
         handle {
                 reverse_proxy localhost:3000
         }
-}
-
-# ── Grafana (monitoring dashboard) ───────────────────────────
-# Note: monitoring.* has a direct ALB rule → port 3001 (bypasses Caddy).
-# This block is kept for direct-access scenarios.
-monitoring.telecomtowerpower.com.br {
-        reverse_proxy localhost:3001
 }
