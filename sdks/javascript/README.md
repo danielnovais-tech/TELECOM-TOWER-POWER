@@ -15,7 +15,7 @@ npm install telecom-tower-power-client
 import { TelecomTowerPowerClient } from "telecom-tower-power-client";
 
 const client = new TelecomTowerPowerClient({
-  BASE: "https://ec2.telecomtowerpower.com.br",
+  BASE: "https://api.telecomtowerpower.com.br",
   HEADERS: { "X-API-Key": "your-api-key" },
 });
 

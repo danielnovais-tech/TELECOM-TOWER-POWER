@@ -244,6 +244,17 @@ Tower creation is **rate-limited per API key** — an in-memory counter tracks t
 | `GET` | `/signup/success` | — | Retrieve API key after Stripe payment |
 | `POST` | `/signup/status` | — | Look up existing key by email |
 | `POST` | `/stripe/webhook` | Stripe sig | Stripe event handler |
+| `POST` | `/bedrock/chat` | Pro+ | AI-powered RF engineering assistant |
+| `POST` | `/bedrock/compare` | Pro+ | AI comparison of multiple link analyses |
+| `POST` | `/bedrock/suggest-height` | Pro+ | AI-optimized antenna height recommendation |
+| `GET` | `/bedrock/models` | Pro+ | List available Bedrock AI models |
+| `POST` | `/bedrock/batch-analyze` | Enterprise | AI batch analysis of multiple links |
+| `POST` | `/srtm/prefetch` | Pro+ | Pre-download SRTM elevation tiles for a country |
+| `GET` | `/srtm/status/{country}` | Pro+ | Check SRTM tile download status |
+| `GET` | `/portal/profile` | Any tier | Account profile and tier info |
+| `GET` | `/portal/usage` | Any tier | API usage statistics |
+| `GET` | `/portal/jobs` | Any tier | List batch jobs |
+| `GET` | `/portal/billing` | Any tier | Billing/subscription info |
 
 ### Example: Analyze a link
 
@@ -413,6 +424,22 @@ Automatic DNS failover is **deployed and active**:
    - **SECONDARY** → Railway (`web-production-90b1f.up.railway.app`, TTL 60 s)
 
 If the ALB health check fails, Route 53 automatically routes traffic to Railway within ~60 s.
+
+### Caddy Reverse Proxy (EC2)
+
+The ALB terminates TLS and forwards HTTP to EC2 port 80, where **Caddy** routes requests:
+
+| Host header | Routing | Target |
+|---|---|---|
+| `api.telecomtowerpower.com.br` | **All paths** → Railway | `https://web-production-90b1f.up.railway.app` |
+| `www.*` / `app.*` | API paths (`/api/*`, `/analyze`, `/health`, etc.) → Railway | `https://web-production-90b1f.up.railway.app` |
+| `www.*` / `app.*` | `/webhook*` → local Stripe handler | `localhost:8001` |
+| `www.*` / `app.*` | `/grafana*` → Grafana | `localhost:3001` |
+| `www.*` / `app.*` | Everything else → React SPA | `localhost:3000` (nginx) |
+
+The Caddyfile uses a `host` matcher to identify `api.*` traffic (which arrives via ALB after failover) and proxies **all** requests to Railway — no path whitelist needed. For `www.*`/`app.*`, only known API paths are forwarded; everything else serves the React SPA.
+
+**Deployment:** The `deploy-caddy.yml` GitHub Actions workflow uses `scp` to copy the Caddyfile directly to EC2, then runs `caddy reload`. It verifies health on `www.*`, `app.*`, and `api.*` subdomains after deploy.
 
 ### Route 53 DNS Records
 
