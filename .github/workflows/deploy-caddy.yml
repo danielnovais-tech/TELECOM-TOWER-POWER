@@ -50,17 +50,29 @@ jobs:
             ubuntu@${{ secrets.EC2_HOST }} \
             'cd /home/ubuntu/TELECOM-TOWER-POWER && sudo caddy reload --config Caddyfile'
 
-      - name: Verify health endpoint
+      - name: Verify health endpoints
         run: |
           sleep 3
+          # Caddy-routed subdomains (expect 200 on /health)
           for HOST in www.telecomtowerpower.com.br app.telecomtowerpower.com.br api.telecomtowerpower.com.br; do
             STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://${HOST}/health")
-            echo "Health check ${HOST} returned HTTP $STATUS"
+            echo "Health check ${HOST}/health returned HTTP $STATUS"
             if [ "$STATUS" != "200" ]; then
               echo "::error::Health check failed for ${HOST} with HTTP $STATUS"
               exit 1
             fi
           done
+          # ALB direct target groups (bypass Caddy)
+          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://monitoring.telecomtowerpower.com.br/api/health")
+          echo "Health check monitoring.*/api/health returned HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::Grafana health check returned HTTP $STATUS (may need login)"
+          fi
+          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://prometheus.telecomtowerpower.com.br/-/healthy")
+          echo "Health check prometheus.*/-/healthy returned HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::Prometheus health check returned HTTP $STATUS"
+          fi
 
       - name: Cleanup
         if: always()

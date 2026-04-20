@@ -1,9 +1,6 @@
 name: Fix ALB Prometheus Rule
 
 on:
-  push:
-    branches: [main]
-    paths: [.github/workflows/fix-alb-prometheus.yml]
   workflow_dispatch:
 
 concurrency:

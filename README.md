@@ -427,7 +427,16 @@ If the ALB health check fails, Route 53 automatically routes traffic to Railway 
 
 ### Caddy Reverse Proxy (EC2)
 
-The ALB terminates TLS and forwards HTTP to EC2 port 80, where **Caddy** routes requests:
+The ALB terminates TLS and forwards HTTP to EC2. Two monitoring subdomains bypass Caddy via dedicated ALB target groups; everything else hits Caddy on port 80:
+
+**ALB direct target groups (bypass Caddy):**
+
+| Subdomain | ALB Target Group | Port | Health Check |
+|---|---|---|---|
+| `monitoring.telecomtowerpower.com.br` | `ttp-grafana-tg` | 3001 | `/api/health` |
+| `prometheus.telecomtowerpower.com.br` | `ttp-prometheus-tg` | 9090 | `/-/healthy` |
+
+**Caddy routes (ALB default rule → port 80):**
 
 | Host header | Routing | Target |
 |---|---|---|
@@ -439,7 +448,7 @@ The ALB terminates TLS and forwards HTTP to EC2 port 80, where **Caddy** routes 
 
 The Caddyfile uses a `host` matcher to identify `api.*` traffic (which arrives via ALB after failover) and proxies **all** requests to Railway — no path whitelist needed. For `www.*`/`app.*`, only known API paths are forwarded; everything else serves the React SPA.
 
-**Deployment:** The `deploy-caddy.yml` GitHub Actions workflow uses `scp` to copy the Caddyfile directly to EC2, then runs `caddy reload`. It verifies health on `www.*`, `app.*`, and `api.*` subdomains after deploy.
+**Deployment:** The `deploy-caddy.yml` GitHub Actions workflow uses `scp` to copy the Caddyfile directly to EC2, then runs `caddy reload`. It verifies health on `www.*`, `app.*`, `api.*`, `monitoring.*`, and `prometheus.*` subdomains after deploy.
 
 ### Route 53 DNS Records
 
