@@ -65,7 +65,8 @@ jobs:
           ssh -i /tmp/ec2_key \
             -o StrictHostKeyChecking=no \
             -o ConnectTimeout=15 \
-            ubuntu@${{ secrets.EC2_HOST }} << 'DEPLOY'
+            ubuntu@${{ secrets.EC2_HOST }} \
+            "export GITHUB_TOKEN='${{ secrets.GITHUB_TOKEN }}' && bash -s" << 'DEPLOY'
           set -euo pipefail
           cd /home/ubuntu/TELECOM-TOWER-POWER
 
@@ -75,7 +76,9 @@ jobs:
           sudo apt-get autoremove -y -qq
 
           echo "==> Pulling latest code..."
+          git config credential.helper '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN}"; }; f'
           git pull origin main
+          git config --unset credential.helper
 
           echo "==> Pulling latest Docker base images..."
           docker compose pull --quiet postgres redis 2>/dev/null || true
