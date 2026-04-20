@@ -1,0 +1,205 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: telecom_tower_power
+    folder: Telecom Tower Power
+    interval: 1m
+    rules:
+      # ── High 5xx Rate ────────────────────────────────────────
+      - uid: high-5xx-rate
+        title: High 5xx Rate
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(http_requests_total{status=~"5.."}[1m])) * 60
+              instant: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [B]
+                  reducer:
+                    params: []
+                    type: last
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: [10]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    params: []
+                    type: last
+              expression: B
+              refId: C
+              type: threshold
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx error rate (>10/min)"
+          description: "The API is returning more than 10 server errors per minute."
+        noDataState: OK
+        execErrState: Error
+
+      # ── High 429 Rate (Rate-Limit Exceeded) ─────────────────
+      - uid: high-429-rate
+        title: High 429 Rate
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(rate_limit_hits_total[1m])) * 60
+              instant: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [B]
+                  reducer:
+                    params: []
+                    type: last
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: [5]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    params: []
+                    type: last
+              expression: B
+              refId: C
+              type: threshold
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate-limit hit rate (>5/min)"
+          description: "Clients are being rate-limited more than 5 times per minute."
+        noDataState: OK
+        execErrState: Error
+
+      # ── High Latency (p99 > 2s) ─────────────────────────────
+      - uid: high-latency-p99
+        title: High p99 Latency
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+              instant: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [B]
+                  reducer:
+                    params: []
+                    type: last
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: [2]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    params: []
+                    type: last
+              expression: B
+              refId: C
+              type: threshold
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p99 latency (>2s)"
+          description: "The 99th-percentile request latency has exceeded 2 seconds for 5 minutes."
+        noDataState: OK
+        execErrState: Error

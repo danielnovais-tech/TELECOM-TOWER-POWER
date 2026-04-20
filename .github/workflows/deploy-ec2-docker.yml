@@ -97,6 +97,12 @@ jobs:
           docker compose up -d --no-deps stripe-webhook  2>/dev/null || true
           docker compose up -d --no-deps frontend-react  2>/dev/null || true
 
+          echo "==> Rebuilding and restarting monitoring stack..."
+          docker compose build grafana 2>/dev/null || true
+          docker compose up -d --no-deps grafana         2>/dev/null || true
+          docker compose up -d --no-deps prometheus      2>/dev/null || true
+          docker compose up -d --no-deps alertmanager    2>/dev/null || true
+
           echo "==> Pruning unused Docker images..."
           docker image prune -f 2>/dev/null || true
 
