@@ -26,45 +26,39 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: sa-east-1
 
-      - name: Inspect and fix prometheus ALB routing
+      - name: Register EC2 target and fix prometheus routing
         run: |
           set -euo pipefail
           ALB_ARN="arn:aws:elasticloadbalancing:sa-east-1:490083271496:loadbalancer/app/telecom-tower-power-alb/f61f282ff7c0570b"
-          HTTPS_LISTENER_ARN="arn:aws:elasticloadbalancing:sa-east-1:490083271496:listener/app/telecom-tower-power-alb/f61f282ff7c0570b/93b11269b0be1296"
           PROM_TG_ARN="arn:aws:elasticloadbalancing:sa-east-1:490083271496:targetgroup/ttp-prometheus-tg/df4e704a393dedb8"
+          EC2_INSTANCE_ID="i-045166a6a1933f507"
 
-          echo "=== 1. Current prometheus target group health ==="
+          echo "=== 1. Current targets in prometheus TG ==="
           aws elbv2 describe-target-health --target-group-arn "$PROM_TG_ARN" --output json | jq .
 
           echo ""
-          echo "=== 2. Prometheus target group details ==="
-          aws elbv2 describe-target-groups --target-group-arns "$PROM_TG_ARN" --output json | jq '.TargetGroups[0] | {Name: .TargetGroupName, Port: .Port, Protocol: .Protocol, HealthCheckPath: .HealthCheckPath, HealthCheckProtocol: .HealthCheckProtocol, HealthCheckPort: .HealthCheckPort}'
+          echo "=== 2. Target group details ==="
+          aws elbv2 describe-target-groups --target-group-arns "$PROM_TG_ARN" --output json | jq '.TargetGroups[0] | {Name: .TargetGroupName, Port: .Port, Protocol: .Protocol, TargetType: .TargetType, HealthCheckPath: .HealthCheckPath, VpcId: .VpcId}'
 
           echo ""
-          echo "=== 3. Fix: Update health check for Prometheus ==="
-          # Prometheus HEAD returns 405, so use GET method and /-/healthy endpoint
-          aws elbv2 modify-target-group \
+          echo "=== 3. Compare with working grafana TG ==="
+          GRAFANA_TG_ARN="arn:aws:elasticloadbalancing:sa-east-1:490083271496:targetgroup/ttp-grafana-tg/32d84c5dac673aec"
+          echo "Grafana targets:"
+          aws elbv2 describe-target-health --target-group-arn "$GRAFANA_TG_ARN" --output json | jq .
+          echo "Grafana TG details:"
+          aws elbv2 describe-target-groups --target-group-arns "$GRAFANA_TG_ARN" --output json | jq '.TargetGroups[0] | {Name: .TargetGroupName, Port: .Port, TargetType: .TargetType, VpcId: .VpcId}'
+
+          echo ""
+          echo "=== 4. Register EC2 instance in prometheus TG ==="
+          aws elbv2 register-targets \
             --target-group-arn "$PROM_TG_ARN" \
-            --health-check-path "/-/healthy" \
-            --health-check-protocol HTTP \
-            --healthy-threshold-count 2 \
-            --unhealthy-threshold-count 3 \
-            --health-check-interval-seconds 30 \
-            --health-check-timeout-seconds 5 \
-            --matcher '{"HttpCode":"200"}' \
-            --output json | jq '.TargetGroups[0] | {Name: .TargetGroupName, HealthCheckPath: .HealthCheckPath, HealthCheckProtocol: .HealthCheckProtocol}'
+            --targets "Id=$EC2_INSTANCE_ID,Port=9090"
+          echo "Registered $EC2_INSTANCE_ID:9090 in ttp-prometheus-tg"
 
           echo ""
-          echo "=== 4. Verify updated health check ==="
-          aws elbv2 describe-target-groups --target-group-arns "$PROM_TG_ARN" --output json | jq '.TargetGroups[0] | {Name: .TargetGroupName, Port: .Port, HealthCheckPath: .HealthCheckPath, HealthCheckProtocol: .HealthCheckProtocol, Matcher: .Matcher}'
-
-          echo ""
-          echo "=== 5. Current target health (may take 30s to update) ==="
+          echo "=== 5. Wait for registration then check health ==="
+          sleep 10
           aws elbv2 describe-target-health --target-group-arn "$PROM_TG_ARN" --output json | jq .
 
           echo ""
-          echo "=== 6. All target groups summary ==="
-          aws elbv2 describe-target-groups --load-balancer-arn "$ALB_ARN" --query 'TargetGroups[*].[TargetGroupName,Port,HealthCheckPath]' --output table
-
-          echo ""
-          echo "Done. Prometheus health check updated to /-/healthy. ALB should mark target healthy within 60s."
+          echo "Done. EC2 registered in ttp-prometheus-tg. Target should become healthy within 30-60s."
