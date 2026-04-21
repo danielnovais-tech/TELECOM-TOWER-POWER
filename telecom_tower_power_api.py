@@ -275,10 +275,14 @@ class ElevationService:
     tiles → Open-Elevation API (with retry + exponential backoff)."""
 
     _API_URL = "https://api.open-elevation.com/api/v1/lookup"
-    _MAX_RETRIES = 3
-    _BASE_DELAY = 1.0          # seconds; doubles on each retry
-    _BATCH_TIMEOUT = 60        # seconds for the batch POST
-    _SINGLE_TIMEOUT = 30
+    # Worst-case wall time is roughly MAX_RETRIES*TIMEOUT + sum(backoffs).
+    # Keep it well under the Cloudflare/edge 60s timeout so a true-cold
+    # request to Open-Elevation fails fast and releases the worker instead
+    # of cascading 504s while tiles warm up in Redis and on disk.
+    _MAX_RETRIES = int(os.getenv("OE_MAX_RETRIES", "2"))
+    _BASE_DELAY = float(os.getenv("OE_BASE_DELAY_S", "0.5"))
+    _BATCH_TIMEOUT = float(os.getenv("OE_BATCH_TIMEOUT_S", "12"))
+    _SINGLE_TIMEOUT = float(os.getenv("OE_SINGLE_TIMEOUT_S", "6"))
 
     def __init__(self, srtm_dir: str | None = None):
         self.cache: Dict[Tuple[float, float], float] = {}
@@ -1114,6 +1118,18 @@ async def startup():
         pass
     tower_count = platform.db.count()
     _alert_slack(f":white_check_mark: API started — {tower_count:,} towers in DB ({platform.db.backend})")
+
+    # Kick off background SRTM tile prefetch for the configured country so
+    # true-cold regions don't pin a worker on slow Open-Elevation calls.
+    # Honors SRTM_PREFETCH_COUNTRY (ISO-2) or disables when unset/empty.
+    prefetch_country = os.getenv("SRTM_PREFETCH_COUNTRY", "").strip().upper()
+    if prefetch_country:
+        try:
+            from srtm_prefetch import prefetch_country_async
+            prefetch_country_async(prefetch_country)
+            logger.info("SRTM background prefetch scheduled for %s", prefetch_country)
+        except Exception:
+            logger.exception("failed to schedule SRTM prefetch for %s", prefetch_country)
 
     # Launch background reaper: releases jobs with no heartbeat back to queue
     global _reaper_task
