@@ -574,9 +574,15 @@ class TelecomTowerPower:
         # Max feasible single-hop distance: solve FSPL = Pt + Gt + Gr - (-95)
         max_hop_km = 10 ** ((start_tower.power_dbm + tx_gain + rx_gain + 95 - 20 * math.log10(f_hz) + 147.55) / 20) / 1000
 
-        # Pre-compute hop costs (FSPL + terrain obstruction penalty)
-        # Cache as dict[(from_id, to_id)] -> effective_loss_db
+        # Pre-compute hop costs (FSPL + terrain obstruction penalty).
+        # Terrain profiles for every candidate edge are fetched concurrently
+        # via asyncio.gather to avoid the O(N^2) sequential await stall that
+        # dominated wall time on mountainous paths (SRTM miss -> Open-Elevation
+        # HTTP fallback).
         hop_cost: Dict[Tuple[str, str], float] = {}
+        pending_edges: List[Tuple[str, str, float, float, int]] = []  # (a_id, b_id, d_km, fspl, num_pts)
+        pending_coros: list = []
+
         for a in all_nodes:
             for b in all_nodes:
                 if a.id == b.id or b.id == start_tower.id:
@@ -589,29 +595,35 @@ class TelecomTowerPower:
                 if d_km > max_hop_km:
                     continue
                 fspl = LinkEngine.free_space_path_loss(d_km, f_hz)
-
                 # Scale terrain sample count with distance (1 point per km, min 10)
                 num_terrain_pts = max(10, int(d_km * 2))
-
-                # Fetch terrain profile for this hop and compute Fresnel clearance
-                obstruction_penalty = 0.0
-                try:
-                    profile = await self.elevation.get_profile(
+                pending_edges.append((a.id, b.id, d_km, fspl, num_terrain_pts))
+                pending_coros.append(
+                    self.elevation.get_profile(
                         a.lat, a.lon, b.lat, b.lon, num_points=num_terrain_pts
                     )
-                    if profile:
-                        tx_h_asl = profile[0] + a.height_m
-                        rx_h_asl = profile[-1] + b.height_m
-                        clearance = LinkEngine.terrain_clearance(
-                            profile, d_km, f_hz, tx_h_asl, rx_h_asl
-                        )
-                        if clearance < 0.6:
-                            # Penalize obstructed hops: up to 20 dB extra loss
-                            obstruction_penalty = (0.6 - clearance) * 33.0
-                except Exception:
-                    pass  # If terrain fetch fails, use FSPL only
+                )
 
-                hop_cost[(a.id, b.id)] = fspl + obstruction_penalty
+        # Fan-out: fetch all edge terrain profiles concurrently.
+        profiles = await asyncio.gather(*pending_coros, return_exceptions=True) if pending_coros else []
+
+        for (a_id, b_id, d_km, fspl, _npts), profile in zip(pending_edges, profiles):
+            obstruction_penalty = 0.0
+            if not isinstance(profile, Exception) and profile:
+                try:
+                    a_node = node_index[a_id]
+                    b_node = node_index[b_id]
+                    tx_h_asl = profile[0] + a_node.height_m
+                    rx_h_asl = profile[-1] + b_node.height_m
+                    clearance = LinkEngine.terrain_clearance(
+                        profile, d_km, f_hz, tx_h_asl, rx_h_asl
+                    )
+                    if clearance < 0.6:
+                        # Penalize obstructed hops: up to 20 dB extra loss
+                        obstruction_penalty = (0.6 - clearance) * 33.0
+                except Exception:
+                    pass  # If terrain math fails, use FSPL only
+            hop_cost[(a_id, b_id)] = fspl + obstruction_penalty
 
         # Build adjacency list from pre-computed costs for faster neighbor lookup
         adjacency: Dict[str, List[str]] = {t.id: [] for t in all_nodes}
