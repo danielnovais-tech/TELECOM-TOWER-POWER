@@ -52,6 +52,23 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: sa-east-1
 
+      - name: Whitelist runner IP in EC2 SG
+        id: sg
+        env:
+          EC2_SG_ID: ${{ secrets.EC2_SG_ID }}
+        run: |
+          : "${EC2_SG_ID:?EC2_SG_ID secret not set (e.g. sg-037a9e44d3332f796)}"
+          RUNNER_IP=$(curl -sSf https://checkip.amazonaws.com | tr -d '\r\n')
+          echo "Runner IP: ${RUNNER_IP}"
+          echo "runner_ip=${RUNNER_IP}" >> "$GITHUB_OUTPUT"
+          # Idempotent: ignore "rule already exists" errors
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${EC2_SG_ID}" \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" \
+            --tag-specifications "ResourceType=security-group-rule,Tags=[{Key=Name,Value=gh-actions-ephemeral},{Key=Workflow,Value=deploy-ec2-docker}]" \
+            2>&1 | grep -v "InvalidPermission.Duplicate" || true
+
       - name: Push SSH key via EC2 Instance Connect
         run: |
           ssh-keygen -t rsa -b 2048 -f /tmp/ec2_key -N "" -q
@@ -142,6 +159,18 @@ jobs:
               echo "::warning::Health check failed for ${HOST} with HTTP $STATUS"
             fi
           done
+
+      - name: Revoke runner IP from EC2 SG
+        if: always() && steps.sg.outputs.runner_ip != ''
+        env:
+          EC2_SG_ID: ${{ secrets.EC2_SG_ID }}
+          RUNNER_IP: ${{ steps.sg.outputs.runner_ip }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${EC2_SG_ID}" \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" \
+            2>&1 || echo "::warning::Could not revoke ${RUNNER_IP}/32 from ${EC2_SG_ID}"
 
       - name: Cleanup
         if: always()
