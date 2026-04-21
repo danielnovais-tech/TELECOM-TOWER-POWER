@@ -162,25 +162,54 @@ class TerrainService:
     Fetch real ground-elevation profiles for point-to-point links.
 
     Sources (tried in order):
-      1. Local SRTM .hgt tiles  (fastest, offline)
-      2. Open-Elevation REST API (free, no API key)
+      1. In-process memory cache (per-key bilinear-rounded elevation)
+      2. Redis L2 cache (optional; shared across workers/pods)
+      3. Local SRTM .hgt tiles  (fastest on disk, offline)
+      4. Open-Elevation REST API (free, no API key)
 
     Usage:
         ts = TerrainService(srtm_dir="./srtm_tiles")
         profile = ts.profile(lat1, lon1, lat2, lon2, num_points=50)
         # profile -> list of elevation floats (metres AMSL)
+
+    Redis caching is enabled automatically when either ``redis_url`` is
+    passed or the ``SRTM_REDIS_URL`` / ``REDIS_URL`` env vars are set.
     """
 
+    # ---- Constants -----------------------------------------------------
     OPEN_ELEVATION_URL = "https://api.open-elevation.com/api/v1/lookup"
     SRTM1_SAMPLES = 3601   # 1-arc-second tiles (3601 x 3601)
     SRTM3_SAMPLES = 1201   # 3-arc-second tiles (1201 x 1201)
+    DEFAULT_SRTM_DIR = os.getenv("SRTM_DATA_DIR", "./srtm_data")
+    DEFAULT_TIMEOUT_S = float(os.getenv("TERRAIN_API_TIMEOUT_S", "10"))
+    REDIS_KEY_PREFIX = "ttp:terrain:v1"   # version segment allows cache invalidation
+    REDIS_TTL_SECONDS = int(os.getenv("TERRAIN_REDIS_TTL", "604800"))  # 7 days
+    COORD_ROUND_DIGITS = 5                 # ~1.1 m precision at equator
 
     def __init__(self, srtm_dir: Optional[str] = None, api_url: Optional[str] = None,
-                 timeout_s: float = 10.0):
-        self.srtm_dir = Path(srtm_dir) if srtm_dir else None
+                 timeout_s: Optional[float] = None,
+                 redis_url: Optional[str] = None):
+        self.srtm_dir = Path(srtm_dir or self.DEFAULT_SRTM_DIR)
+        if not self.srtm_dir.exists():
+            # Keep behaviour backward-compatible: no dir => SRTM disabled
+            self.srtm_dir = None
         self.api_url = api_url or self.OPEN_ELEVATION_URL
-        self.timeout_s = timeout_s
+        self.timeout_s = timeout_s if timeout_s is not None else self.DEFAULT_TIMEOUT_S
         self._hgt_cache: Dict[str, Optional[bytes]] = {}
+        self._mem_cache: Dict[Tuple[float, float], float] = {}
+
+        # Optional Redis L2 cache
+        _url = redis_url or os.getenv("SRTM_REDIS_URL") or os.getenv("REDIS_URL")
+        self._redis = None
+        if _url:
+            try:
+                import redis as _redis_mod  # type: ignore[import-not-found]
+                self._redis = _redis_mod.Redis.from_url(_url, decode_responses=True)
+                self._redis.ping()
+                logger.info("TerrainService Redis cache enabled at %s", _url)
+            except Exception as exc:  # noqa: BLE001 – cache is best-effort
+                logger.warning("TerrainService Redis disabled (%s); using memory+disk only", exc)
+                self._redis = None
 
     # -- path interpolation --------------------------------------------------
 
@@ -299,26 +328,101 @@ class TerrainService:
 
     # -- public interface -----------------------------------------------------
 
+    def _cache_key(self, lat: float, lon: float) -> Tuple[float, float]:
+        return (round(lat, self.COORD_ROUND_DIGITS), round(lon, self.COORD_ROUND_DIGITS))
+
+    def _redis_key(self, key: Tuple[float, float]) -> str:
+        return f"{self.REDIS_KEY_PREFIX}:{key[0]:.5f}:{key[1]:.5f}"
+
+    def _redis_mget(self, keys: List[Tuple[float, float]]) -> List[Optional[float]]:
+        if self._redis is None or not keys:
+            return [None] * len(keys)
+        try:
+            raw = self._redis.mget([self._redis_key(k) for k in keys])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TerrainService Redis mget failed: %s", exc)
+            return [None] * len(keys)
+        out: List[Optional[float]] = []
+        for v in raw:
+            if v is None:
+                out.append(None)
+            else:
+                try:
+                    out.append(float(v))
+                except (TypeError, ValueError):
+                    out.append(None)
+        return out
+
+    def _redis_mset(self, items: Dict[Tuple[float, float], float]) -> None:
+        if self._redis is None or not items:
+            return
+        try:
+            pipe = self._redis.pipeline()
+            for k, v in items.items():
+                pipe.setex(self._redis_key(k), self.REDIS_TTL_SECONDS, f"{v:.3f}")
+            pipe.execute()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TerrainService Redis mset failed: %s", exc)
+
     def profile(self, lat1: float, lon1: float,
                 lat2: float, lon2: float,
                 num_points: int = 50) -> List[float]:
         """
         Return a terrain elevation profile (list of heights in metres AMSL)
-        along the straight line from (lat1, lon1) to (lat2, lon2).
+        along the great-circle from (lat1, lon1) to (lat2, lon2).
 
-        Tries local SRTM tiles first, then falls back to the Open-Elevation API.
+        Resolution order: memory cache → Redis L2 (if configured) → local
+        SRTM .hgt tiles → Open-Elevation API. Partial hits are honoured,
+        i.e. only the still-unknown points fall through to the next layer.
         """
         points = self.interpolate_path(lat1, lon1, lat2, lon2, num_points)
+        keys = [self._cache_key(lat, lon) for lat, lon in points]
+        elevations: List[Optional[float]] = [None] * num_points
 
-        # Try local SRTM
-        elevations = self._elevations_from_srtm(points)
-        if elevations is not None:
-            logger.info("Terrain profile resolved from local SRTM tiles")
-            return elevations
+        # 1. Memory cache
+        for i, k in enumerate(keys):
+            if k in self._mem_cache:
+                elevations[i] = self._mem_cache[k]
 
-        # Fall back to API
-        logger.info("Fetching terrain profile from %s (%d points)", self.api_url, num_points)
-        return self._elevations_from_api(points)
+        # 2. Redis L2 for whatever is still missing
+        missing_idx = [i for i, e in enumerate(elevations) if e is None]
+        if missing_idx and self._redis is not None:
+            redis_vals = self._redis_mget([keys[i] for i in missing_idx])
+            for i, v in zip(missing_idx, redis_vals):
+                if v is not None:
+                    elevations[i] = v
+                    self._mem_cache[keys[i]] = v
+
+        # 3. Local SRTM for the remaining gaps
+        missing_idx = [i for i, e in enumerate(elevations) if e is None]
+        srtm_new: Dict[Tuple[float, float], float] = {}
+        for i in list(missing_idx):
+            lat, lon = points[i]
+            h = self._read_hgt_elevation(lat, lon)
+            if h is not None:
+                elevations[i] = h
+                self._mem_cache[keys[i]] = h
+                srtm_new[keys[i]] = h
+        if srtm_new:
+            logger.info("Terrain profile: %d/%d points from local SRTM",
+                        len(srtm_new), num_points)
+            self._redis_mset(srtm_new)
+
+        # 4. Open-Elevation API fallback for whatever is still missing
+        missing_idx = [i for i, e in enumerate(elevations) if e is None]
+        if missing_idx:
+            logger.info("TerrainService API fallback for %d/%d points via %s",
+                        len(missing_idx), num_points, self.api_url)
+            api_pts = [points[i] for i in missing_idx]
+            api_vals = self._elevations_from_api(api_pts)
+            api_new: Dict[Tuple[float, float], float] = {}
+            for i, v in zip(missing_idx, api_vals):
+                elevations[i] = v
+                self._mem_cache[keys[i]] = v
+                api_new[keys[i]] = v
+            self._redis_mset(api_new)
+
+        return [float(e) if e is not None else 0.0 for e in elevations]
 
 
 # ------------------------------------------------------------

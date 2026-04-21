@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 from dataclasses import dataclass, asdict
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Any
 from enum import Enum
 from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import APIKeyHeader
@@ -283,7 +283,14 @@ class ElevationService:
     def __init__(self, srtm_dir: str | None = None):
         self.cache: Dict[Tuple[float, float], float] = {}
         self.session: Optional[aiohttp.ClientSession] = None
-        self.srtm = SRTMReader(srtm_dir or os.getenv("SRTM_DATA_DIR", "./srtm_data"))
+        # SRTMReader reads SRTM_REDIS_URL first, then falls back to the
+        # generic REDIS_URL (same broker used by the batch worker), so a
+        # single Redis instance can hold both job state and warm SRTM tiles.
+        _redis_url = os.getenv("SRTM_REDIS_URL") or os.getenv("REDIS_URL")
+        self.srtm = SRTMReader(
+            srtm_dir or os.getenv("SRTM_DATA_DIR", "./srtm_data"),
+            redis_url=_redis_url,
+        )
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
@@ -1227,6 +1234,106 @@ async def plan_repeater(tower_id: str, receiver: ReceiverInput, max_hops: int = 
     rx = Receiver(**receiver.dict())
     chain = await platform.plan_repeater_chain(tower, rx, max_hops)
     return {"repeater_chain": [asdict(t) for t in chain]}
+
+
+# ---------------------------------------------------------------------------
+# Async variant — submit a plan_repeater job and poll for the result.
+# Intended for very large candidate sets (max_hops >= 4) where per-edge
+# terrain fetches may still exceed HTTP timeouts even after asyncio.gather.
+# ---------------------------------------------------------------------------
+_REPEATER_JOBS: Dict[str, Dict[str, Any]] = {}
+_REPEATER_JOBS_LOCK = asyncio.Lock()
+_REPEATER_JOBS_TTL_S = int(os.getenv("REPEATER_JOBS_TTL_S", "900"))  # 15 min
+_REPEATER_JOBS_MAX = int(os.getenv("REPEATER_JOBS_MAX", "256"))
+
+async def _reap_repeater_jobs() -> None:
+    """Drop completed/failed repeater jobs older than TTL."""
+    now = time.time()
+    async with _REPEATER_JOBS_LOCK:
+        stale = [
+            jid for jid, j in _REPEATER_JOBS.items()
+            if j["status"] in ("done", "error")
+            and (now - j.get("finished_at", now)) > _REPEATER_JOBS_TTL_S
+        ]
+        for jid in stale:
+            _REPEATER_JOBS.pop(jid, None)
+        # Hard cap: drop oldest if we're over budget
+        if len(_REPEATER_JOBS) > _REPEATER_JOBS_MAX:
+            oldest = sorted(
+                _REPEATER_JOBS.items(),
+                key=lambda kv: kv[1].get("created_at", 0),
+            )[: len(_REPEATER_JOBS) - _REPEATER_JOBS_MAX]
+            for jid, _ in oldest:
+                _REPEATER_JOBS.pop(jid, None)
+
+async def _run_repeater_job(job_id: str, tower: Tower, rx: Receiver, max_hops: int) -> None:
+    try:
+        chain = await platform.plan_repeater_chain(tower, rx, max_hops)
+        async with _REPEATER_JOBS_LOCK:
+            _REPEATER_JOBS[job_id].update(
+                status="done",
+                finished_at=time.time(),
+                result={"repeater_chain": [asdict(t) for t in chain]},
+            )
+    except Exception as exc:  # noqa: BLE001 – surface in job state
+        logger.exception("repeater job %s failed", job_id)
+        async with _REPEATER_JOBS_LOCK:
+            _REPEATER_JOBS[job_id].update(
+                status="error",
+                finished_at=time.time(),
+                error=str(exc),
+            )
+
+@app.post("/plan_repeater/async")
+async def plan_repeater_async(
+    tower_id: str,
+    receiver: ReceiverInput,
+    max_hops: int = 3,
+    key_data: Dict = Depends(verify_api_key),
+):
+    """Submit a repeater-planning job. Returns a job_id; poll
+    ``GET /plan_repeater/jobs/{job_id}`` for progress and the final chain.
+
+    Useful for large candidate sets (max_hops >= 4) where synchronous
+    completion may exceed edge/CDN HTTP timeouts.
+    """
+    tower = platform.get_tower(tower_id)
+    if not tower:
+        raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
+    if not (1 <= max_hops <= 6):
+        raise HTTPException(status_code=400, detail="max_hops must be in [1, 6]")
+    rx = Receiver(**receiver.dict())
+
+    await _reap_repeater_jobs()
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    async with _REPEATER_JOBS_LOCK:
+        _REPEATER_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "running",
+            "created_at": now,
+            "tower_id": tower_id,
+            "max_hops": max_hops,
+        }
+    asyncio.create_task(_run_repeater_job(job_id, tower, rx, max_hops))
+    return {
+        "job_id": job_id,
+        "status": "running",
+        "poll_url": f"/plan_repeater/jobs/{job_id}",
+    }
+
+@app.get("/plan_repeater/jobs/{job_id}")
+async def plan_repeater_job_status(
+    job_id: str,
+    key_data: Dict = Depends(verify_api_key),
+):
+    """Return the state (queued / running / done / error) and, when ready,
+    the repeater_chain produced by ``POST /plan_repeater/async``."""
+    async with _REPEATER_JOBS_LOCK:
+        job = _REPEATER_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found or expired")
+        return dict(job)
 
 @app.get("/export_report")
 async def export_report(tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
