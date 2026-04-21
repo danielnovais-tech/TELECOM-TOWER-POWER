@@ -1,0 +1,129 @@
+name: Deploy to AWS Lambda (SAM)
+
+# Manual trigger only — Lambda is a tertiary target (Railway is primary live).
+# Requires repository secrets:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY  — AWS creds with Lambda + CFN + S3 perms
+#   LAMBDA_DATABASE_URL                       — postgresql+asyncpg://... (prod DB)
+#   LAMBDA_REDIS_URL                          — (optional) redis://...
+#   LAMBDA_VALID_API_KEYS                     — (optional) JSON map of keys→tiers
+# Optional for VPC + RDS Proxy:
+#   LAMBDA_RDS_PROXY_HOST, LAMBDA_SG_ID, LAMBDA_SUBNET_IDS (comma list)
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Deployment stage'
+        required: true
+        default: 'prod'
+        type: choice
+        options: [dev, staging, prod]
+      aws_region:
+        description: 'AWS region'
+        required: false
+        default: 'us-east-1'
+
+concurrency:
+  group: deploy-lambda-${{ inputs.stage }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      STAGE: ${{ github.event.inputs.stage }}
+      AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: SAM validate
+        run: sam validate --lint
+
+      - name: SAM build
+        run: sam build --use-container --build-dir .aws-sam/build
+
+      - name: SAM deploy
+        env:
+          STACK_NAME: telecom-tower-power-${{ env.STAGE }}
+          DATABASE_URL: ${{ secrets.LAMBDA_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.LAMBDA_REDIS_URL }}
+          VALID_API_KEYS: ${{ secrets.LAMBDA_VALID_API_KEYS }}
+          RDS_PROXY_HOST: ${{ secrets.LAMBDA_RDS_PROXY_HOST }}
+          LAMBDA_SG_ID: ${{ secrets.LAMBDA_SG_ID }}
+          SUBNET_IDS: ${{ secrets.LAMBDA_SUBNET_IDS }}
+        run: |
+          : "${DATABASE_URL:?LAMBDA_DATABASE_URL secret must be set}"
+          PARAM_OVERRIDES="Stage=${STAGE}"
+          PARAM_OVERRIDES="${PARAM_OVERRIDES} DatabaseUrl=${DATABASE_URL}"
+          if [ -n "${REDIS_URL:-}" ]; then
+            PARAM_OVERRIDES="${PARAM_OVERRIDES} RedisUrl=${REDIS_URL}"
+          fi
+          if [ -n "${VALID_API_KEYS:-}" ]; then
+            PARAM_OVERRIDES="${PARAM_OVERRIDES} ValidApiKeys=${VALID_API_KEYS}"
+          fi
+          if [ -n "${RDS_PROXY_HOST:-}" ]; then
+            PARAM_OVERRIDES="${PARAM_OVERRIDES} RdsProxyHost=${RDS_PROXY_HOST}"
+          fi
+          if [ -n "${LAMBDA_SG_ID:-}" ]; then
+            PARAM_OVERRIDES="${PARAM_OVERRIDES} LambdaSecurityGroupId=${LAMBDA_SG_ID}"
+          fi
+          if [ -n "${SUBNET_IDS:-}" ]; then
+            PARAM_OVERRIDES="${PARAM_OVERRIDES} VpcSubnetIds=${SUBNET_IDS}"
+          fi
+
+          sam deploy \
+            --stack-name "${STACK_NAME}" \
+            --region "${AWS_REGION}" \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides ${PARAM_OVERRIDES} \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
+
+      - name: Show stack outputs
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name "telecom-tower-power-${STAGE}" \
+            --region "${AWS_REGION}" \
+            --query "Stacks[0].Outputs" \
+            --output table
+
+      - name: Smoke-test API Gateway endpoint
+        run: |
+          URL=$(aws cloudformation describe-stacks \
+            --stack-name "telecom-tower-power-${STAGE}" \
+            --region "${AWS_REGION}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint' || OutputKey=='HttpApiEndpoint'].OutputValue | [0]" \
+            --output text 2>/dev/null || echo "")
+          if [ -n "$URL" ] && [ "$URL" != "None" ]; then
+            echo "Testing $URL/health"
+            STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "$URL/health" || echo "000")
+            echo "Health: HTTP $STATUS"
+            [ "$STATUS" = "200" ] || echo "::warning::Lambda /health returned $STATUS"
+          else
+            echo "::warning::No ApiEndpoint output found — configure template.yaml Outputs"
+          fi

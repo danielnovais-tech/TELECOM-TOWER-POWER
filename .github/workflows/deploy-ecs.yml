@@ -1,0 +1,160 @@
+name: Deploy to ECS Fargate
+
+# Manual trigger only — ECS is a secondary deployment target (Railway is primary live).
+# Requires repository secrets:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY   — AWS creds with ECR + ECS + SSM perms
+#   AWS_ACCOUNT_ID                             — e.g. 490083271496
+# Optional secrets (fall back to defaults in ecs-task-definition.json / deploy_ecs.sh):
+#   ECS_EFS_ID, ECS_AP_SRTM_ID, ECS_AP_JOBS_ID
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to build and push (default: git SHA)'
+        required: false
+        default: ''
+      aws_region:
+        description: 'AWS region'
+        required: false
+        default: 'sa-east-1'
+      force_new_deployment:
+        description: 'Force ECS to pull :latest even if task def unchanged'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-ecs
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      AWS_REGION: ${{ github.event.inputs.aws_region || 'sa-east-1' }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      ECR_REPO: telecom-tower-power
+      CLUSTER_NAME: telecom-tower-power
+      SERVICE_NAME: telecom-tower-power
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.image_tag }}"
+          if [ -z "$TAG" ]; then TAG="${GITHUB_SHA::7}"; fi
+          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $TAG"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "$ECR_REPO" --region "$AWS_REGION" >/dev/null 2>&1 \
+            || aws ecr create-repository --repository-name "$ECR_REPO" --region "$AWS_REGION" \
+                 --image-scanning-configuration scanOnPush=true >/dev/null
+
+      - name: Build and push image
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}
+          TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag "$IMAGE:$TAG" \
+            --tag "$IMAGE:latest" \
+            --push \
+            .
+
+      - name: Ensure CloudWatch log group exists
+        run: |
+          aws logs create-log-group --log-group-name "/ecs/telecom-tower-power" --region "$AWS_REGION" 2>/dev/null || true
+
+      - name: Render task definition
+        run: |
+          : "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID secret not set}"
+          EFS_ID="${{ secrets.ECS_EFS_ID }}"
+          AP_SRTM_ID="${{ secrets.ECS_AP_SRTM_ID }}"
+          AP_JOBS_ID="${{ secrets.ECS_AP_JOBS_ID }}"
+          : "${EFS_ID:=fs-091b9107b39a5ed53}"
+          : "${AP_SRTM_ID:=fsap-0a740ba6cf0c71f41}"
+          : "${AP_JOBS_ID:=fsap-02abb963dd67f4238}"
+          sed \
+            -e "s/ACCOUNT_ID/$AWS_ACCOUNT_ID/g" \
+            -e "s/AWS_REGION/$AWS_REGION/g" \
+            -e "s/EFS_ID/$EFS_ID/g" \
+            -e "s/AP_SRTM_ID/$AP_SRTM_ID/g" \
+            -e "s/AP_JOBS_ID/$AP_JOBS_ID/g" \
+            ecs-task-definition.json > /tmp/task-def.json
+          echo "Rendered task definition:"
+          jq '.containerDefinitions[].image' /tmp/task-def.json
+
+      - name: Register task definition
+        id: register
+        run: |
+          ARN=$(aws ecs register-task-definition \
+            --cli-input-json file:///tmp/task-def.json \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "task_def_arn=$ARN" >> "$GITHUB_OUTPUT"
+          echo "Registered: $ARN"
+
+      - name: Update ECS service (if exists)
+        run: |
+          if aws ecs describe-services \
+               --cluster "$CLUSTER_NAME" \
+               --services "$SERVICE_NAME" \
+               --region "$AWS_REGION" \
+               --query 'services[0].status' --output text 2>/dev/null | grep -q ACTIVE; then
+            echo "Updating service $SERVICE_NAME..."
+            FORCE=""
+            if [ "${{ github.event.inputs.force_new_deployment }}" = "true" ]; then
+              FORCE="--force-new-deployment"
+            fi
+            aws ecs update-service \
+              --cluster "$CLUSTER_NAME" \
+              --service "$SERVICE_NAME" \
+              --task-definition "${{ steps.register.outputs.task_def_arn }}" \
+              $FORCE \
+              --region "$AWS_REGION" \
+              --query 'service.{status:status,desired:desiredCount,running:runningCount}' \
+              --output table
+          else
+            echo "::warning::Service $SERVICE_NAME not found on cluster $CLUSTER_NAME."
+            echo "Task definition was registered but no service was updated."
+            echo "Create the service once via AWS console or CLI, then re-run this workflow."
+          fi
+
+      - name: Wait for service to stabilize
+        if: success()
+        run: |
+          if aws ecs describe-services \
+               --cluster "$CLUSTER_NAME" \
+               --services "$SERVICE_NAME" \
+               --region "$AWS_REGION" \
+               --query 'services[0].status' --output text 2>/dev/null | grep -q ACTIVE; then
+            echo "Waiting for service stability (up to 10 minutes)..."
+            aws ecs wait services-stable \
+              --cluster "$CLUSTER_NAME" \
+              --services "$SERVICE_NAME" \
+              --region "$AWS_REGION" || echo "::warning::Service did not stabilize in time"
+          fi
