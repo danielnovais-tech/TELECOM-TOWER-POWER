@@ -49,6 +49,8 @@ jobs:
 
       - name: Deploy Caddyfile and reload Caddy on EC2
         run: |
+          LOCAL_MD5=$(md5sum Caddyfile | awk '{print $1}')
+          echo "Local Caddyfile md5: $LOCAL_MD5"
           scp -i /tmp/ec2_key \
             -o StrictHostKeyChecking=no \
             -o ConnectTimeout=15 \
@@ -58,7 +60,24 @@ jobs:
             -o StrictHostKeyChecking=no \
             -o ConnectTimeout=15 \
             ubuntu@${{ secrets.EC2_HOST }} \
-            'sudo cp /home/ubuntu/TELECOM-TOWER-POWER/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy'
+            "sudo cp /home/ubuntu/TELECOM-TOWER-POWER/Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && sudo systemctl reload caddy"
+          # Post-reload integrity check: remote /etc/caddy/Caddyfile must match local
+          REMOTE_MD5=$(ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} \
+            "sudo md5sum /etc/caddy/Caddyfile | awk '{print \$1}'")
+          echo "Remote /etc/caddy/Caddyfile md5: $REMOTE_MD5"
+          if [ "$LOCAL_MD5" != "$REMOTE_MD5" ]; then
+            echo "::error::Caddyfile md5 mismatch after deploy (local=$LOCAL_MD5 remote=$REMOTE_MD5)"
+            exit 1
+          fi
+          # Confirm caddy is running after reload
+          ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} \
+            'systemctl is-active caddy'
 
       - name: Verify health endpoints
         run: |
