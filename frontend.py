@@ -25,11 +25,21 @@ from api_client import (
 
 API_BASE = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
 
-DEMO_KEYS = {
-    "Free (demo-key-free-001)": "demo-key-free-001",
-    "Pro (demo-key-pro-001)": "demo-key-pro-001",
-    "Enterprise (demo-key-enterprise-001)": "demo-key-enterprise-001",
-}
+# Demo keys are read from DEMO_KEYS_UI env var (JSON: {"Label": "key", ...}).
+# Falls back to legacy staging keys for local dev.
+_demo_keys_raw = os.getenv("DEMO_KEYS_UI")
+if _demo_keys_raw:
+    import json as _json
+    try:
+        DEMO_KEYS = _json.loads(_demo_keys_raw)
+    except Exception:
+        DEMO_KEYS = {}
+else:
+    DEMO_KEYS = {
+        "Free (demo-key-free-001)": "demo-key-free-001",
+        "Pro (demo-key-pro-001)": "demo-key-pro-001",
+        "Enterprise (demo-key-enterprise-001)": "demo-key-enterprise-001",
+    }
 
 PLAN_INFO = {
     "free": {"label": "Free", "price": "$0/mo", "features": "10 req/min · 20 towers · link analysis"},

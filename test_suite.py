@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
+import os
 import sys
 import time
 import uuid
@@ -41,12 +43,20 @@ ENV_URLS: Dict[str, str] = {
 }
 
 # Demo keys that are always present when ENABLE_DEMO_KEYS=true (local/staging).
-# These are the hardcoded keys from telecom_tower_power_api.py.
-DEMO_KEYS: Dict[str, str] = {
-    "free":       "demo-key-free-001",
-    "pro":        "demo-key-pro-001",
-    "enterprise": "demo-key-enterprise-001",
-}
+# Can be overridden via TEST_DEMO_KEYS env var (JSON: {"tier": "key", ...})
+# so tests run against whichever keys are currently provisioned on the target env.
+_demo_keys_env = os.getenv("TEST_DEMO_KEYS")
+if _demo_keys_env:
+    try:
+        DEMO_KEYS: Dict[str, str] = json.loads(_demo_keys_env)
+    except Exception:
+        DEMO_KEYS = {}
+else:
+    DEMO_KEYS: Dict[str, str] = {
+        "free":       "demo-key-free-001",
+        "pro":        "demo-key-pro-001",
+        "enterprise": "demo-key-enterprise-001",
+    }
 
 # Tier-specific batch row limits (from telecom_tower_power_api.py / env vars)
 BATCH_LIMIT_PRO        = 2_000

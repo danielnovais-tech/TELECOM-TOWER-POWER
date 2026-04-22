@@ -12,12 +12,13 @@ Usage:
 
 import argparse
 import csv
+import os
 import sys
 import requests
 
 DEFAULT_CSV = "towers_brazil.csv"
-DEFAULT_URL = "http://localhost:8000"
-DEFAULT_KEY = "demo-key-pro-001"
+DEFAULT_URL = os.getenv("LOAD_TOWERS_URL", "http://localhost:8000")
+DEFAULT_KEY = os.getenv("LOAD_TOWERS_API_KEY", "demo-key-pro-001")
 
 
 def load_towers(csv_path: str, base_url: str, api_key: str):

@@ -1,9 +1,10 @@
 """Quick CRUD smoke test – run against a local API on port 8000."""
+import os
 import requests
 import sys
 
-BASE = "http://localhost:8001"
-H = {"X-API-Key": "demo-key-pro-001", "Content-Type": "application/json"}
+BASE = os.getenv("TEST_API_BASE", "http://localhost:8001")
+H = {"X-API-Key": os.getenv("TEST_API_KEY", "demo-key-pro-001"), "Content-Type": "application/json"}
 ok = True
 
 def check(label, condition):
