@@ -38,8 +38,16 @@ logger = logging.getLogger("stripe_billing")
 # ---------------------------------------------------------------------------
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+# Monthly prices
+STRIPE_PRICE_STARTER = os.getenv("STRIPE_PRICE_STARTER", "")
 STRIPE_PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "")
+STRIPE_PRICE_BUSINESS = os.getenv("STRIPE_PRICE_BUSINESS", "")
 STRIPE_PRICE_ENTERPRISE = os.getenv("STRIPE_PRICE_ENTERPRISE", "")
+# Annual prices (typically 15-20% discount over 12 × monthly)
+STRIPE_PRICE_STARTER_ANNUAL = os.getenv("STRIPE_PRICE_STARTER_ANNUAL", "")
+STRIPE_PRICE_PRO_ANNUAL = os.getenv("STRIPE_PRICE_PRO_ANNUAL", "")
+STRIPE_PRICE_BUSINESS_ANNUAL = os.getenv("STRIPE_PRICE_BUSINESS_ANNUAL", "")
+STRIPE_PRICE_ENTERPRISE_ANNUAL = os.getenv("STRIPE_PRICE_ENTERPRISE_ANNUAL", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://app.telecomtowerpower.com.br")
 
 stripe.api_key = STRIPE_SECRET_KEY
@@ -51,10 +59,22 @@ _SES_USER = os.getenv("SES_SMTP_USERNAME", "")
 _SES_PASS = os.getenv("SES_SMTP_PASSWORD", "")
 _SES_FROM = os.getenv("SES_FROM_ADDRESS", "no-reply@telecomtowerpower.com.br")
 
-# Map tier name → Stripe Price ID
+# Map tier name → Stripe Price ID. Entries with empty values are ignored
+# by create_checkout_session (raises ValueError) so a tier remains safely
+# unavailable until its STRIPE_PRICE_* env var is set.
 TIER_PRICE_MAP: Dict[str, str] = {
+    "starter": STRIPE_PRICE_STARTER,
     "pro": STRIPE_PRICE_PRO,
+    "business": STRIPE_PRICE_BUSINESS,
     "enterprise": STRIPE_PRICE_ENTERPRISE,
+}
+
+# Annual prices — keyed the same way, used when billing_cycle="annual".
+TIER_PRICE_MAP_ANNUAL: Dict[str, str] = {
+    "starter": STRIPE_PRICE_STARTER_ANNUAL,
+    "pro": STRIPE_PRICE_PRO_ANNUAL,
+    "business": STRIPE_PRICE_BUSINESS_ANNUAL,
+    "enterprise": STRIPE_PRICE_ENTERPRISE_ANNUAL,
 }
 
 # ---------------------------------------------------------------------------
@@ -154,11 +174,14 @@ def register_free_user(email: str) -> Dict:
 # Stripe Checkout
 # ---------------------------------------------------------------------------
 
-def create_checkout_session(email: str, tier: str, country: Optional[str] = None) -> str:
+def create_checkout_session(email: str, tier: str, country: Optional[str] = None, billing_cycle: str = "monthly") -> str:
     """
     Create a Stripe Checkout Session for a paid tier.
     Returns the Checkout Session URL the frontend should redirect to.
 
+    *billing_cycle* is "monthly" (default) or "annual"; the annual variant
+    maps to STRIPE_PRICE_*_ANNUAL env vars which should be configured with
+    a 15-20% discount over 12 × the monthly price.
     *country* (ISO 3166-1 alpha-2) is optional; when provided for an
     enterprise plan, SRTM tiles for that country will be pre-downloaded
     after payment.
@@ -166,11 +189,12 @@ def create_checkout_session(email: str, tier: str, country: Optional[str] = None
     if not STRIPE_SECRET_KEY:
         raise RuntimeError("STRIPE_SECRET_KEY is not configured")
 
-    price_id = TIER_PRICE_MAP.get(tier)
+    price_map = TIER_PRICE_MAP_ANNUAL if billing_cycle == "annual" else TIER_PRICE_MAP
+    price_id = price_map.get(tier)
     if not price_id:
-        raise ValueError(f"No Stripe price configured for tier '{tier}'")
+        raise ValueError(f"No Stripe price configured for tier '{tier}' ({billing_cycle})")
 
-    metadata = {"tier": tier, "email": email}
+    metadata = {"tier": tier, "email": email, "billing_cycle": billing_cycle}
     if country:
         metadata["country"] = country.upper()
 
@@ -304,6 +328,7 @@ def _on_checkout_completed(session: dict) -> Dict:
     """Provision a paid API key after successful checkout."""
     email = session["metadata"]["email"]
     tier = session["metadata"]["tier"]
+    billing_cycle = session["metadata"].get("billing_cycle", "monthly")
     customer_id = session["customer"]
     subscription_id = session["subscription"]
 
@@ -318,18 +343,20 @@ def _on_checkout_completed(session: dict) -> Dict:
 
     if existing_key:
         store[existing_key]["tier"] = tier
+        store[existing_key]["billing_cycle"] = billing_cycle
         store[existing_key]["stripe_customer_id"] = customer_id
         store[existing_key]["stripe_subscription_id"] = subscription_id
         _save_store(store)
-        logger.info("Upgraded %s to %s (key %s…)", email, tier, existing_key[:12])
+        logger.info("Upgraded %s to %s/%s (key %s…)", email, tier, billing_cycle, existing_key[:12])
         _maybe_prefetch_srtm(tier, session)
         send_welcome_email(email, existing_key, tier)
-        return {"action": "upgraded", "email": email, "tier": tier}
+        return {"action": "upgraded", "email": email, "tier": tier, "billing_cycle": billing_cycle}
 
     # Otherwise create a new key
     key = _generate_api_key()
     store[key] = {
         "tier": tier,
+        "billing_cycle": billing_cycle,
         "owner": email,
         "email": email,
         "stripe_customer_id": customer_id,
@@ -337,10 +364,10 @@ def _on_checkout_completed(session: dict) -> Dict:
         "created": time.time(),
     }
     _save_store(store)
-    logger.info("Provisioned %s key for %s", tier, email)
+    logger.info("Provisioned %s/%s key for %s", tier, billing_cycle, email)
     _maybe_prefetch_srtm(tier, session)
     send_welcome_email(email, key, tier)
-    return {"action": "provisioned", "email": email, "tier": tier}
+    return {"action": "provisioned", "email": email, "tier": tier, "billing_cycle": billing_cycle}
 
 
 def _on_subscription_deleted(subscription: dict) -> Dict:
