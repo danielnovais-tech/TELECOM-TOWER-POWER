@@ -230,3 +230,4 @@ marimo/_lsp/
 __marimo__/
 report.csv
 regeocode_map.html
+git-credential-manager/
