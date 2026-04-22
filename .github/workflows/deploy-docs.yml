@@ -86,12 +86,13 @@ jobs:
             ubuntu@${{ secrets.EC2_HOST }}:/srv/docs/
 
       - name: Verify docs host
+        continue-on-error: true
         run: |
           sleep 3
-          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://docs.telecomtowerpower.com.br/")
-          echo "Health check docs.telecomtowerpower.com.br/ returned HTTP $STATUS"
+          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://docs.telecomtowerpower.com.br/" || echo "DNS_OR_CONN_FAIL")
+          echo "Health check docs.telecomtowerpower.com.br/ returned: $STATUS"
           if [ "$STATUS" != "200" ]; then
-            echo "::warning::docs host returned HTTP $STATUS — check DNS CNAME and Caddyfile @docs_host matcher"
+            echo "::warning::docs host returned '$STATUS' — add CNAME docs.telecomtowerpower.com.br → ALB and ensure ALB listener rule forwards this host to the EC2 target group."
           fi
 
       - name: Revoke runner IP from EC2 SG
