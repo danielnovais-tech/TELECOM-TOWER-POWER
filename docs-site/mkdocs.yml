@@ -1,0 +1,81 @@
+site_name: TELECOM TOWER POWER
+site_url: https://docs.telecomtowerpower.com.br
+site_description: Planejamento de enlaces de rádio com dados ANATEL · Radio link planning API for Brazil
+repo_url: https://github.com/danielnovaisantunes/TELECOM-TOWER-POWER
+copyright: © 2026 TELECOM TOWER POWER
+
+theme:
+  name: material
+  language: pt
+  palette:
+    - scheme: default
+      primary: blue
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Modo escuro
+    - scheme: slate
+      primary: blue
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Modo claro
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.share
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      languages:
+        - locale: pt
+          name: Português
+          default: true
+          build: true
+        - locale: en
+          name: English
+          build: true
+          nav_translations:
+            Início: Home
+            Começando: Getting started
+            Referência da API: API reference
+            SDKs: SDKs
+            Tutoriais: Tutorials
+            FAQ: FAQ
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Início: index.md
+  - Começando:
+      - getting-started/quickstart.md
+      - getting-started/authentication.md
+      - getting-started/rate-limits.md
+  - Referência da API:
+      - api/overview.md
+      - api/analyze-link.md
+      - api/repeaters.md
+      - api/batch.md
+  - SDKs:
+      - sdks/python.md
+      - sdks/javascript.md
+  - Tutoriais:
+      - tutorials/wisp-expansion.md
+  - FAQ: faq.md
