@@ -12,20 +12,32 @@ contactPoints:
       - uid: email-1
         type: email
         settings:
-          addresses: "daniel.novais@sempreceub.com"
+          addresses: $__env{ALERT_EMAIL_TO}
+          singleEmail: false
         disableResolveMessage: false
 
   # ── Slack ─────────────────────────────────────────────────
-  # To enable: set SLACK_WEBHOOK_URL in .env, then uncomment below.
-  # - orgId: 1
-  #   name: slack-alerts
-  #   receivers:
-  #     - uid: slack-1
-  #       type: slack
-  #       settings:
-  #         url: $__env{SLACK_WEBHOOK_URL}
-  #         recipient: "#alerts"
-  #       disableResolveMessage: false
+  # Requires SLACK_WEBHOOK_URL (already provisioned via Docker secret).
+  # Optional: SLACK_CHANNEL (e.g. "#alerts"). Overrides channel of the webhook.
+  - orgId: 1
+    name: slack-alerts
+    receivers:
+      - uid: slack-1
+        type: slack
+        settings:
+          url: $__env{SLACK_WEBHOOK_URL}
+          recipient: $__env{SLACK_CHANNEL}
+          username: Grafana
+          title: |
+            [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}
+          text: |
+            {{ range .Alerts -}}
+            *Severity:* {{ .Labels.severity }}
+            *Summary:* {{ .Annotations.summary }}
+            *Description:* {{ .Annotations.description }}
+            *Started:* {{ .StartsAt }}
+            {{ end }}
+        disableResolveMessage: false
 
   # ── PagerDuty ─────────────────────────────────────────────
   # To enable: set PAGERDUTY_INTEGRATION_KEY in .env, then uncomment below.

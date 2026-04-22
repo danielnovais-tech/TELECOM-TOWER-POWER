@@ -292,6 +292,8 @@ services:
       - GF_SMTP_USER__FILE=/run/secrets/ses_smtp_username
       - GF_SMTP_PASSWORD__FILE=/run/secrets/ses_smtp_password
       - GF_SMTP_FROM_ADDRESS=${SMTP_FROM:-alerts@telecomtowerpower.com.br}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-daniel.novais@sempreceub.com}
+      - SLACK_CHANNEL=${SLACK_CHANNEL:-#alerts}
     secrets:
       - grafana_admin_password
       - ses_smtp_username
