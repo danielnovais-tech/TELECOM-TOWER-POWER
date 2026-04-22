@@ -91,6 +91,13 @@ jobs:
               exit 1
             fi
           done
+          # Docs subdomain (static MkDocs site — check root returns 200)
+          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://docs.telecomtowerpower.com.br/")
+          echo "Health check docs.*/ returned HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Docs site health check failed with HTTP $STATUS"
+            exit 1
+          fi
           # ALB direct target groups (bypass Caddy)
           STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://monitoring.telecomtowerpower.com.br/api/health")
           echo "Health check monitoring.*/api/health returned HTTP $STATUS"
