@@ -19,6 +19,18 @@
                 }
         }
 
+        # ── docs.telecomtowerpower.com.br → MkDocs static build ──
+        # The MkDocs site is built into /srv/docs inside the container
+        # (see Dockerfile: COPY docs-site/site /srv/docs). If you deploy
+        # the docs as a separate Railway static service, swap this for
+        # a reverse_proxy to that service instead.
+        @docs_host host docs.telecomtowerpower.com.br
+        handle @docs_host {
+                root * /srv/docs
+                try_files {path} {path}/ {path}/index.html /index.html
+                file_server
+        }
+
         # ── www / app frontend: selective API routing + React SPA ──
         @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup* /login* /profile* /portal* /analyze* /plan_repeater* /export_report* /bedrock* /srtm*
 
