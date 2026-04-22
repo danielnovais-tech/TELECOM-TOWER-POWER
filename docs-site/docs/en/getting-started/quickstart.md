@@ -28,6 +28,6 @@ The API returns the best candidate tower with `link_margin_db`. Values above **1
 
 ## 4. Next
 
-- Try the [multi-hop repeater](../api/repeaters.md) endpoint for NLOS scenarios.
-- Check the [Python SDK](../sdks/python.md) to embed it in scripts.
+- Browse the [API reference](../api/overview.md) for every available endpoint.
+- Set up [authentication](authentication.md) for production.
 - Read about [rate limits](rate-limits.md) before going to production.

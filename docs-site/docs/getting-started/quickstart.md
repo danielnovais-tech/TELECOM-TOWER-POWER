@@ -28,6 +28,6 @@ A API retorna a melhor torre candidata com `link_margin_db`. Valores acima de **
 
 ## 4. Próximos passos
 
-- Teste o endpoint de [repetidores multi-salto](../api/repeaters.md) para cenários NLOS.
-- Veja o [SDK Python](../sdks/python.md) para integrar em scripts.
+- Veja a [referência da API](../api/overview.md) para todos os endpoints disponíveis.
+- Configure [autenticação](authentication.md) para produção.
 - Leia sobre [limites de taxa](rate-limits.md) antes de colocar em produção.
