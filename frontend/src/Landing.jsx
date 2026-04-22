@@ -114,7 +114,7 @@ export default function Landing({ onSignup, onLogin }) {
           <nav style={styles.navLinks}>
             <a href="#features">{t.nav.features}</a>
             <a href="#pricing">{t.nav.pricing}</a>
-            <a href="/docs/">{t.nav.docs}</a>
+            <a href="https://docs.telecomtowerpower.com.br/" target="_blank" rel="noopener noreferrer">{t.nav.docs}</a>
             <a href="#faq">{t.nav.faq}</a>
             <button onClick={() => setLang(lang === "pt" ? "en" : "pt")} style={styles.langBtn}>
               {lang === "pt" ? "EN" : "PT"}
