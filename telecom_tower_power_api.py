@@ -770,36 +770,59 @@ class TelecomTowerPower:
 
 class Tier(str, Enum):
     FREE = "free"
+    STARTER = "starter"
     PRO = "pro"
+    BUSINESS = "business"
     ENTERPRISE = "enterprise"
 
 TIER_LIMITS = {
-    Tier.FREE: {"requests_per_min": int(os.getenv("RATE_LIMIT_FREE", "10")), "pdf_export": False, "max_towers": 20, "max_batch_rows": 0},
-    Tier.PRO: {"requests_per_min": int(os.getenv("RATE_LIMIT_PRO", "100")), "pdf_export": True, "max_towers": 500, "max_batch_rows": 2000},
-    Tier.ENTERPRISE: {"requests_per_min": int(os.getenv("RATE_LIMIT_ENTERPRISE", "1000")), "pdf_export": True, "max_towers": 10000, "max_batch_rows": 10000},
+    Tier.FREE: {"requests_per_min": int(os.getenv("RATE_LIMIT_FREE", "10")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_FREE", "5")), "max_towers": 20, "max_batch_rows": 0},
+    Tier.STARTER: {"requests_per_min": int(os.getenv("RATE_LIMIT_STARTER", "30")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_STARTER", "50")), "max_towers": 100, "max_batch_rows": 100},
+    Tier.PRO: {"requests_per_min": int(os.getenv("RATE_LIMIT_PRO", "100")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_PRO", "500")), "max_towers": 500, "max_batch_rows": 2000},
+    Tier.BUSINESS: {"requests_per_min": int(os.getenv("RATE_LIMIT_BUSINESS", "300")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_BUSINESS", "5000")), "max_towers": 2000, "max_batch_rows": 5000},
+    Tier.ENTERPRISE: {"requests_per_min": int(os.getenv("RATE_LIMIT_ENTERPRISE", "1000")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_ENTERPRISE", "100000")), "max_towers": 10000, "max_batch_rows": 10000},
 }
 
-# In-memory API key store: key -> {"tier": Tier, "owner": str}
+# In-memory API key store: key -> {"tier": Tier, "owner": str, "demo": bool}
 # Override with VALID_API_KEYS env var: JSON dict {"key": "tier", ...}
 # e.g. VALID_API_KEYS='{"prod-key-001":"pro","prod-key-002":"enterprise"}'
+#
+# Demo keys (public, rate-limited, no PDF, no AI) are rotated monthly via
+# the DEMO_KEYS env var and ship a distinct prefix (`demo_`) so they can be
+# safely revoked without touching real customer keys.
+_DEFAULT_DEMO_KEYS = {
+    "demo_try_free_2026_04": Tier.FREE,
+    "demo_try_pro_2026_04": Tier.PRO,
+}
+_raw_demo = os.getenv("DEMO_KEYS")
+if _raw_demo:
+    try:
+        _DEFAULT_DEMO_KEYS = {k: Tier(v) for k, v in json.loads(_raw_demo).items()}
+    except Exception:
+        logger.exception("invalid DEMO_KEYS env var; using defaults")
 _demo_api_keys: Dict[str, Dict] = {
-    "demo-key-free-001": {"tier": Tier.FREE, "owner": "demo_free"},
-    "demo-key-pro-001": {"tier": Tier.PRO, "owner": "demo_pro"},
-    "demo-key-enterprise-001": {"tier": Tier.ENTERPRISE, "owner": "demo_enterprise"},
+    k: {"tier": t, "owner": f"demo_{t.value}", "demo": True}
+    for k, t in _DEFAULT_DEMO_KEYS.items()
 }
 
 _env_keys_raw = os.getenv("VALID_API_KEYS")
 if _env_keys_raw:
     _env_keys = json.loads(_env_keys_raw)
     API_KEYS: Dict[str, Dict] = {
-        k: {"tier": Tier(v), "owner": k} for k, v in _env_keys.items()
+        k: {"tier": Tier(v), "owner": k, "demo": False} for k, v in _env_keys.items()
     }
 else:
     API_KEYS: Dict[str, Dict] = {}
 
-# Demo keys are only loaded when explicitly enabled (dev/staging).
+# Demo keys are enabled by default in staging; production should set
+# ENABLE_DEMO_KEYS=false once real customers are onboarded unless a
+# "Try the API" button on the landing page still points at them.
 if os.getenv("ENABLE_DEMO_KEYS", "true").lower() in ("1", "true", "yes"):
     API_KEYS.update(_demo_api_keys)
+
+# Hard-capped rate limit for demo keys regardless of nominal tier, to prevent
+# public scraping abuse. Overridable via DEMO_RATE_LIMIT env (rpm).
+_DEMO_RATE_LIMIT_RPM = int(os.getenv("DEMO_RATE_LIMIT", "6"))
 
 api_key_header = APIKeyHeader(name="X-API-Key")
 
@@ -809,6 +832,33 @@ _towers_created_per_key: Dict[str, int] = {}
 # ---- Per-key cumulative request counter (for usage portal) ----
 _usage_counters: Dict[str, Dict] = {}
 
+# ---- Per-key monthly PDF quota counter ----
+# _pdf_counter[api_key] = {"month": "2026-04", "count": int}
+_pdf_counter: Dict[str, Dict] = {}
+
+def _enforce_pdf_quota(api_key: str, tier: Tier) -> int:
+    """Raise 429 if the caller exceeds the monthly PDF quota for their tier.
+    Returns the new count after increment."""
+    limits = TIER_LIMITS[tier]
+    quota = limits.get("pdf_per_month")
+    if quota is None:
+        return 0
+    month = time.strftime("%Y-%m", time.gmtime())
+    entry = _pdf_counter.get(api_key)
+    if entry is None or entry.get("month") != month:
+        entry = {"month": month, "count": 0}
+        _pdf_counter[api_key] = entry
+    if entry["count"] >= quota:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Monthly PDF quota exceeded ({quota} PDFs/month for {tier.value} tier). "
+                "Upgrade your plan at https://app.telecomtowerpower.com.br/pricing"
+            ),
+        )
+    entry["count"] += 1
+    return entry["count"]
+
 def _track_usage(api_key: str):
     """Increment per-key request counter."""
     entry = _usage_counters.setdefault(api_key, {"requests": 0, "since": time.time()})
@@ -817,10 +867,14 @@ def _track_usage(api_key: str):
 # ---- Sliding-window rate limiter (per API key) ----
 _rate_buckets: Dict[str, collections.deque] = {}
 
-def _check_rate_limit(api_key: str, tier: Tier) -> Tuple[int, int]:
+def _check_rate_limit(api_key: str, tier: Tier, is_demo: bool = False) -> Tuple[int, int]:
     """Raise 429 if the caller exceeds their tier's requests_per_min.
+    Demo keys are additionally capped at `DEMO_RATE_LIMIT` rpm regardless
+    of nominal tier, to prevent public scraping abuse.
     Returns (remaining, limit) for response headers."""
     limit = TIER_LIMITS[tier]["requests_per_min"]
+    if is_demo:
+        limit = min(limit, _DEMO_RATE_LIMIT_RPM)
     now = time.monotonic()
     window = 60.0  # seconds
 
@@ -850,14 +904,15 @@ async def verify_api_key(request: Request, api_key: str = Security(api_key_heade
         # Check dynamically-registered keys from Stripe billing
         dynamic = stripe_billing.lookup_key(api_key)
         if dynamic is not None:
-            key_data = {"tier": Tier(dynamic["tier"]), "owner": dynamic["owner"]}
+            key_data = {"tier": Tier(dynamic["tier"]), "owner": dynamic["owner"], "demo": False}
         else:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    remaining, limit = _check_rate_limit(api_key, key_data["tier"])
+    remaining, limit = _check_rate_limit(api_key, key_data["tier"], is_demo=bool(key_data.get("demo")))
     _track_usage(api_key)
     request.state.tier = key_data["tier"].value
     request.state.rate_limit_remaining = remaining
     request.state.rate_limit_limit = limit
+    request.state.is_demo = bool(key_data.get("demo"))
     return key_data
 
 def require_tier(*allowed: Tier):
@@ -908,7 +963,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["X-API-Key", "Content-Type", "Authorization"],
-    expose_headers=["X-RateLimit-Remaining", "X-RateLimit-Limit"],
+    expose_headers=["X-RateLimit-Remaining", "X-RateLimit-Limit", "X-Demo-Key", "X-Demo-Notice"],
 )
 
 # Security headers middleware
@@ -964,6 +1019,12 @@ async def prometheus_middleware(request: Request, call_next):
         response.headers["X-RateLimit-Remaining"] = str(rl_remaining)
         response.headers["X-RateLimit-Limit"] = str(
             getattr(request.state, "rate_limit_limit", 0)
+        )
+    if getattr(request.state, "is_demo", False):
+        response.headers["X-Demo-Key"] = "true"
+        response.headers["X-Demo-Notice"] = (
+            "Public demo key in use; do not use for production. "
+            "Sign up at https://app.telecomtowerpower.com.br/signup"
         )
     logger.info(
         "request",
@@ -1352,8 +1413,10 @@ async def plan_repeater_job_status(
         return dict(job)
 
 @app.get("/export_report")
-async def export_report(tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
-    """Generate a professional PDF engineering report (Pro/Enterprise tiers only)."""
+async def export_report(request: Request, tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.FREE, Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE))):
+    """Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo)."""
+    raw_key = request.headers.get("x-api-key", "")
+    _enforce_pdf_quota(raw_key, key_data["tier"])
     tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
@@ -1376,8 +1439,10 @@ async def export_report(tower_id: str, lat: float, lon: float, height_m: float =
     )
 
 @app.get("/export_report/pdf")
-async def export_report_pdf(tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
-    """Generate a professional PDF engineering report (Pro/Enterprise tiers only)."""
+async def export_report_pdf(request: Request, tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.FREE, Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE))):
+    """Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo)."""
+    raw_key = request.headers.get("x-api-key", "")
+    _enforce_pdf_quota(raw_key, key_data["tier"])
     tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
@@ -1405,7 +1470,7 @@ async def batch_reports(
     csv_file: UploadFile = File(...),
     receiver_height_m: float = 10.0,
     antenna_gain_dbi: float = 12.0,
-    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+    key_data: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
 ):
     """Upload a CSV of receiver points (columns: lat,lon  and optionally
     height, gain) and download a ZIP of PDF reports – one per receiver.
@@ -1521,7 +1586,7 @@ async def batch_reports(
 # ------------------------------------------------------------
 
 @app.get("/jobs/{job_id}")
-async def get_job_status(job_id: str, _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
+async def get_job_status(job_id: str, _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE))):
     """Poll the status of a background batch job (Pro/Enterprise only)."""
     job = job_store.get_job(job_id)
     if job is None:
@@ -1599,7 +1664,7 @@ async def job_progress_ws(websocket: WebSocket, job_id: str, token: str = Query(
 
 
 @app.get("/jobs/{job_id}/download")
-async def download_job_result(job_id: str, _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE))):
+async def download_job_result(job_id: str, _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE))):
     """Download the ZIP file produced by a completed batch job (Pro/Enterprise only).
 
     If the result is stored in S3, returns a redirect to a presigned URL.
@@ -1664,7 +1729,8 @@ class SignupRequest(BaseModel):
 
 class CheckoutRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=254)
-    tier: str = Field(..., pattern="^(pro|enterprise)$")
+    tier: str = Field(..., pattern="^(starter|pro|business|enterprise)$")
+    billing_cycle: str = Field("monthly", pattern="^(monthly|annual)$")
     country: Optional[str] = Field(
         None,
         min_length=2, max_length=2,
@@ -1693,7 +1759,7 @@ async def signup_checkout(body: CheckoutRequest):
     For enterprise plans, pass *country* to pre-download SRTM elevation tiles.
     """
     try:
-        url = stripe_billing.create_checkout_session(body.email, body.tier, body.country)
+        url = stripe_billing.create_checkout_session(body.email, body.tier, body.country, body.billing_cycle)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except ValueError as exc:
@@ -1962,7 +2028,7 @@ class BedrockChatRequest(BaseModel):
 @app.post("/bedrock/chat")
 async def bedrock_chat(
     body: BedrockChatRequest,
-    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
 ):
     """
     Send a prompt to an Amazon Bedrock base foundation model and return
@@ -1986,7 +2052,7 @@ async def bedrock_chat(
 
 @app.get("/bedrock/models")
 async def bedrock_models(
-    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
 ):
     """List available Bedrock foundation models for the AI playground."""
     from bedrock_service import list_available_models
@@ -2009,7 +2075,7 @@ class BedrockScenarioRequest(BaseModel):
 @app.post("/bedrock/compare")
 async def bedrock_compare_scenarios(
     body: BedrockScenarioRequest,
-    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
 ):
     """
     Compare multiple RF scenarios using AI analysis.
@@ -2043,7 +2109,7 @@ class BedrockBatchAnalysisRequest(BaseModel):
 @app.post("/bedrock/batch-analyze")
 async def bedrock_batch_analyze(
     body: BedrockBatchAnalysisRequest,
-    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
 ):
     """
     Analyze a batch of link analysis results with AI.
@@ -2077,7 +2143,7 @@ class BedrockAntennaRequest(BaseModel):
 @app.post("/bedrock/suggest-height")
 async def bedrock_suggest_height(
     body: BedrockAntennaRequest,
-    _key: Dict = Depends(require_tier(Tier.PRO, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
 ):
     """
     AI-powered antenna height recommendation based on link analysis
