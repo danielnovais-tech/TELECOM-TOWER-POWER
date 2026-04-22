@@ -29,6 +29,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: sa-east-1
 
+      - name: Whitelist runner IP in EC2 SG
+        id: sg
+        run: |
+          RUNNER_IP=$(curl -s https://checkip.amazonaws.com)
+          echo "runner_ip=${RUNNER_IP}" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.EC2_SG_ID }} \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" || echo "Rule may already exist"
+
       - name: Push SSH key via EC2 Instance Connect
         run: |
           ssh-keygen -t rsa -b 2048 -f /tmp/ec2_key -N "" -q
@@ -48,7 +58,7 @@ jobs:
             -o StrictHostKeyChecking=no \
             -o ConnectTimeout=15 \
             ubuntu@${{ secrets.EC2_HOST }} \
-            'cd /home/ubuntu/TELECOM-TOWER-POWER && sudo caddy reload --config Caddyfile'
+            'sudo cp /home/ubuntu/TELECOM-TOWER-POWER/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy'
 
       - name: Verify health endpoints
         run: |
@@ -73,6 +83,14 @@ jobs:
           if [ "$STATUS" != "200" ]; then
             echo "::warning::Prometheus health check returned HTTP $STATUS"
           fi
+
+      - name: Revoke runner IP from EC2 SG
+        if: always() && steps.sg.outputs.runner_ip != ''
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.EC2_SG_ID }} \
+            --protocol tcp --port 22 \
+            --cidr "${{ steps.sg.outputs.runner_ip }}/32" || true
 
       - name: Cleanup
         if: always()
