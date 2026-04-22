@@ -1,0 +1,11 @@
+# Railway ignore — exclude build artifacts and SDK outputs not needed at runtime
+sdks/
+frontend/node_modules/
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+.git/
+srtm_data/
+job_results/
+docs-site/site/

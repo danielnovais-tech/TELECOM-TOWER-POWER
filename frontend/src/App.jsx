@@ -5,6 +5,8 @@ import Signup from "./Signup";
 import SignupSuccess from "./SignupSuccess";
 import BedrockPlayground from "./BedrockPlayground";
 import Portal from "./Portal";
+import Landing from "./Landing";
+import Pricing from "./Pricing";
 import { fetchTowers, fetchHealth, setApiKey, onRateLimitChange } from "./api";
 import "./App.css";
 
@@ -12,7 +14,12 @@ function getInitialPage() {
   const path = window.location.pathname;
   if (path === "/signup/success") return "signup-success";
   if (path === "/signup/cancel") return "signup-cancel";
-  return "map";
+  if (path === "/app" || path === "/map") return "map";
+  if (path === "/pricing") return "pricing";
+  if (path === "/signup") return "signup";
+  if (path === "/portal" || path === "/account") return "portal";
+  if (path === "/") return "landing";
+  return "landing";
 }
 
 function getSessionId() {
@@ -81,20 +88,50 @@ export default function App() {
 
   return (
     <div className="app-layout">
+      {page === "landing" ? (
+        <Landing
+          onSignup={(tierId, cycle) => {
+            window.history.pushState({}, "", "/signup");
+            setPage("signup");
+            if (tierId) window.sessionStorage.setItem("ttp_selected_tier", tierId);
+            if (cycle) window.sessionStorage.setItem("ttp_billing_cycle", cycle);
+          }}
+          onLogin={() => { window.history.pushState({}, "", "/portal"); setPage("portal"); }}
+        />
+      ) : page === "pricing" ? (
+        <div style={{ padding: "60px 24px", maxWidth: 1120, margin: "0 auto" }}>
+          <Pricing
+            lang={(navigator.language || "pt").toLowerCase().startsWith("pt") ? "pt" : "en"}
+            onSignup={(tierId, cycle) => {
+              window.history.pushState({}, "", "/signup");
+              setPage("signup");
+              if (tierId) window.sessionStorage.setItem("ttp_selected_tier", tierId);
+              if (cycle) window.sessionStorage.setItem("ttp_billing_cycle", cycle);
+            }}
+          />
+        </div>
+      ) : (
+      <>
       <header className="app-header">
         <h1>Telecom Tower Power</h1>
         <span className="subtitle">RF Link Analysis &amp; Repeater Planner</span>
         <nav className="header-nav">
-          <button className={page === "map" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("map"); }}>
+          <button onClick={() => { window.history.pushState({}, "", "/"); setPage("landing"); }}>
+            Home
+          </button>
+          <button className={page === "map" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/app"); setPage("map"); }}>
             Map
           </button>
-          <button className={page === "ai" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("ai"); }}>
+          <button className={page === "ai" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/app"); setPage("ai"); }}>
             AI Playground
           </button>
-          <button className={page === "signup" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("signup"); }}>
+          <button className={page === "pricing" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/pricing"); setPage("pricing"); }}>
+            Pricing
+          </button>
+          <button className={page === "signup" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/signup"); setPage("signup"); }}>
             Get API Key
           </button>
-          <button className={page === "portal" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setPage("portal"); }}>
+          <button className={page === "portal" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/portal"); setPage("portal"); }}>
             My Account
           </button>
         </nav>
@@ -153,6 +190,8 @@ export default function App() {
         <Portal />
       ) : (
         <Signup onKeyReceived={(key) => { setApiKey(key); setPage("map"); }} />
+      )}
+      </>
       )}
 
       {rateLimitToast && (
