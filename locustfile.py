@@ -18,7 +18,7 @@ Usage:
     locust -f locustfile.py --host http://localhost:8000
 
 Environment variables:
-    LOCUST_API_KEY   – API key to use (default: demo-key-pro-001)
+    LOCUST_API_KEY   – API key to use (default: demo_ttp_pro_2604)
     LOCUST_TOWER_ID  – Tower ID for analyze/batch (default: VIVO_001)
 """
 
@@ -31,7 +31,7 @@ import time
 
 from locust import HttpUser, between, tag, task
 
-API_KEY = os.getenv("LOCUST_API_KEY", "demo-key-pro-001")
+API_KEY = os.getenv("LOCUST_API_KEY", "demo_ttp_pro_2604")
 TOWER_ID = os.getenv("LOCUST_TOWER_ID", "VIVO_001")
 
 # Sample receiver coordinates around Brasília

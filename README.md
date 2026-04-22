@@ -201,13 +201,13 @@ All endpoints (except `GET /`, `GET /health`, `GET /metrics`, and signup routes)
 X-API-Key: <your-key>
 ```
 
-**Demo keys** (built-in):
+**Demo keys** (rate-limited to 10 rpm, no PDF, no AI; rotated monthly):
 
 | Key | Tier |
 |---|---|
-| `demo-key-free-001` | Free |
-| `demo-key-pro-001` | Pro |
-| `demo-key-enterprise-001` | Enterprise |
+| `demo_ttp_free_2604` | Free |
+| `demo_ttp_starter_2604` | Starter |
+| `demo_ttp_pro_2604` | Pro |
 
 ### Tier Limits
 
@@ -261,13 +261,13 @@ Tower creation is **rate-limited per API key** — an in-memory counter tracks t
 ```bash
 # Register a tower
 curl -X POST http://localhost:8000/towers \
-  -H "X-API-Key: demo-key-pro-001" \
+  -H "X-API-Key: demo_ttp_pro_2604" \
   -H "Content-Type: application/json" \
   -d '{"id":"T1","lat":-15.78,"lon":-47.93,"height_m":45,"operator":"Vivo","bands":["700MHz"],"power_dbm":46}'
 
 # Analyze link to a receiver
 curl -X POST "http://localhost:8000/analyze?tower_id=T1" \
-  -H "X-API-Key: demo-key-pro-001" \
+  -H "X-API-Key: demo_ttp_pro_2604" \
   -H "Content-Type: application/json" \
   -d '{"lat":-15.85,"lon":-47.81,"height_m":10,"antenna_gain_dbi":12}'
 ```
@@ -276,7 +276,7 @@ curl -X POST "http://localhost:8000/analyze?tower_id=T1" \
 
 ```bash
 curl -X POST "http://localhost:8000/batch_reports?tower_id=VIVO_001" \
-  -H "X-API-Key: demo-key-pro-001" \
+  -H "X-API-Key: demo_ttp_pro_2604" \
   -F "csv_file=@sample_receivers.csv" \
   -o reports.zip
 ```

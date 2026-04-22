@@ -53,9 +53,9 @@ if _demo_keys_env:
         DEMO_KEYS = {}
 else:
     DEMO_KEYS: Dict[str, str] = {
-        "free":       "demo-key-free-001",
-        "pro":        "demo-key-pro-001",
-        "enterprise": "demo-key-enterprise-001",
+        "free":       "demo_ttp_free_2604",
+        "starter":    "demo_ttp_starter_2604",
+        "pro":        "demo_ttp_pro_2604",
     }
 
 # Tier-specific batch row limits (from telecom_tower_power_api.py / env vars)

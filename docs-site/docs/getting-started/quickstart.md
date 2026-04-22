@@ -2,10 +2,10 @@
 
 ## 1. Obtenha uma chave de API
 
-Para testar agora mesmo use a chave pública de demo (6 req/min, sem PDF, sem IA):
+Para testar agora mesmo use uma chave pública de demo (10 req/min, sem PDF, sem IA):
 
 ```
-X-API-Key: demo_try_free_2026_04
+X-API-Key: demo_ttp_free_2604
 ```
 
 Para produção, [crie uma conta](https://app.telecomtowerpower.com.br/signup) e escolha um plano.
@@ -14,7 +14,7 @@ Para produção, [crie uma conta](https://app.telecomtowerpower.com.br/signup) e
 
 ```bash
 curl -X POST https://api.telecomtowerpower.com.br/analyze_link \
-  -H "X-API-Key: demo_try_free_2026_04" \
+  -H "X-API-Key: demo_ttp_free_2604" \
   -H "Content-Type: application/json" \
   -d '{
     "receiver": {"lat": -15.78, "lon": -47.93, "height": 10},

@@ -49,7 +49,7 @@ export default function Portal() {
   const apiKey =
     localStorage.getItem("api_key") ||
     import.meta.env.VITE_API_KEY ||
-    "demo-key-pro-001";
+    "demo_ttp_free_2604";
 
   const headers = {
     "X-API-Key": apiKey,

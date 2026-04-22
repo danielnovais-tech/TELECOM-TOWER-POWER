@@ -36,9 +36,9 @@ if _demo_keys_raw:
         DEMO_KEYS = {}
 else:
     DEMO_KEYS = {
-        "Free (demo-key-free-001)": "demo-key-free-001",
-        "Pro (demo-key-pro-001)": "demo-key-pro-001",
-        "Enterprise (demo-key-enterprise-001)": "demo-key-enterprise-001",
+        "Free (demo_ttp_free_2604)": "demo_ttp_free_2604",
+        "Starter (demo_ttp_starter_2604)": "demo_ttp_starter_2604",
+        "Pro (demo_ttp_pro_2604)": "demo_ttp_pro_2604",
     }
 
 PLAN_INFO = {

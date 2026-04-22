@@ -10,14 +10,20 @@ set -euo pipefail
 # Replace these with real values in production
 #
 # Tier requirements:
-#   Free tier:         VALID_API_KEYS (+ DATABASE_URL, REDIS_URL auto-provided)
+#   Free tier:         DEMO_KEYS (+ DATABASE_URL, REDIS_URL auto-provided)
 #   Pro/Enterprise:    All of the above + S3_*, STRIPE_*, AWS_*
 #
 # Note: DATABASE_URL and REDIS_URL are auto-injected by platform add-ons
 #       (Railway Postgres plugin, etc.) — do NOT set manually.
 
 # ── Required for ALL tiers ─────────────────────────────────────────
-VALID_API_KEYS='{"ttp_free_c35024654d83b243d3132064dfbde04b":"free","demo-key-free-001":"free"}'
+# ── Required for ALL tiers ───────────────────────────────
+# Production has NO VALID_API_KEYS env var — paying keys are minted at
+# Stripe checkout and persisted in key_store.json. For public demo access,
+# set DEMO_KEYS to a JSON map rotated monthly (see README).
+DEMO_KEYS='{"demo_ttp_free_2604":"free","demo_ttp_starter_2604":"starter","demo_ttp_pro_2604":"pro"}'
+DEMO_RATE_LIMIT="10"
+ENABLE_DEMO_KEYS="true"
 
 # ── Required for Pro/Enterprise only ───────────────────────────────
 STRIPE_SECRET_KEY="sk_live_REPLACE_ME"
@@ -62,7 +68,9 @@ set_railway_secrets() {
     echo "  (Make sure you have linked to the correct project: railway link)"
 
     railway variables set \
-        VALID_API_KEYS="$VALID_API_KEYS" \
+        DEMO_KEYS="$DEMO_KEYS" \
+        DEMO_RATE_LIMIT="$DEMO_RATE_LIMIT" \
+        ENABLE_DEMO_KEYS="$ENABLE_DEMO_KEYS" \
         STRIPE_SECRET_KEY="$STRIPE_SECRET_KEY" \
         STRIPE_WEBHOOK_SECRET="$STRIPE_WEBHOOK_SECRET" \
         STRIPE_PRICE_PRO="$STRIPE_PRICE_PRO" \
@@ -104,7 +112,9 @@ set_aws_secrets() {
     # Note: DATABASE_URL and REDIS_URL are NOT stored here — they are
     # auto-provided by managed services (RDS, ElastiCache, etc.)
     declare -A secrets=(
-        ["VALID_API_KEYS"]="$VALID_API_KEYS"
+        ["DEMO_KEYS"]="$DEMO_KEYS"
+        ["DEMO_RATE_LIMIT"]="$DEMO_RATE_LIMIT"
+        ["ENABLE_DEMO_KEYS"]="$ENABLE_DEMO_KEYS"
         ["STRIPE_SECRET_KEY"]="$STRIPE_SECRET_KEY"
         ["STRIPE_WEBHOOK_SECRET"]="$STRIPE_WEBHOOK_SECRET"
         ["STRIPE_PRICE_PRO"]="$STRIPE_PRICE_PRO"

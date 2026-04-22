@@ -16,7 +16,7 @@ We return the answer in milliseconds by querying 140,906 geolocated towers (ANAT
 
 ```bash
 curl -X POST https://api.telecomtowerpower.com.br/analyze_link \
-  -H "X-API-Key: demo_try_free_2026_04" \
+  -H "X-API-Key: demo_ttp_free_2604" \
   -H "Content-Type: application/json" \
   -d '{
     "receiver": {"lat": -20.5, "lon": -41.9, "height": 5},

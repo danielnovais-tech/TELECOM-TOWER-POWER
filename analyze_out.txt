@@ -1,0 +1,2 @@
+{"feasible":false,"signal_dbm":-40.879535714603925,"fresnel_clearance":0.39025907116416847,"los_ok":false,"distance_km":9.365010772950097,"recommendation":"Insufficient Fresnel clearance (0.39). Increase receiver height to > 45m or move tower.","terrain_profile":[795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0,795.0],"tx_height_asl":830.0,"rx_height_asl":800.0}
+---HTTP 200 0.329452s

@@ -1,0 +1,39 @@
+{
+    "LoadBalancers": [
+        {
+            "LoadBalancerArn": "arn:aws:elasticloadbalancing:sa-east-1:490083271496:loadbalancer/app/telecom-tower-power-alb/f61f282ff7c0570b",
+            "DNSName": "telecom-tower-power-alb-581610578.sa-east-1.elb.amazonaws.com",
+            "CanonicalHostedZoneId": "Z2P70J7HTTTPLU",
+            "CreatedTime": "2026-04-13T17:33:17.023000+00:00",
+            "LoadBalancerName": "telecom-tower-power-alb",
+            "Scheme": "internet-facing",
+            "VpcId": "vpc-0d9c61593e8e287ad",
+            "State": {
+                "Code": "active"
+            },
+            "Type": "application",
+            "AvailabilityZones": [
+                {
+                    "ZoneName": "sa-east-1a",
+                    "SubnetId": "subnet-01d2842549ded7c71",
+                    "LoadBalancerAddresses": []
+                },
+                {
+                    "ZoneName": "sa-east-1b",
+                    "SubnetId": "subnet-0455f02ba70359087",
+                    "LoadBalancerAddresses": []
+                },
+                {
+                    "ZoneName": "sa-east-1c",
+                    "SubnetId": "subnet-07402e9d4181c6a78",
+                    "LoadBalancerAddresses": []
+                }
+            ],
+            "SecurityGroups": [
+                "sg-0da11306830260631"
+            ],
+            "IpAddressType": "ipv4",
+            "EnablePrefixForIpv6SourceNat": "off"
+        }
+    ]
+}

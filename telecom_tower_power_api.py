@@ -791,8 +791,9 @@ TIER_LIMITS = {
 # the DEMO_KEYS env var and ship a distinct prefix (`demo_`) so they can be
 # safely revoked without touching real customer keys.
 _DEFAULT_DEMO_KEYS = {
-    "demo_try_free_2026_04": Tier.FREE,
-    "demo_try_pro_2026_04": Tier.PRO,
+    "demo_ttp_free_2604": Tier.FREE,
+    "demo_ttp_starter_2604": Tier.STARTER,
+    "demo_ttp_pro_2604": Tier.PRO,
 }
 _raw_demo = os.getenv("DEMO_KEYS")
 if _raw_demo:

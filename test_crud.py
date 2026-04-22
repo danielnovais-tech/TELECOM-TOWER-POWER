@@ -4,7 +4,7 @@ import requests
 import sys
 
 BASE = os.getenv("TEST_API_BASE", "http://localhost:8001")
-H = {"X-API-Key": os.getenv("TEST_API_KEY", "demo-key-pro-001"), "Content-Type": "application/json"}
+H = {"X-API-Key": os.getenv("TEST_API_KEY", "demo_ttp_pro_2604"), "Content-Type": "application/json"}
 ok = True
 
 def check(label, condition):
