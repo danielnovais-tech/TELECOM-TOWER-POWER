@@ -142,6 +142,12 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,pathlib; assert any('batch_worker.py' in pathlib.Path(f'/proc/{p}/cmdline').read_bytes().decode('utf-8','ignore') for p in os.listdir('/proc') if p.isdigit())\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   # ── Stripe Webhook Service (isolated) ──────────────────────
@@ -153,7 +159,7 @@ services:
     environment:
       - WEBHOOK_PORT=8001
       - KEY_STORE_PATH=/app/key_store.json
-      - SES_SMTP_HOST=${SES_SMTP_HOST:-email-smtp.sa-east-1.amazonaws.com}
+      - SES_SMTP_HOST=${SES_SMTP_HOST:-email-smtp.us-east-1.amazonaws.com}
       - SES_SMTP_PORT=${SES_SMTP_PORT:-587}
       - SES_FROM_ADDRESS=${SES_FROM_ADDRESS:-no-reply@telecomtowerpower.com.br}
     secrets:
@@ -196,6 +202,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,pathlib; assert any('worker.py' in pathlib.Path(f'/proc/{p}/cmdline').read_bytes().decode('utf-8','ignore') for p in os.listdir('/proc') if p.isdigit())\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   # ── Streamlit Frontend (hybrid) ──────────────────────────────
@@ -209,6 +221,12 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
 
   # ── Streamlit Frontend (API-client mode) ────────────────────
@@ -267,7 +285,7 @@ services:
     ports:
       - "9093:9093"
     environment:
-      - SMTP_HOST=${SMTP_HOST:-email-smtp.sa-east-1.amazonaws.com:587}
+      - SMTP_HOST=${SMTP_HOST:-email-smtp.us-east-1.amazonaws.com:587}
       - SMTP_FROM=${SMTP_FROM:-alerts@telecomtowerpower.com.br}
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-daniel.novais@sempreceub.com}
     secrets:
@@ -288,7 +306,7 @@ services:
       - GF_UNIFIED_ALERTING_ENABLED=true
       - GF_ALERTING_ENABLED=false
       - GF_SMTP_ENABLED=true
-      - GF_SMTP_HOST=${SMTP_HOST:-email-smtp.sa-east-1.amazonaws.com:587}
+      - GF_SMTP_HOST=${SMTP_HOST:-email-smtp.us-east-1.amazonaws.com:587}
       - GF_SMTP_USER__FILE=/run/secrets/ses_smtp_username
       - GF_SMTP_PASSWORD__FILE=/run/secrets/ses_smtp_password
       - GF_SMTP_FROM_ADDRESS=${SMTP_FROM:-alerts@telecomtowerpower.com.br}
