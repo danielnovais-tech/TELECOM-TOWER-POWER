@@ -4,8 +4,8 @@
 # not *__FILE pointers — so we export them here before starting.
 set -e
 
-if [ -f /run/secrets/slack_webhook_url ]; then
-  SLACK_WEBHOOK_URL="$(cat /run/secrets/slack_webhook_url)"
+if [ -r /run/secrets/slack_webhook_url ]; then
+  SLACK_WEBHOOK_URL="$(cat /run/secrets/slack_webhook_url 2>/dev/null || true)"
   export SLACK_WEBHOOK_URL
 fi
 
