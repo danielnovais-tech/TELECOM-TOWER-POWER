@@ -46,7 +46,7 @@ services:
 
   # ── Redis (for RQ job queue + SRTM elevation cache) ───────────
   redis:
-    image: redis:7-alpine
+    image: redis:8.2.5-alpine
     ports:
       - "6379:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru

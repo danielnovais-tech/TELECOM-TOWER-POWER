@@ -7,7 +7,7 @@ COPY frontend/ .
 RUN npx vite build
 
 # ── Stage 2: Python application ────────────────────────────
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 # Prevent Python from buffering stdout/stderr (important for container logs)
 ENV PYTHONDONTWRITEBYTECODE=1 \

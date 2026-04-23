@@ -6,7 +6,7 @@ RUN npm ci --ignore-scripts 2>/dev/null || npm install
 COPY . .
 RUN npx vite build
 
-FROM nginx:alpine
+FROM nginx:1.30.0-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/nginx.conf.template
 COPY docker-entrypoint.sh /docker-entrypoint.sh

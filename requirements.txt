@@ -11,7 +11,7 @@ streamlit==1.56.0
 requests==2.33.1
 folium==0.20.0
 streamlit-folium==0.27.1
-pandas==2.2.3
+pandas==3.0.2
 stripe
 prometheus-client
 prometheus-fastapi-instrumentator
