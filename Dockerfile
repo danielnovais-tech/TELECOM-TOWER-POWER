@@ -19,12 +19,11 @@ RUN groupadd --gid 1000 appuser && \
 
 WORKDIR /app
 
-# Install dependencies first (layer caching).
-# BuildKit cache mount keeps wheels between builds so requirements.txt
-# changes don't force a full re-download (~150MB+ of wheels).
+# Install dependencies first (layer caching via Docker's normal layer cache).
+# Note: BuildKit --mount=type=cache is avoided because Railpack rejects it
+# without its internal cacheKey prefix on the id.
 COPY requirements.txt .
-RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY telecom_tower_power_db.py .
