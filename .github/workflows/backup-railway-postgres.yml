@@ -9,6 +9,9 @@ concurrency:
   group: railway-backup
   cancel-in-progress: false
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   backup:
     runs-on: ubuntu-latest

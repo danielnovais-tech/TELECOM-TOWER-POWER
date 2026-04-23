@@ -42,7 +42,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       id-token: write
       contents: read
@@ -106,12 +106,13 @@ jobs:
           docker pull node:22-alpine     2>/dev/null || true
 
           echo "==> Rebuilding Docker images..."
-          # api is built --no-cache so requirements.txt changes always land.
-          # The other Python services share the same build context (build: .)
-          # but compose generates a separate image per service, so each must
-          # be rebuilt explicitly or they will drift (e.g. frontend stuck on
-          # an older pandas). Build with cache so shared layers are reused.
-          docker compose build --no-cache api
+          # Use BuildKit layer cache: the COPY requirements.txt layer key
+          # changes only when the file content changes, so pip install is
+          # only re-run when needed. Avoid --no-cache to keep deploys fast
+          # on small instances and prevent CI timeouts during heavy installs.
+          # Disable Bake (buildx not installed on EC2) to silence the warning.
+          export COMPOSE_BAKE=false DOCKER_BUILDKIT=1
+          docker compose build api
           docker compose build frontend worker rq-worker stripe-webhook 2>/dev/null || true
           docker compose build frontend-react 2>/dev/null || true
 

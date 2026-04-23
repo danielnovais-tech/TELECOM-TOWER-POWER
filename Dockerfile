@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # ── Stage 1: Build React frontend ──────────────────────────
 FROM node:22-alpine AS frontend-build
 WORKDIR /app
@@ -18,9 +19,12 @@ RUN groupadd --gid 1000 appuser && \
 
 WORKDIR /app
 
-# Install dependencies first (layer caching)
+# Install dependencies first (layer caching).
+# BuildKit cache mount keeps wheels between builds so requirements.txt
+# changes don't force a full re-download (~150MB+ of wheels).
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 # Copy application code
 COPY telecom_tower_power_db.py .
