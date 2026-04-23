@@ -1,4 +1,4 @@
-FROM grafana/grafana:latest
+FROM grafana/grafana:12.0.2
 
 # Provisioning: datasources, dashboards, alerting contact points
 COPY provisioning/ /etc/grafana/provisioning/
