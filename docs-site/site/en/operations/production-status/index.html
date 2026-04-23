@@ -965,6 +965,12 @@
 <h2 id="infrastructure">Infrastructure<a class="headerlink" href="#infrastructure" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>EC2 + Docker Compose</strong> stable on instance <code>i-045166a6a1933f507</code> (<code>sa-east-1</code>, user <code>ubuntu</code>, path <code>/home/ubuntu/TELECOM-TOWER-POWER</code>).</li>
+<li><strong>Instance type</strong>: <code>t3.small</code> (2 vCPU, 2 GB RAM, 20 GB gp3).<ul>
+<li>Live load average: <code>0.13 / 0.14 / 0.15</code> on 2 cores — CPU well under capacity.</li>
+<li>Memory: <code>1.9 GB total</code>, <code>~800 MB available</code> with <code>~200 MB swap in use</code> — stable but tight.</li>
+<li>Disk: <code>15 GB / 19 GB used (82 %)</code> — monitored by the <code>disk-space-low</code> alert.</li>
+</ul>
+</li>
 <li><strong>Caddy</strong> listens on <code>:80</code> behind the ALB (which terminates TLS). Routing rules:<ul>
 <li><code>api.telecomtowerpower.com.br</code> → Railway (<code>https://web-production-90b1f.up.railway.app</code>) with <code>Host</code> header override.</li>
 <li><code>www.*</code> / <code>app.*</code> API paths (<code>/api/*</code>, <code>/health*</code>, <code>/calculate*</code>, <code>/towers*</code>, <code>/batch*</code>, <code>/jobs*</code>, <code>/docs*</code>, <code>/openapi.json</code>, <code>/stripe*</code>, <code>/usage*</code>, <code>/api-key*</code>, <code>/signup*</code>, <code>/login*</code>, <code>/profile*</code>, <code>/portal*</code>, <code>/analyze*</code>, <code>/plan_repeater*</code>, <code>/export_report*</code>, <code>/bedrock*</code>, <code>/srtm*</code>) → Railway.</li>
@@ -1024,11 +1030,57 @@
 <li><code>severity=warning</code> → Slack + Email, <code>group_wait: 30s</code>, <code>repeat_interval: 2h</code></li>
 </ul>
 </li>
-<li><strong>Alert rules (active)</strong><ul>
-<li><code>high-5xx-rate</code>: <code>sum(rate(http_requests_total{status=~"5.."}[1m])) * 60 &gt; 10</code></li>
+<li><strong>Alert rules</strong></li>
 </ul>
-</li>
-</ul>
+<table>
+<thead>
+<tr>
+<th>UID</th>
+<th>Severity</th>
+<th>Trigger</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>high-5xx-rate</code></td>
+<td>critical</td>
+<td><code>&gt;10</code> server errors/min for 2 min</td>
+</tr>
+<tr>
+<td><code>HighRateLimitHits</code></td>
+<td>warning</td>
+<td><code>&gt;5</code> 429/min for 2 min</td>
+</tr>
+<tr>
+<td><code>HighAPILatencyP95</code></td>
+<td>warning</td>
+<td>p95 latency <code>&gt;1.5 s</code> for 5 min</td>
+</tr>
+<tr>
+<td><code>BatchQueueStuck</code></td>
+<td>critical</td>
+<td>pending jobs with zero throughput for 10 min</td>
+</tr>
+<tr>
+<td><code>batch-job-failures</code></td>
+<td>critical</td>
+<td><code>&gt;1</code> batch job failure in 5 min</td>
+</tr>
+<tr>
+<td><code>LowDiskSpace</code></td>
+<td>warning</td>
+<td>root disk <code>&gt;85 %</code> for 5 min</td>
+</tr>
+<tr>
+<td><code>memory-pressure</code></td>
+<td>warning</td>
+<td>swap <code>&gt;512 MB</code> for 10 min</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Host metrics are exposed via a <code>node-exporter</code> container (<code>network_mode: host</code>) reachable from Prometheus at <code>host.docker.internal:9100</code>.</p>
+</blockquote>
 <h2 id="secrets">Secrets<a class="headerlink" href="#secrets" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Never committed to git (<code>.gitignore</code> covers <code>secrets/</code>).</li>
@@ -1036,7 +1088,6 @@
 <li>Synced to EC2 at <code>/home/ubuntu/TELECOM-TOWER-POWER/secrets/</code> via GitHub Actions.</li>
 <li>Consumed by Docker Compose via the top-level <code>secrets:</code> mapping and mounted read-only at <code>/run/secrets/&lt;name&gt;</code>.</li>
 </ul>
-<p>Current files on EC2:</p>
 <table>
 <thead>
 <tr>
@@ -1049,17 +1100,17 @@
 <tr>
 <td><code>slack_webhook_url</code></td>
 <td>81 B</td>
-<td>Grafana Alertmanager</td>
+<td>Grafana / Alertmanager</td>
 </tr>
 <tr>
 <td><code>ses_smtp_username</code></td>
 <td>20 B</td>
-<td>Grafana Alertmanager (SMTP)</td>
+<td>Grafana / Alertmanager (SMTP)</td>
 </tr>
 <tr>
 <td><code>ses_smtp_password</code></td>
 <td>44 B</td>
-<td>Grafana Alertmanager (SMTP)</td>
+<td>Grafana / Alertmanager (SMTP)</td>
 </tr>
 <tr>
 <td><code>stripe_secret_key</code></td>
@@ -1077,7 +1128,7 @@
 <ul>
 <li><strong>Zero-downtime</strong> — <code>aws ssm send-command</code> triggers <code>docker compose pull &amp;&amp; docker compose up -d</code> on the EC2 host. Compose performs rolling replacement per service.</li>
 <li><strong>No SSH keys in CI</strong> — all remote execution goes through SSM.</li>
-<li><strong>Railway/Railpack compatibility preserved</strong> — <code>railway.json</code>, <code>Procfile</code>, and <code>Dockerfile</code> remain valid; API image can be redeployed to Railway without changes.</li>
+<li><strong>Railway / Railpack compatibility preserved</strong> — <code>railway.json</code>, <code>Procfile</code>, and <code>Dockerfile</code> remain valid; the API image can be redeployed to Railway without changes.</li>
 </ul>
 
 

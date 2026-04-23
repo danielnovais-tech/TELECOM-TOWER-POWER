@@ -965,6 +965,12 @@
 <h2 id="infrastructure">Infrastructure<a class="headerlink" href="#infrastructure" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>EC2 + Docker Compose</strong> stable on instance <code>i-045166a6a1933f507</code> (<code>sa-east-1</code>, user <code>ubuntu</code>, path <code>/home/ubuntu/TELECOM-TOWER-POWER</code>).</li>
+<li><strong>Instance type</strong>: <code>t3.small</code> (2 vCPU, 2 GB RAM, 20 GB gp3).<ul>
+<li>Load average live: <code>0,13 / 0,14 / 0,15</code> em 2 cores — CPU folgada.</li>
+<li>Memória: <code>1,9 GB total</code>, <code>~800 MB disponíveis</code>, <code>~200 MB swap em uso</code> — estável, porém justo.</li>
+<li>Disco: <code>15 GB / 19 GB em uso (82 %)</code> — monitorado pelo alerta <code>disk-space-low</code>.</li>
+</ul>
+</li>
 <li><strong>Caddy</strong> listens on <code>:80</code> behind the ALB (which terminates TLS). Routing rules:<ul>
 <li><code>api.telecomtowerpower.com.br</code> → Railway (<code>https://web-production-90b1f.up.railway.app</code>) with <code>Host</code> header override.</li>
 <li><code>www.*</code> / <code>app.*</code> API paths (<code>/api/*</code>, <code>/health*</code>, <code>/calculate*</code>, <code>/towers*</code>, <code>/batch*</code>, <code>/jobs*</code>, <code>/docs*</code>, <code>/openapi.json</code>, <code>/stripe*</code>, <code>/usage*</code>, <code>/api-key*</code>, <code>/signup*</code>, <code>/login*</code>, <code>/profile*</code>, <code>/portal*</code>, <code>/analyze*</code>, <code>/plan_repeater*</code>, <code>/export_report*</code>, <code>/bedrock*</code>, <code>/srtm*</code>) → Railway.</li>
@@ -1025,10 +1031,19 @@
 </ul>
 </li>
 <li><strong>Alert rules (active)</strong><ul>
-<li><code>high-5xx-rate</code>: <code>sum(rate(http_requests_total{status=~"5.."}[1m])) * 60 &gt; 10</code></li>
+<li><code>high-5xx-rate</code> (critical) — <code>&gt;10</code> erros 5xx/min por 2 min</li>
+<li><code>HighRateLimitHits</code> (warning) — <code>&gt;5</code> 429/min por 2 min</li>
+<li><code>HighAPILatencyP95</code> (warning) — p95 <code>&gt;1,5 s</code> por 5 min</li>
+<li><code>BatchQueueStuck</code> (critical) — fila com jobs pendentes e throughput zero por 10 min</li>
+<li><code>batch-job-failures</code> (critical) — <code>&gt;1</code> falha em 5 min</li>
+<li><code>LowDiskSpace</code> (warning) — root fs <code>&gt;85 %</code> por 5 min</li>
+<li><code>memory-pressure</code> (warning) — swap <code>&gt;512 MB</code> por 10 min</li>
 </ul>
 </li>
 </ul>
+<blockquote>
+<p>Métricas de host são expostas por um container <code>node-exporter</code> (<code>network_mode: host</code>) acessível pelo Prometheus em <code>host.docker.internal:9100</code>.</p>
+</blockquote>
 <h2 id="secrets">Secrets<a class="headerlink" href="#secrets" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Never committed to git (<code>.gitignore</code> covers <code>secrets/</code>).</li>

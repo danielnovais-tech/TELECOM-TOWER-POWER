@@ -274,9 +274,24 @@ services:
       - "9090:9090"
     volumes:
       - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       api:
         condition: service_healthy
+    restart: unless-stopped
+
+  # ── Node Exporter (host metrics for infra alerts) ───────────
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: telecom-tower-power-node-exporter-1
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|var/lib/docker/.+)($$|/)'
+    volumes:
+      - /:/host:ro,rslave
+    pid: host
+    network_mode: host
     restart: unless-stopped
 
   # ── Prometheus Alertmanager ─────────────────────────────────
