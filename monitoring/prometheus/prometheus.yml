@@ -1,0 +1,41 @@
+# Prometheus config for Railway deployment.
+# Uses Railway private networking (*.railway.internal) to scrape sibling
+# services in the SAME Railway project (astonishing-harmony / production).
+#
+# Internal DNS format: <service-name-lowercased>.railway.internal
+# Port = whatever the target service binds to (must be the container port,
+# NOT the public Railway port).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+# Grafana handles alert delivery (contact points + policies provisioned
+# in the grafana service). Prometheus alert_rules.yml is kept for
+# evaluation only; no external Alertmanager is required.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+scrape_configs:
+  - job_name: "telecom-tower-power-api"
+    static_configs:
+      - targets: ["web.railway.internal:8000"]
+    metrics_path: /metrics
+
+  - job_name: "worker"
+    static_configs:
+      - targets: ["worker.railway.internal:8080"]
+    metrics_path: /metrics
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis-metrics-collector.railway.internal:9121"]
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
