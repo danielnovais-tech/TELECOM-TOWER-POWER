@@ -11,6 +11,18 @@ Tower database management, point-to-point link analysis, terrain-aware multi-hop
 
 ---
 
+## Production Status
+
+- **Infrastructure** — EC2 + Docker Compose stable; Caddy on `:80` (ALB terminates TLS) routes frontend + API; Stripe webhook (`:8001`) and Grafana (`:3001`) respond correctly.
+- **CI/CD** — Three hardened GitHub workflows (`deploy-ec2-docker.yml`, `update-ec2-stripe-secrets.yml`, `update-ec2-alerting-secrets.yml`) with BuildKit cache mount and `concurrency:` control. All **11** workflows under [.github/workflows](.github/workflows) migrated to Node 24.
+- **Observability** — Grafana provisioned (email + Slack contact points, fan‑out notification policies, `continue: true` on critical); `high-5xx-rate` alert active (`sum(rate(http_requests_total{status=~"5.."}[1m])) * 60 > 10`).
+- **Secrets** — Never committed; synced via GitHub Actions → SSM → `/home/ubuntu/TELECOM-TOWER-POWER/secrets/`. See [secrets/README.md](secrets/README.md).
+- **Deployment** — Zero‑downtime via SSM `send-command` + `docker compose up -d`; Railway/Railpack compatibility preserved (`railway.json`, `Procfile`, `Dockerfile`).
+
+See [docs-site/docs/operations/production-status.md](docs-site/docs/operations/production-status.md) and [docs-site/docs/operations/runbook.md](docs-site/docs/operations/runbook.md).
+
+---
+
 ## Architecture
 
 ```

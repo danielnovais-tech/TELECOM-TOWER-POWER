@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/api/overview/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/api/overview/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/api/overview/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/getting-started/authentication/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/authentication/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/authentication/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/getting-started/quickstart/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/quickstart/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/quickstart/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/getting-started/rate-limits/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/rate-limits/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/rate-limits/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/operations/production-status/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/production-status/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/production-status/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/operations/runbook/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/runbook/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/runbook/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/en/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/"/>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/en/api/overview/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/api/overview/"/>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/api/overview/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/en/getting-started/authentication/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/authentication/"/>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/authentication/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/en/getting-started/quickstart/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/quickstart/"/>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/quickstart/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/en/getting-started/rate-limits/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/rate-limits/"/>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/rate-limits/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/en/operations/production-status/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/production-status/"/>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/production-status/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/en/operations/runbook/</loc>
+        <lastmod>2026-04-23</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/runbook/"/>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/runbook/"/>
+    </url>
+</urlset>

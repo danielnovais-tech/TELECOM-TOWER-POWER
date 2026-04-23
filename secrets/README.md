@@ -44,3 +44,14 @@ cd .. && docker compose up -d
 | `slack_webhook_url`     | `SLACK_WEBHOOK_URL`        |
 
 > **Security**: All files are git-ignored. Never commit secret values.
+
+## Production sync (EC2)
+
+In production, secrets are sourced from **AWS SSM Parameter Store** (SecureString) and synced to this directory by GitHub Actions workflows:
+
+| Workflow | Secrets synced |
+|---|---|
+| `update-ec2-stripe-secrets.yml` | `stripe_secret_key`, `stripe_webhook_secret` |
+| `update-ec2-alerting-secrets.yml` | `slack_webhook_url`, `ses_smtp_username`, `ses_smtp_password` |
+
+Remote execution uses `aws ssm send-command` (no SSH keys in CI). Containers consuming changed secrets are restarted automatically. See [docs-site/docs/operations/runbook.md](../docs-site/docs/operations/runbook.md).
