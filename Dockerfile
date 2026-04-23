@@ -23,7 +23,7 @@ WORKDIR /app
 # BuildKit cache mount keeps wheels between builds so requirements.txt
 # changes don't force a full re-download (~150MB+ of wheels).
 COPY requirements.txt .
-RUN --mount=type=cache,id=pip:cache,target=/root/.cache/pip \
+RUN --mount=type=cache,id=pip:cache,target=/root/.cache/pip
     pip install -r requirements.txt
 
 # Copy application code
