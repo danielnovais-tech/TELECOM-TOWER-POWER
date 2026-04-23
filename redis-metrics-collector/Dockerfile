@@ -1,4 +1,4 @@
-FROM oliver006/redis_exporter:latest
+FROM oliver006/redis_exporter:v1.82.0
 ENV REDIS_EXPORTER_WEB_LISTEN_ADDRESS=:${PORT:-9121}
 EXPOSE ${PORT:-9121}
 ENTRYPOINT ["/redis_exporter"]

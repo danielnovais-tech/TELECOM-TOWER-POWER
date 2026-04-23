@@ -1,4 +1,4 @@
-FROM prom/alertmanager:latest
+FROM prom/alertmanager:v0.32.0
 
 COPY alertmanager.yml.tpl /etc/alertmanager/alertmanager.yml.tpl
 COPY --chmod=0755 entrypoint.sh /entrypoint.sh
