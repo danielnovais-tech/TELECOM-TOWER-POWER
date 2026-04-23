@@ -12,9 +12,7 @@ groups:
         condition: C
         data:
           - refId: A
-            relativeTimeRange:
-              from: 300
-              to: 0
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: prometheus
             model:
               expr: sum(rate(http_requests_total{status=~"5.."}[1m])) * 60
@@ -23,43 +21,27 @@ groups:
               maxDataPoints: 43200
               refId: A
           - refId: B
-            relativeTimeRange:
-              from: 300
-              to: 0
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: __expr__
             model:
               conditions:
-                - evaluator:
-                    params: [0]
-                    type: gt
-                  operator:
-                    type: and
-                  query:
-                    params: [B]
-                  reducer:
-                    params: []
-                    type: last
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [B] }
+                  reducer: { params: [], type: last }
               expression: A
               reducer: last
               refId: B
               type: reduce
           - refId: C
-            relativeTimeRange:
-              from: 300
-              to: 0
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: __expr__
             model:
               conditions:
-                - evaluator:
-                    params: [10]
-                    type: gt
-                  operator:
-                    type: and
-                  query:
-                    params: [C]
-                  reducer:
-                    params: []
-                    type: last
+                - evaluator: { params: [10], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
               expression: B
               refId: C
               type: threshold
@@ -72,15 +54,13 @@ groups:
         noDataState: OK
         execErrState: Error
 
-      # ── High 429 Rate (Rate-Limit Exceeded) ─────────────────
-      - uid: high-429-rate
-        title: High 429 Rate
+      # ── HighRateLimitHits ────────────────────────────────────
+      - uid: HighRateLimitHits
+        title: HighRateLimitHits
         condition: C
         data:
           - refId: A
-            relativeTimeRange:
-              from: 300
-              to: 0
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: prometheus
             model:
               expr: sum(rate(rate_limit_hits_total[1m])) * 60
@@ -89,43 +69,27 @@ groups:
               maxDataPoints: 43200
               refId: A
           - refId: B
-            relativeTimeRange:
-              from: 300
-              to: 0
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: __expr__
             model:
               conditions:
-                - evaluator:
-                    params: [0]
-                    type: gt
-                  operator:
-                    type: and
-                  query:
-                    params: [B]
-                  reducer:
-                    params: []
-                    type: last
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [B] }
+                  reducer: { params: [], type: last }
               expression: A
               reducer: last
               refId: B
               type: reduce
           - refId: C
-            relativeTimeRange:
-              from: 300
-              to: 0
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: __expr__
             model:
               conditions:
-                - evaluator:
-                    params: [5]
-                    type: gt
-                  operator:
-                    type: and
-                  query:
-                    params: [C]
-                  reducer:
-                    params: []
-                    type: last
+                - evaluator: { params: [5], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
               expression: B
               refId: C
               type: threshold
@@ -134,64 +98,46 @@ groups:
           severity: warning
         annotations:
           summary: "High rate-limit hit rate (>5/min)"
-          description: "Clients are being rate-limited more than 5 times per minute."
+          description: "Clients are being rate-limited more than 5 times per minute — a tier may need upgrading or an abuse pattern is emerging."
         noDataState: OK
         execErrState: Error
 
-      # ── High Latency (p99 > 2s) ─────────────────────────────
-      - uid: high-latency-p99
-        title: High p99 Latency
+      # ── HighAPILatencyP95 ────────────────────────────────────
+      - uid: HighAPILatencyP95
+        title: HighAPILatencyP95
         condition: C
         data:
           - refId: A
-            relativeTimeRange:
-              from: 600
-              to: 0
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: prometheus
             model:
-              expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+              expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
               instant: false
               intervalMs: 1000
               maxDataPoints: 43200
               refId: A
           - refId: B
-            relativeTimeRange:
-              from: 600
-              to: 0
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               conditions:
-                - evaluator:
-                    params: [0]
-                    type: gt
-                  operator:
-                    type: and
-                  query:
-                    params: [B]
-                  reducer:
-                    params: []
-                    type: last
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [B] }
+                  reducer: { params: [], type: last }
               expression: A
               reducer: last
               refId: B
               type: reduce
           - refId: C
-            relativeTimeRange:
-              from: 600
-              to: 0
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               conditions:
-                - evaluator:
-                    params: [2]
-                    type: gt
-                  operator:
-                    type: and
-                  query:
-                    params: [C]
-                  reducer:
-                    params: []
-                    type: last
+                - evaluator: { params: [1.5], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
               expression: B
               refId: C
               type: threshold
@@ -199,8 +145,86 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "High p99 latency (>2s)"
-          description: "The 99th-percentile request latency has exceeded 2 seconds for 5 minutes."
+          summary: "API p95 latency > 1.5s"
+          description: "The 95th-percentile HTTP request latency has exceeded 1.5 s for 5 minutes. Investigate upstream (DB, SRTM, Railway) and recent deploys."
+        noDataState: OK
+        execErrState: Error
+
+      # ── BatchQueueStuck ──────────────────────────────────────
+      # Fires when the batch queue has pending jobs that are not draining:
+      # queued/running counters stay > 0 with zero throughput for 10 min.
+      - uid: BatchQueueStuck
+        title: BatchQueueStuck
+        condition: C
+        data:
+          # Pending + running jobs right now
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: sum(batch_jobs_pending) + sum(batch_jobs_running)
+              instant: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          # Jobs completed in last 10 min
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: sum(increase(batch_jobs_completed_total[10m]))
+              instant: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: B
+          # Reduce A (depth) and B (throughput) to scalars
+          - refId: R_A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [R_A] }
+                  reducer: { params: [], type: last }
+              expression: A
+              reducer: last
+              refId: R_A
+              type: reduce
+          - refId: R_B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [R_B] }
+                  reducer: { params: [], type: last }
+              expression: B
+              reducer: last
+              refId: R_B
+              type: reduce
+          # Stuck = depth > 0 AND throughput == 0
+          # Condition: R_A > 0 AND R_B <= 0 -> we express this as
+          # (R_A > 0) * (1 - sign(R_B)) using a single math expression.
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              expression: "($R_A > 0) && ($R_B <= 0)"
+              refId: C
+              type: math
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Batch queue is stuck (pending jobs, zero throughput)"
+          description: "The batch queue has pending/running jobs but has completed none in the last 10 minutes. Check worker health, DB connectivity, and SQS dead-letter queue."
         noDataState: OK
         execErrState: Error
 
@@ -210,9 +234,7 @@ groups:
         condition: C
         data:
           - refId: A
-            relativeTimeRange:
-              from: 600
-              to: 0
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: prometheus
             model:
               expr: sum(increase(batch_jobs_failed_total[5m]))
@@ -221,43 +243,27 @@ groups:
               maxDataPoints: 43200
               refId: A
           - refId: B
-            relativeTimeRange:
-              from: 600
-              to: 0
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               conditions:
-                - evaluator:
-                    params: [0]
-                    type: gt
-                  operator:
-                    type: and
-                  query:
-                    params: [B]
-                  reducer:
-                    params: []
-                    type: last
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [B] }
+                  reducer: { params: [], type: last }
               expression: A
               reducer: last
               refId: B
               type: reduce
           - refId: C
-            relativeTimeRange:
-              from: 600
-              to: 0
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: __expr__
             model:
               conditions:
-                - evaluator:
-                    params: [1]
-                    type: gt
-                  operator:
-                    type: and
-                  query:
-                    params: [C]
-                  reducer:
-                    params: []
-                    type: last
+                - evaluator: { params: [1], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
               expression: B
               refId: C
               type: threshold
@@ -267,5 +273,101 @@ groups:
         annotations:
           summary: "Batch job failures detected (>1 in 5min)"
           description: "One or more batch jobs have failed in the last 5 minutes. Check worker logs and SQS dead-letter queue."
+        noDataState: OK
+        execErrState: Error
+
+      # ── LowDiskSpace (root fs) ──────────────────────────────
+      - uid: LowDiskSpace
+        title: LowDiskSpace
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: 100 - (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} * 100)
+              instant: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [B] }
+                  reducer: { params: [], type: last }
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [85], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+              expression: B
+              refId: C
+              type: threshold
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Root disk usage > 85 %"
+          description: "The EC2 root filesystem is above 85 % utilisation. Clean old images/logs (`docker system prune -af`) or resize the EBS volume."
+        noDataState: OK
+        execErrState: Error
+
+      # ── Memory Pressure (swap in use) ───────────────────────
+      - uid: memory-pressure
+        title: Memory Pressure (Swap In Use)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: (node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes) / 1024 / 1024
+              instant: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [0], type: gt }
+                  operator: { type: and }
+                  query: { params: [B] }
+                  reducer: { params: [], type: last }
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator: { params: [512], type: gt }
+                  operator: { type: and }
+                  query: { params: [C] }
+                  reducer: { params: [], type: last }
+              expression: B
+              refId: C
+              type: threshold
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Swap usage > 512 MB for 10 minutes"
+          description: "The EC2 instance is under memory pressure and has been swapping for 10+ minutes. Consider resizing from t3.small to t3.medium."
         noDataState: OK
         execErrState: Error

@@ -49,6 +49,9 @@ plugins:
             SDKs: SDKs
             Tutoriais: Tutorials
             FAQ: FAQ
+            Operações: Operations
+            Status de produção: Production status
+            Runbook: Runbook
 
 markdown_extensions:
   - admonition
@@ -67,5 +70,8 @@ nav:
       - getting-started/quickstart.md
       - getting-started/authentication.md
       - getting-started/rate-limits.md
+  - Operações:
+      - Status de produção: operations/production-status.md
+      - Runbook: operations/runbook.md
   - Referência da API:
       - api/overview.md

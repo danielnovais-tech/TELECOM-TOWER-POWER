@@ -1,0 +1,23 @@
+               total        used        free      shared  buff/cache   available
+Mem:            1907        1101          85           5         930         805
+Swap:           2047         207        1840
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/root        19G   15G  3.4G  82% /
+ 19:00:49 up 17:58,  0 users,  load average: 0.28, 0.20, 0.18
+NAME                                            CPU %     MEM USAGE / LIMIT     MEM %
+telecom-tower-power-grafana-1                   0.35%     93.91MiB / 1.862GiB   4.92%
+telecom-tower-power-frontend-react-1            0.00%     4.551MiB / 1.862GiB   0.24%
+telecom-tower-power-frontend-1                  0.29%     46.01MiB / 1.862GiB   2.41%
+telecom-tower-power-stripe-webhook-1            0.17%     39.59MiB / 1.862GiB   2.08%
+telecom-tower-power-rq-worker-1                 0.00%     73.16MiB / 1.862GiB   3.84%
+telecom-tower-power-worker-1                    1.54%     62.8MiB / 1.862GiB    3.29%
+telecom-tower-power-api-1                       0.19%     92.5MiB / 1.862GiB    4.85%
+telecom-tower-power-alertmanager-1              0.09%     18.28MiB / 1.862GiB   0.96%
+telecom-tower-power-prometheus-1                0.00%     52.23MiB / 1.862GiB   2.74%
+telecom-tower-power-redis-metrics-collector-1   0.00%     11.63MiB / 1.862GiB   0.61%
+telecom-tower-power-pgbouncer-1                 0.01%     1.391MiB / 1.862GiB   0.07%
+telecom-tower-power-postgres-1                  1.88%     14.38MiB / 1.862GiB   0.75%
+telecom-tower-power-redis-1                     0.53%     4.773MiB / 1.862GiB   0.25%
+2
+0.28 0.20 0.18 1/592 712761
+
