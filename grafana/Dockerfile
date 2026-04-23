@@ -3,8 +3,9 @@ FROM grafana/grafana:12.2.0
 # Provisioning: datasources, dashboards, alerting contact points
 COPY provisioning/ /etc/grafana/provisioning/
 
-# Dashboard JSON
-COPY dashboards/ /var/lib/grafana/dashboards/
+# Dashboard JSON (placed under /etc/grafana to avoid being masked by the
+# /var/lib/grafana data volume mounted in docker-compose)
+COPY dashboards/ /etc/grafana/dashboards/
 
 # Entrypoint: hydrate SLACK_WEBHOOK_URL from Docker secret before launching Grafana
 USER root
