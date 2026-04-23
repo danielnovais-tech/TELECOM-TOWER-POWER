@@ -18,7 +18,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -yqq postgresql-client
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           aws-access-key-id: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}

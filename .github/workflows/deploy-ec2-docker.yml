@@ -46,7 +46,7 @@ jobs:
 
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -87,10 +87,9 @@ jobs:
           set -euo pipefail
           cd /home/ubuntu/TELECOM-TOWER-POWER
 
-          echo "==> OS package updates..."
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
-          sudo apt-get autoremove -y -qq
+          # OS package updates intentionally removed from deploy path:
+          # they blocked for >15min under load on the small EC2. Security
+          # patching is handled by unattended-upgrades on a timer.
 
           echo "==> Pulling latest code..."
           git config credential.helper '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN}"; }; f'
@@ -120,8 +119,11 @@ jobs:
           docker compose up -d --no-deps prometheus      2>/dev/null || true
           docker compose up -d --no-deps alertmanager    2>/dev/null || true
 
-          echo "==> Pruning unused Docker images..."
-          docker image prune -f 2>/dev/null || true
+          echo "==> Pruning unused Docker images and build cache..."
+          # Aggressive prune: remove dangling + unreferenced images and all
+          # build cache. Keeps only images currently used by running containers.
+          docker image prune -af --filter "until=24h" 2>/dev/null || true
+          docker builder prune -af --filter "until=24h" 2>/dev/null || true
 
           echo "==> Disk space report..."
           echo "--- Filesystem ---"
