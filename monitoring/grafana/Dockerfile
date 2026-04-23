@@ -1,5 +1,7 @@
 FROM grafana/grafana:12.2.0
 
+USER root
+
 # Provisioning: datasources, dashboards, alerting contact points/policies/rules.
 COPY provisioning/ /etc/grafana/provisioning/
 
@@ -14,4 +16,9 @@ COPY dashboards/ /etc/grafana/dashboards/
 ENV SLACK_CHANNEL="#alerts" \
     ALERT_EMAIL_TO="daniel.novais@sempreceub.com"
 
+COPY entrypoint.sh /custom-entrypoint.sh
+RUN chmod +x /custom-entrypoint.sh
+
 EXPOSE 3000
+
+ENTRYPOINT ["/custom-entrypoint.sh"]
