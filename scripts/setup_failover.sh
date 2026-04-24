@@ -29,7 +29,10 @@ ROOT_DOMAIN="telecomtowerpower.com.br"
 DOMAIN="api.telecomtowerpower.com.br"
 ALB_DNS="telecom-tower-power-alb-581610578.sa-east-1.elb.amazonaws.com"
 ALB_HOSTED_ZONE="Z2P70J7HTTTPLU"  # sa-east-1 ALB hosted zone (AWS-managed)
-RAILWAY_DNS="web-production-90b1f.up.railway.app"
+# Railway custom-domain edge target (unique per custom domain; NOT the default
+# web-production-*.up.railway.app which only serves the fallback wildcard cert).
+# Retrieve from Railway UI → service web → Settings → Networking → Show DNS records.
+RAILWAY_DNS="i1fuknjg.up.railway.app"
 HEALTH_CHECK_PATH="/health"
 FAILOVER_TTL=60  # Low TTL for fast failover
 

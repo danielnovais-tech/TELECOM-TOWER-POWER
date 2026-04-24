@@ -433,7 +433,7 @@ Automatic DNS failover is **deployed and active**:
 1. **Health check** (`f32babca-ad29-4d2c-9593-a455d11e5ab7`) — HTTPS string-match on ALB `/health`, checks for `"healthy"`, all 10 AWS regions reporting healthy
 2. **Failover CNAME records** for `api.telecomtowerpower.com.br`:
    - **PRIMARY** → ALB (health-checked, TTL 60 s)
-   - **SECONDARY** → Railway (`web-production-90b1f.up.railway.app`, TTL 60 s)
+   - **SECONDARY** → Railway edge (`i1fuknjg.up.railway.app`, TTL 60 s) — unique per custom domain; Railway issues a Let's Encrypt cert for `api.telecomtowerpower.com.br` and also requires a TXT `_railway-verify.api` record for ownership validation.
 
 If the ALB health check fails, Route 53 automatically routes traffic to Railway within ~60 s.
 
@@ -452,7 +452,7 @@ The ALB terminates TLS and forwards HTTP to EC2. Two monitoring subdomains bypas
 
 | Host header | Routing | Target |
 |---|---|---|
-| `api.telecomtowerpower.com.br` | **All paths** → Railway | `https://web-production-90b1f.up.railway.app` |
+| `api.telecomtowerpower.com.br` | **All paths** → Railway | `https://i1fuknjg.up.railway.app` |
 | `www.*` / `app.*` | API paths (`/api/*`, `/analyze`, `/health`, etc.) → Railway | `https://web-production-90b1f.up.railway.app` |
 | `www.*` / `app.*` | `/webhook*` → local Stripe handler | `localhost:8001` |
 | `www.*` / `app.*` | `/grafana*` → Grafana | `localhost:3001` |

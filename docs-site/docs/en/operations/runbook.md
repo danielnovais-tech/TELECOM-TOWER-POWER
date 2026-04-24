@@ -13,7 +13,8 @@ Operational procedures for the production EC2 environment.
 | Project path on host | `/home/ubuntu/TELECOM-TOWER-POWER` |
 | Secrets path on host | `/home/ubuntu/TELECOM-TOWER-POWER/secrets/` |
 | Caddy entry point | `:80` (ALB terminates TLS) |
-| Railway API | `https://web-production-90b1f.up.railway.app` |
+| Railway API (custom domain) | `https://api.telecomtowerpower.com.br` |
+| Railway edge target | `i1fuknjg.up.railway.app` |
 
 ## Common operations
 

@@ -10,7 +10,7 @@ Snapshot of the production environment. Last verified: **April 2026**.
     - Memória: `1,9 GB total`, `~800 MB disponíveis`, `~200 MB swap em uso` — estável, porém justo.
     - Disco: `15 GB / 19 GB em uso (82 %)` — monitorado pelo alerta `disk-space-low`.
 - **Caddy** listens on `:80` behind the ALB (which terminates TLS). Routing rules:
-    - `api.telecomtowerpower.com.br` → Railway (`https://web-production-90b1f.up.railway.app`) with `Host` header override.
+    - `api.telecomtowerpower.com.br` → Railway edge (`i1fuknjg.up.railway.app`), TLS terminated by Railway with Let's Encrypt cert issued for the custom domain.
     - `www.*` / `app.*` API paths (`/api/*`, `/health*`, `/calculate*`, `/towers*`, `/batch*`, `/jobs*`, `/docs*`, `/openapi.json`, `/stripe*`, `/usage*`, `/api-key*`, `/signup*`, `/login*`, `/profile*`, `/portal*`, `/analyze*`, `/plan_repeater*`, `/export_report*`, `/bedrock*`, `/srtm*`) → Railway.
     - `/webhook*` → local Stripe handler on `localhost:8001`.
     - `/grafana*` → local Grafana on `localhost:3001`.
