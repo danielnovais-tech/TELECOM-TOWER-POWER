@@ -31,13 +31,106 @@ ALB_DNS="telecom-tower-power-alb-581610578.sa-east-1.elb.amazonaws.com"
 ALB_HOSTED_ZONE="Z2P70J7HTTTPLU"  # sa-east-1 ALB hosted zone (AWS-managed)
 # Railway custom-domain edge target (unique per custom domain; NOT the default
 # web-production-*.up.railway.app which only serves the fallback wildcard cert).
-# Retrieve from Railway UI → service web → Settings → Networking → Show DNS records.
-RAILWAY_DNS="i1fuknjg.up.railway.app"
+# Railway may rotate this value — always re-verify in the Railway UI
+# (service web → Settings → Networking → Show DNS records) before running this
+# script. Override at runtime:  RAILWAY_DNS=xxxx.up.railway.app ./setup_failover.sh
+RAILWAY_DNS="${RAILWAY_DNS:-i1fuknjg.up.railway.app}"
+# Companion TXT record Railway uses to validate ownership of the custom domain.
+# If this record is removed, Railway will stop serving a valid TLS cert for
+# $DOMAIN and the SECONDARY leg of the failover will break with TLS errors.
+RAILWAY_TXT_NAME="_railway-verify.api.${ROOT_DOMAIN}"
 HEALTH_CHECK_PATH="/health"
 FAILOVER_TTL=60  # Low TTL for fast failover
 
+# CLI flags:
+#   --force / --skip-preflight : bypass the Railway target preflight checks
+#                                (use only if you know the edge + cert are healthy
+#                                 but preflight cannot confirm it — e.g. network
+#                                 restrictions on the host running this script).
+SKIP_PREFLIGHT=0
+for arg in "$@"; do
+  case "$arg" in
+    --force|--skip-preflight) SKIP_PREFLIGHT=1 ;;
+    -h|--help)
+      sed -n '1,40p' "$0"; exit 0 ;;
+  esac
+done
+
 echo "=== Route 53 Failover Setup for $DOMAIN ==="
 echo ""
+echo "  Railway edge target: $RAILWAY_DNS"
+echo "  Railway TXT record : $RAILWAY_TXT_NAME (must remain in Route 53)"
+echo ""
+
+# ── Preflight: validate Railway target before touching DNS ──────
+# Addresses risks of:
+#  - stale/rotated RAILWAY_DNS silently being re-applied
+#  - missing _railway-verify TXT ownership record (TLS would fail on failover)
+#  - Railway not serving a cert for $DOMAIN on the edge we're about to pin
+preflight_railway() {
+  local ok=1
+
+  echo "▸ Preflight: checking Railway edge resolves ..."
+  if ! getent hosts "$RAILWAY_DNS" >/dev/null 2>&1 \
+      && ! host "$RAILWAY_DNS" >/dev/null 2>&1; then
+    echo "  ✗ Cannot resolve $RAILWAY_DNS — refusing to pin a dead edge in Route 53."
+    ok=0
+  else
+    echo "  ✓ $RAILWAY_DNS resolves"
+  fi
+
+  echo "▸ Preflight: checking Railway serves a cert valid for $DOMAIN ..."
+  # SNI-based connect: ask the Railway edge to present the cert for $DOMAIN.
+  # If Railway is not configured for the custom domain (or TXT validation
+  # lapsed), this will either fail or return a cert whose CN/SAN does not match.
+  if command -v openssl >/dev/null 2>&1; then
+    local cert_info
+    cert_info=$(echo | timeout 10 openssl s_client \
+        -connect "${RAILWAY_DNS}:443" \
+        -servername "$DOMAIN" \
+        2>/dev/null | openssl x509 -noout -text 2>/dev/null || true)
+    if echo "$cert_info" | grep -Eq "DNS:${DOMAIN}([^A-Za-z0-9.-]|$)|CN *= *${DOMAIN}"; then
+      echo "  ✓ Railway edge presents a cert covering $DOMAIN"
+    else
+      echo "  ✗ Railway edge did NOT present a cert covering $DOMAIN."
+      echo "    This usually means:"
+      echo "      - the custom domain is not attached in Railway, OR"
+      echo "      - the $RAILWAY_TXT_NAME TXT record is missing / wrong, OR"
+      echo "      - Railway rotated the edge and \$RAILWAY_DNS is stale."
+      ok=0
+    fi
+  else
+    echo "  ⚠ openssl not available — skipping TLS cert preflight"
+  fi
+
+  echo "▸ Preflight: checking $RAILWAY_TXT_NAME TXT record in Route 53 ..."
+  local txt_count
+  txt_count=$(aws route53 list-resource-record-sets \
+    --hosted-zone-id "$R53_ZONE_ID" \
+    --query "ResourceRecordSets[?Name==\`${RAILWAY_TXT_NAME}.\` && Type==\`TXT\`] | length(@)" \
+    --output text --no-cli-pager 2>/dev/null || echo 0)
+  if [[ "$txt_count" =~ ^[0-9]+$ ]] && (( txt_count > 0 )); then
+    echo "  ✓ TXT $RAILWAY_TXT_NAME present ($txt_count record set(s))"
+  else
+    echo "  ✗ TXT $RAILWAY_TXT_NAME is MISSING in Route 53."
+    echo "    Railway needs this record to keep serving a valid cert for $DOMAIN."
+    echo "    Re-add the value shown in Railway UI → Settings → Networking"
+    echo "    BEFORE proceeding, otherwise the SECONDARY leg will fail TLS."
+    ok=0
+  fi
+
+  if (( ok == 0 )); then
+    if (( SKIP_PREFLIGHT == 1 )); then
+      echo ""
+      echo "  ⚠ Preflight failed but --force/--skip-preflight was passed — continuing anyway."
+    else
+      echo ""
+      echo "  Refusing to modify Route 53 failover records. Fix the issues above"
+      echo "  or re-run with --force if you have out-of-band confirmation."
+      exit 2
+    fi
+  fi
+}
 
 # ── 0. Look up the Route 53 hosted zone ─────────────────────────
 echo "▸ Looking up Route 53 hosted zone for $ROOT_DOMAIN ..."
@@ -51,6 +144,9 @@ if [[ -z "$R53_ZONE_ID" || "$R53_ZONE_ID" == "None" ]]; then
   exit 1
 fi
 echo "  ✓ Hosted zone: $R53_ZONE_ID"
+
+# Run Railway-target preflight now that we know the zone id
+preflight_railway
 
 # ── 1. Create (or reuse) Route 53 health check ──────────────────
 echo ""
@@ -219,6 +315,14 @@ echo ""
 echo "  ⚠  Ensure Railway has a custom domain configured for"
 echo "     $DOMAIN so its SSL cert covers the domain."
 echo "     (railway domain $DOMAIN)"
+echo ""
+echo "  ⚠  CRITICAL — do NOT remove the following Route 53 record:"
+echo "       $RAILWAY_TXT_NAME  (TXT, Railway ownership token)"
+echo "     Removing it revokes Railway's cert for $DOMAIN and breaks"
+echo "     the SECONDARY leg of this failover."
+echo ""
+echo "  ℹ  Run  scripts/verify_failover.sh  periodically (or in CI/cron)"
+echo "     to detect drift of the Railway edge / TXT / TLS cert."
 echo "============================================================"
 echo ""
 echo "Useful commands:"

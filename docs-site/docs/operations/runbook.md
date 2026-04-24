@@ -13,7 +13,24 @@ Operational procedures for the production EC2 environment.
 | Secrets path on host | `/home/ubuntu/TELECOM-TOWER-POWER/secrets/` |
 | Caddy entry point | `:80` (ALB terminates TLS) |
 | Railway API (custom domain) | `https://api.telecomtowerpower.com.br` |
-| Railway edge target | `i1fuknjg.up.railway.app` |
+| Railway edge target | `i1fuknjg.up.railway.app` (pode ser rotacionado — re-confirmar no painel da Railway antes de mexer no DNS) |
+
+!!! danger "NÃO remova o registro TXT de verificação da Railway"
+    O Route 53 contém um TXT `_railway-verify.api.telecomtowerpower.com.br`.
+    A Railway usa esse registro para manter válido o certificado Let's Encrypt
+    emitido para `api.telecomtowerpower.com.br`. Se qualquer automação
+    (Terraform, external-dns, scripts de limpeza, etc.) apagar esse registro,
+    a perna SECONDARY do failover vai falhar com erro de TLS na próxima vez
+    que o ALB ficar unhealthy. Ele nunca deve ser editado sem antes confirmar
+    o valor atual no painel da Railway.
+
+!!! note "Detectar drift antes de um incidente"
+    Execute `scripts/verify_failover.sh` (somente leitura, seguro em cron/CI).
+    Ele verifica se o CNAME SECONDARY ainda aponta para o edge correto da
+    Railway, se o TXT `_railway-verify` está presente e se o edge ainda serve
+    um certificado que cobre `api.telecomtowerpower.com.br`. Se a Railway
+    rotacionar o edge, rode novamente `scripts/setup_failover.sh` com o novo
+    valor: `RAILWAY_DNS=<novo>.up.railway.app ./scripts/setup_failover.sh`.
 
 ## Common operations
 
