@@ -43,14 +43,21 @@ HEALTH_CHECK_PATH="/health"
 FAILOVER_TTL=60  # Low TTL for fast failover
 
 # CLI flags:
-#   --force / --skip-preflight : bypass the Railway target preflight checks
-#                                (use only if you know the edge + cert are healthy
-#                                 but preflight cannot confirm it — e.g. network
-#                                 restrictions on the host running this script).
+#   --skip-preflight : bypass the Railway target preflight checks
+#                      (use only if you know the edge + cert are healthy
+#                       but preflight cannot confirm it — e.g. network
+#                       restrictions on the host running this script).
+#   --force          : implies --skip-preflight AND auto-confirms a SECONDARY
+#                      CNAME value change (for CI/runbook non-interactive use).
+#   --yes / -y       : auto-confirm a SECONDARY CNAME value change only
+#                      (still runs preflight).
 SKIP_PREFLIGHT=0
+ASSUME_YES=0
 for arg in "$@"; do
   case "$arg" in
-    --force|--skip-preflight) SKIP_PREFLIGHT=1 ;;
+    --force)          SKIP_PREFLIGHT=1; ASSUME_YES=1 ;;
+    --skip-preflight) SKIP_PREFLIGHT=1 ;;
+    --yes|-y)         ASSUME_YES=1 ;;
     -h|--help)
       sed -n '1,40p' "$0"; exit 0 ;;
   esac
@@ -249,6 +256,37 @@ echo "▸ Creating failover CNAME records for $DOMAIN ..."
 echo "    PRIMARY   → $ALB_DNS (health-checked)"
 echo "    SECONDARY → $RAILWAY_DNS (fallback)"
 echo "    TTL       → ${FAILOVER_TTL}s"
+
+# ── 3a. Guard against accidental SECONDARY value change ─────────
+# If a SECONDARY failover CNAME already exists and its value differs from
+# $RAILWAY_DNS, require explicit confirmation before overwriting it. This
+# catches the common mistake of running the script with a test/example value
+# of RAILWAY_DNS (e.g. "newedge.up.railway.app") and silently pointing the
+# DR leg at a bogus host.
+CURRENT_SECONDARY=$(aws route53 list-resource-record-sets \
+  --hosted-zone-id "$R53_ZONE_ID" \
+  --query "ResourceRecordSets[?Name==\`${DOMAIN}.\` && Type==\`CNAME\` && SetIdentifier==\`secondary-railway\`].ResourceRecords[0].Value | [0]" \
+  --output text --no-cli-pager 2>/dev/null || echo "")
+if [[ -n "$CURRENT_SECONDARY" && "$CURRENT_SECONDARY" != "None" && "$CURRENT_SECONDARY" != "$RAILWAY_DNS" ]]; then
+  echo ""
+  echo "  ⚠  SECONDARY CNAME value is CHANGING:"
+  echo "       current : $CURRENT_SECONDARY"
+  echo "       new     : $RAILWAY_DNS"
+  if (( ASSUME_YES == 1 )); then
+    echo "     --force/--yes set, continuing without prompt."
+  elif [[ ! -t 0 ]]; then
+    echo "  ✗ Refusing to change SECONDARY non-interactively without --yes/--force."
+    echo "    Re-run with --yes if this change is intentional."
+    exit 3
+  else
+    printf '     Type "yes" to confirm this change: '
+    read -r CONFIRM
+    if [[ "$CONFIRM" != "yes" ]]; then
+      echo "  ✗ Aborted by user. SECONDARY unchanged."
+      exit 3
+    fi
+  fi
+fi
 
 aws route53 change-resource-record-sets \
   --hosted-zone-id "$R53_ZONE_ID" \
