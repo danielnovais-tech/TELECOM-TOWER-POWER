@@ -56,7 +56,11 @@ scrape_configs:
       module: [railway_edge_customdomain]
     static_configs:
       - targets:
-          - https://i1fuknjg.up.railway.app/health
+          # RAILWAY_DNS is substituted at container start by entrypoint.sh.
+          # Default (if env unset): i1fuknjg.up.railway.app.
+          # To rotate the edge: set RAILWAY_DNS=<new>.up.railway.app in
+          # docker-compose environment and `docker compose up -d prometheus`.
+          - https://__RAILWAY_DNS__/health
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

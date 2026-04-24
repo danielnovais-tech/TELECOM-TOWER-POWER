@@ -272,6 +272,11 @@ services:
     build: ./prometheus
     ports:
       - "9090:9090"
+    environment:
+      # Railway edge hostname used by the blackbox_railway_edge scrape job.
+      # Substituted into prometheus.yml at container start by entrypoint.sh.
+      # Rotate by updating this value and running `docker compose up -d prometheus`.
+      - RAILWAY_DNS=${RAILWAY_DNS:-i1fuknjg.up.railway.app}
     volumes:
       - prometheus_data:/prometheus
     extra_hosts:
