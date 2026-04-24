@@ -40,6 +40,7 @@ COPY stripe_webhook_service.py .
 COPY tower_db.py .
 COPY job_store.py .
 COPY batch_worker.py .
+COPY tracing.py .
 COPY migrate_csv_to_db.py .
 COPY models.py .
 COPY alembic.ini .
