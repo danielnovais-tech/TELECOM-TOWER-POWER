@@ -27,3 +27,10 @@ boto3
 aiofiles
 openpyxl
 geopy
+# ── OpenTelemetry (distributed tracing, evaluation mode) ─────
+# Only loaded when OTEL_ENABLED=true; see tracing.py.
+opentelemetry-api>=1.27.0
+opentelemetry-sdk>=1.27.0
+opentelemetry-exporter-otlp-proto-grpc>=1.27.0
+opentelemetry-instrumentation-fastapi>=0.48b0
+opentelemetry-instrumentation-requests>=0.48b0

@@ -96,6 +96,12 @@ services:
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
       - ENABLE_DEMO_KEYS=${ENABLE_DEMO_KEYS:-false}
+      # Distributed tracing (OFF by default). Set OTEL_ENABLED=true to
+      # export spans to the Jaeger service below.
+      - OTEL_ENABLED=${OTEL_ENABLED:-false}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-telecom-tower-power-api}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      - OTEL_EXPORTER_OTLP_INSECURE=${OTEL_EXPORTER_OTLP_INSECURE:-true}
     secrets:
       - database_url
       - aws_access_key_id
@@ -329,6 +335,24 @@ services:
       - slack_webhook_url
     depends_on:
       - prometheus
+    restart: unless-stopped
+
+  # ── Jaeger (distributed tracing, evaluation mode) ──────────
+  # All-in-one image: OTLP receivers on 4317 (gRPC) / 4318 (HTTP),
+  # UI on 16686. Memory-only storage — suitable for evaluation,
+  # not production retention.
+  # Enable by setting OTEL_ENABLED=true on the api service, then:
+  #   docker compose --profile tracing up -d jaeger api
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP/gRPC
+      - "4318:4318"     # OTLP/HTTP
+    profiles:
+      - tracing
     restart: unless-stopped
 
   # ── Grafana ─────────────────────────────────────────────────

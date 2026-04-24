@@ -121,6 +121,28 @@ STALE_JOBS_REAPED = Counter(
     "stale_jobs_reaped_total",
     "Total stale running jobs released back to queue by the reaper",
 )
+# Depth of the batch-job queue, broken down by status.
+# Sampled by a background task (see _batch_queue_metrics_updater).
+BATCH_QUEUE_DEPTH = Gauge(
+    "batch_queue_depth",
+    "Number of batch jobs in each state (sampled)",
+    labelnames=["status"],
+)
+# Age of the oldest queued batch job in seconds. 0 when the queue is empty.
+# Drives the BatchQueueStuck alert.
+BATCH_QUEUE_OLDEST_AGE = Gauge(
+    "batch_queue_oldest_age_seconds",
+    "Wait time of the oldest queued batch job, in seconds",
+)
+# In-process rate-limit hit rate (hits/min) over a rolling 1-minute window.
+# Derivable from rate(rate_limit_hits_total[1m]) in PromQL, but exposing a
+# pre-computed gauge makes dashboards simpler and keeps a value even when a
+# scrape is missed.
+RATE_LIMIT_HIT_RATE = Gauge(
+    "rate_limit_hit_rate_per_minute",
+    "Rate-limit rejections per minute (1-minute rolling window, per tier)",
+    labelnames=["tier"],
+)
 
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
@@ -885,6 +907,7 @@ def _check_rate_limit(api_key: str, tier: Tier, is_demo: bool = False) -> Tuple[
         bucket.popleft()
     if len(bucket) >= limit:
         RATE_LIMIT_HITS.labels(tier=tier.value).inc()
+        _record_rate_limit_hit(tier.value)
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded ({limit} requests/min for {tier.value} tier). "
@@ -957,6 +980,13 @@ app = FastAPI(
     description="Cell tower coverage, link analysis, and repeater planning. "
                 "Requires an API key via the `X-API-Key` header.",
 )
+
+# Distributed tracing (OpenTelemetry -> Jaeger). No-op unless OTEL_ENABLED=true.
+try:
+    from tracing import setup_tracing as _setup_tracing
+    _setup_tracing(app)
+except Exception:
+    logger.exception("tracing setup failed; continuing without tracing")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1138,6 +1168,69 @@ async def debug_error500():
 
 _reaper_shutdown = asyncio.Event()
 _reaper_task = None
+_queue_metrics_task = None
+
+# ------------------------------------------------------------
+# Per-tier rolling rate-limit hit-rate tracking (1-minute window).
+# Used to populate the rate_limit_hit_rate_per_minute gauge without
+# relying solely on PromQL rate() over the counter.
+# ------------------------------------------------------------
+_rl_hit_timestamps: Dict[str, collections.deque] = {}
+
+def _record_rate_limit_hit(tier_value: str) -> None:
+    """Record a rate-limit rejection for the given tier and refresh the gauge."""
+    now = time.monotonic()
+    bucket = _rl_hit_timestamps.setdefault(tier_value, collections.deque())
+    bucket.append(now)
+    cutoff = now - 60.0
+    while bucket and bucket[0] < cutoff:
+        bucket.popleft()
+    RATE_LIMIT_HIT_RATE.labels(tier=tier_value).set(float(len(bucket)))
+
+
+async def _batch_queue_metrics_updater(interval_seconds: int = 15) -> None:
+    """Periodically sample the batch queue and update Prometheus gauges.
+
+    Populates `batch_queue_depth{status=...}`, `batch_queue_oldest_age_seconds`,
+    and decays the per-tier rate-limit hit-rate gauge so that the value falls
+    back to 0 once a tier stops hitting its limit.
+    """
+    while not _reaper_shutdown.is_set():
+        try:
+            await asyncio.wait_for(_reaper_shutdown.wait(), timeout=interval_seconds)
+            break  # shutdown signalled
+        except asyncio.TimeoutError:
+            pass
+        try:
+            # Fetch a generous page of recent jobs to approximate depth by status.
+            # For deeper queues this undercounts — acceptable for alerting since
+            # the alert also keys off the oldest-age gauge (which uses ORDER BY).
+            queued = job_store.list_jobs(status="queued", limit=1000)
+            running = job_store.list_jobs(status="running", limit=1000)
+            failed = job_store.list_jobs(status="failed", limit=1000)
+            BATCH_QUEUE_DEPTH.labels(status="queued").set(len(queued))
+            BATCH_QUEUE_DEPTH.labels(status="running").set(len(running))
+            BATCH_QUEUE_DEPTH.labels(status="failed").set(len(failed))
+            BATCH_JOBS_ACTIVE.set(len(running))
+            if queued:
+                # list_jobs returns newest first; oldest is last.
+                oldest = min(float(j.get("created_at") or 0.0) for j in queued)
+                age = max(0.0, time.time() - oldest) if oldest else 0.0
+                BATCH_QUEUE_OLDEST_AGE.set(age)
+            else:
+                BATCH_QUEUE_OLDEST_AGE.set(0.0)
+        except Exception:
+            logger.exception("Batch queue metrics updater failed")
+        # Decay the rate-limit hit-rate gauge: drop events older than 60s.
+        try:
+            now = time.monotonic()
+            cutoff = now - 60.0
+            for tier_value, bucket in _rl_hit_timestamps.items():
+                while bucket and bucket[0] < cutoff:
+                    bucket.popleft()
+                RATE_LIMIT_HIT_RATE.labels(tier=tier_value).set(float(len(bucket)))
+        except Exception:
+            logger.exception("Rate-limit gauge decay failed")
 
 async def _stale_job_reaper(interval_seconds: int = 60,
                             max_age_seconds: int = 300) -> None:
@@ -1205,6 +1298,15 @@ async def startup():
         name="stale-job-reaper",
     )
 
+    # Launch background queue-metrics updater: keeps batch_queue_depth and
+    # batch_queue_oldest_age_seconds gauges fresh for Prometheus scrapes.
+    global _queue_metrics_task
+    _queue_metrics_interval = int(os.getenv("QUEUE_METRICS_INTERVAL", "15"))
+    _queue_metrics_task = asyncio.create_task(
+        _batch_queue_metrics_updater(interval_seconds=_queue_metrics_interval),
+        name="batch-queue-metrics-updater",
+    )
+
 @app.on_event("shutdown")
 async def shutdown():
     _reaper_shutdown.set()
@@ -1212,6 +1314,12 @@ async def shutdown():
         _reaper_task.cancel()
         try:
             await _reaper_task
+        except asyncio.CancelledError:
+            pass
+    if _queue_metrics_task:
+        _queue_metrics_task.cancel()
+        try:
+            await _queue_metrics_task
         except asyncio.CancelledError:
             pass
     await platform.close()

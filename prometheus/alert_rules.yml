@@ -40,6 +40,74 @@ groups:
             The 99th-percentile request latency has exceeded 2 seconds
             for 5 minutes. Current p99: {{ $value | printf "%.2f" }}s.
 
+      # ── High Latency p95 > 1s ───────────────────────────────
+      # Fires when the 95th-percentile request latency stays above 1 second
+      # for 5 minutes. This catches user-visible slowness earlier than the
+      # p99 rule above (which only fires on severe tail latency).
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 latency ({{ $value | printf \"%.2f\" }}s)"
+          description: >
+            The 95th-percentile request latency has exceeded 1 second
+            for 5 minutes. Current p95: {{ $value | printf "%.2f" }}s.
+
+      # ── Disk Space Low (< 10% free on any non-virtual FS) ───
+      # Uses node_exporter metrics. Ignores tmpfs/overlay/container overlays.
+      - alert: DiskSpaceLow
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|devtmpfs"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|devtmpfs"}
+          ) * 100 < 10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space low on {{ $labels.instance }}:{{ $labels.mountpoint }} ({{ $value | printf \"%.1f\" }}% free)"
+          description: >
+            Filesystem {{ $labels.mountpoint }} on {{ $labels.instance }}
+            has less than 10% free space for 10 minutes.
+            Current: {{ $value | printf "%.1f" }}% free.
+
+      # ── Batch Queue Stuck ───────────────────────────────────
+      # Fires when there are queued jobs but nothing is being processed
+      # (the oldest queued job has been waiting longer than 10 minutes).
+      # Indicates a wedged worker, DB lock, or missing worker replica.
+      - alert: BatchQueueStuck
+        expr: batch_queue_oldest_age_seconds > 600 and batch_queue_depth{status="queued"} > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Batch queue stuck (oldest job waiting {{ $value | printf \"%.0f\" }}s)"
+          description: >
+            The oldest queued batch job has been waiting more than 10 minutes.
+            Current depth: {{ with query "batch_queue_depth{status='queued'}" }}{{ . | first | value }}{{ end }} jobs,
+            oldest age: {{ $value | printf "%.0f" }}s. Check batch_worker / rq-worker processes.
+
+      # ── High Rate-Limit Hits (stronger, sustained) ──────────
+      # Complements the short-window High429Rate above. This one fires
+      # only when rate-limit rejections are sustained >20/min for 10m,
+      # which usually means a legitimate customer hit their plan ceiling
+      # and may need an upgrade or quota bump.
+      - alert: HighRateLimitHits
+        expr: sum(rate(rate_limit_hits_total[5m])) * 60 > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained rate-limit rejections ({{ $value | printf \"%.1f\" }}/min)"
+          description: >
+            Rate-limit rejections have exceeded 20/min (5m avg) for 10 minutes.
+            Current rate: {{ $value | printf "%.1f" }} hits/min.
+            Investigate which tier/key is being throttled
+            (see rate_limit_hits_total by tier).
+
       # ── Batch Job Failures ──────────────────────────────────
       # Fires when any batch job fails (critical for /batch_reports).
       - alert: BatchJobFailures
