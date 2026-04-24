@@ -5,8 +5,6 @@
     "dockerfilePath": "monitoring/grafana/Dockerfile"
   },
   "deploy": {
-    "healthcheckPath": "/api/health",
-    "healthcheckTimeout": 120,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 5
   }
