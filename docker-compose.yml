@@ -281,6 +281,21 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ── Blackbox Exporter (synthetic probes for failover viability) ──
+  # Probes https://api.telecomtowerpower.com.br/health (real customer URL)
+  # and the Railway edge with Host/SNI override to catch SECONDARY-leg drift
+  # BEFORE the ALB health check forces a failover. Configured in
+  # prometheus/blackbox.yml.
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    command:
+      - '--config.file=/etc/blackbox/blackbox.yml'
+    volumes:
+      - ./prometheus/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    ports:
+      - "9115:9115"
+    restart: unless-stopped
+
   # ── Node Exporter (host metrics for infra alerts) ───────────
   node-exporter:
     image: prom/node-exporter:v1.8.2

@@ -10,12 +10,18 @@ Snapshot of the production environment. Last verified: **April 2026**.
     - Memory: `1.9 GB total`, `~800 MB available` with `~200 MB swap in use` — stable but tight.
     - Disk: `15 GB / 19 GB used (82 %)` — monitored by the `disk-space-low` alert.
 - **Caddy** listens on `:80` behind the ALB (which terminates TLS). Routing rules:
-    - `api.telecomtowerpower.com.br` → Railway edge (`i1fuknjg.up.railway.app`), TLS terminated by Railway with Let's Encrypt cert issued for the custom domain.
+    - `api.telecomtowerpower.com.br` → Railway edge (`i1fuknjg.up.railway.app`).
+      **TLS termination depends on Route 53 failover state** — see below.
     - `www.*` / `app.*` API paths (`/api/*`, `/health*`, `/calculate*`, `/towers*`, `/batch*`, `/jobs*`, `/docs*`, `/openapi.json`, `/stripe*`, `/usage*`, `/api-key*`, `/signup*`, `/login*`, `/profile*`, `/portal*`, `/analyze*`, `/plan_repeater*`, `/export_report*`, `/bedrock*`, `/srtm*`) → Railway.
     - `/webhook*` → local Stripe handler on `localhost:8001`.
     - `/grafana*` → local Grafana on `localhost:3001`.
     - Fallback → React SPA on `localhost:3000`.
     - `docs.telecomtowerpower.com.br` → static MkDocs build served from `/srv/docs` inside the Caddy container.
+
+!!! info "TLS termination for `api.telecomtowerpower.com.br`"
+    - **Normal mode (PRIMARY, ALB healthy):** client → **ALB terminates TLS** with ACM cert → Caddy on `:80` → Railway over HTTPS (Caddy re-originates TLS to the Railway edge).
+    - **Failover mode (SECONDARY, ALB unhealthy):** client → **Railway edge terminates TLS** with the Let's Encrypt cert Railway issues for the custom domain (requires the `_railway-verify.api` TXT record in Route 53 to stay valid).
+    - During an incident, check which mode you are in (`dig api.telecomtowerpower.com.br +short`) before assuming where TLS is terminating.
 - **ALB direct bypass** (no Caddy):
     - `monitoring.telecomtowerpower.com.br` → target group `ttp-grafana-tg:3001`.
     - `prometheus.telecomtowerpower.com.br` → target group `ttp-prometheus-tg:9090`.

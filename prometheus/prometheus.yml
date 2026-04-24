@@ -23,3 +23,46 @@ scrape_configs:
   - job_name: "alertmanager"
     static_configs:
       - targets: ["alertmanager:9093"]
+
+  # ── Blackbox: customer URL end-to-end ─────────────────────────
+  # Probes https://api.telecomtowerpower.com.br/health, which exercises
+  # whichever leg Route 53 is currently serving (ALB normally, Railway during
+  # failover). This is the "does it work for users right now" signal.
+  - job_name: "blackbox_api_health"
+    metrics_path: /probe
+    params:
+      module: [http_2xx_healthy]
+    static_configs:
+      - targets:
+          - https://api.telecomtowerpower.com.br/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: probe_leg
+        replacement: customer_url
+
+  # ── Blackbox: Railway edge SECONDARY-viability probe ──────────
+  # Hits the Railway edge directly with Host/SNI = api.telecomtowerpower.com.br
+  # to verify the failover target is actually able to terminate TLS for the
+  # custom domain. Catches: rotated edge host, missing _railway-verify TXT,
+  # cert not issued for the custom domain, edge serving the wrong vhost.
+  - job_name: "blackbox_railway_edge"
+    metrics_path: /probe
+    params:
+      module: [railway_edge_customdomain]
+    static_configs:
+      - targets:
+          - https://i1fuknjg.up.railway.app/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: probe_leg
+        replacement: railway_edge

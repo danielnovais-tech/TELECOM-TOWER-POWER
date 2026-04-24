@@ -1,0 +1,40 @@
+# Blackbox exporter config — probes for Railway failover SECONDARY viability
+# See: https://github.com/prometheus/blackbox_exporter/blob/master/CONFIGURATION.md
+modules:
+  # Probes https://api.telecomtowerpower.com.br/health end-to-end.
+  # Validates: DNS, TLS on the currently-active leg (ALB or Railway), and
+  # that the app returns `"healthy"`. In normal mode this tests ALB+Caddy+Railway;
+  # during failover it exercises exactly the path customers will hit.
+  http_2xx_healthy:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: "ip4"
+      method: GET
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      fail_if_body_not_matches_regexp:
+        - "healthy"
+
+  # Probes the Railway edge directly, with Host+SNI = api.telecomtowerpower.com.br,
+  # to verify the SECONDARY leg is viable BEFORE an ALB failure forces it.
+  # This is the probe that catches:
+  #   - Railway rotated the edge hostname (stale RAILWAY_DNS)
+  #   - Railway cert for the custom domain lapsed / was not issued
+  #   - _railway-verify.api TXT was removed and Railway stopped serving the cert
+  railway_edge_customdomain:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: "ip4"
+      method: GET
+      valid_status_codes: [200, 204, 301, 302, 401, 403, 404]
+      fail_if_not_ssl: true
+      headers:
+        Host: api.telecomtowerpower.com.br
+      tls_config:
+        server_name: api.telecomtowerpower.com.br
+        # insecure_skip_verify must stay false: we explicitly WANT TLS
+        # verification against api.telecomtowerpower.com.br SNI to detect
+        # a cert-domain mismatch on the Railway edge.
+        insecure_skip_verify: false

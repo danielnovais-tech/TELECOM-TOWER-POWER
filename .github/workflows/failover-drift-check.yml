@@ -1,0 +1,183 @@
+name: Failover drift check
+
+# Independent, external, outside-the-VPC probe that complements the in-cluster
+# Prometheus blackbox alerts. Runs `scripts/verify_failover.sh` against
+# Route 53 + the Railway edge and fails the workflow if drift is detected.
+#
+# This catches:
+#   - Route 53 SECONDARY CNAME rotated or removed
+#   - `_railway-verify.api` TXT record removed by external DNS automation
+#   - Railway edge hostname rotated (stale RAILWAY_DNS in scripts / Prometheus)
+#   - Railway edge no longer serving a cert covering api.telecomtowerpower.com.br
+
+on:
+  schedule:
+    # 03:30 UTC daily — quiet time for sa-east-1.
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+    inputs:
+      railway_dns:
+        description: "Override Railway edge hostname (leave blank to use default)"
+        required: false
+        default: ""
+
+concurrency:
+  group: failover-drift-check
+  cancel-in-progress: false
+
+permissions:
+  id-token: write          # reserved for future OIDC migration
+  contents: read
+  issues: write            # to open a drift issue on failure
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, read-only Route 53)
+        # Auth via GitHub OIDC — no long-lived AWS keys in repo secrets.
+        #
+        # Required repo variable:
+        #   AWS_FAILOVER_DRIFT_ROLE_ARN =
+        #     arn:aws:iam::<account-id>:role/Route53ReadOnlyForDriftCheck
+        #
+        # IAM role trust policy (attach to the role above):
+        # {
+        #   "Version": "2012-10-17",
+        #   "Statement": [{
+        #     "Effect": "Allow",
+        #     "Principal": { "Federated":
+        #       "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com" },
+        #     "Action": "sts:AssumeRoleWithWebIdentity",
+        #     "Condition": {
+        #       "StringEquals": {
+        #         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        #       },
+        #       "StringLike": {
+        #         "token.actions.githubusercontent.com:sub":
+        #           "repo:danielnovais-tech/TELECOM-TOWER-POWER:ref:refs/heads/main"
+        #       }
+        #     }
+        #   }]
+        # }
+        #
+        # IAM permissions policy (least-privilege, read-only):
+        # {
+        #   "Version": "2012-10-17",
+        #   "Statement": [{
+        #     "Effect": "Allow",
+        #     "Action": [
+        #       "route53:ListHostedZonesByName",
+        #       "route53:ListResourceRecordSets"
+        #     ],
+        #     "Resource": "*"
+        #   }]
+        # }
+        #
+        # One-time GitHub OIDC provider setup (if not already present in the account):
+        #   aws iam create-open-id-connect-provider \
+        #     --url https://token.actions.githubusercontent.com \
+        #     --client-id-list sts.amazonaws.com \
+        #     --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_FAILOVER_DRIFT_ROLE_ARN }}
+          role-session-name: gh-failover-drift-${{ github.run_id }}
+          aws-region: sa-east-1
+
+      - name: Install probe prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends dnsutils openssl bind9-host
+          aws --version
+
+      - name: Run verify_failover.sh (JSON mode)
+        id: verify
+        env:
+          RAILWAY_DNS: ${{ github.event.inputs.railway_dns }}
+        run: |
+          chmod +x scripts/verify_failover.sh
+          # Human-readable run first (for the Actions log).
+          set +e
+          scripts/verify_failover.sh
+          human_rc=$?
+          set -e
+
+          # Machine-readable run (captured for summary + issue body).
+          set +e
+          scripts/verify_failover.sh --json --quiet > /tmp/verify.json
+          json_rc=$?
+          set -e
+
+          echo "human_rc=$human_rc"   >> "$GITHUB_OUTPUT"
+          echo "json_rc=$json_rc"     >> "$GITHUB_OUTPUT"
+          {
+            echo 'json<<EOF'
+            cat /tmp/verify.json
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+          # Surface failure to the job status.
+          exit "$json_rc"
+
+      - name: Attach JSON to job summary
+        if: always()
+        run: |
+          {
+            echo "## Failover drift check"
+            echo
+            echo '```json'
+            cat /tmp/verify.json 2>/dev/null || echo '{"error":"no output"}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open drift issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          VERIFY_JSON: ${{ steps.verify.outputs.json }}
+        with:
+          script: |
+            const body = [
+              '`scripts/verify_failover.sh` detected drift in the ALB ↔ Railway failover configuration.',
+              '',
+              'Structured output:',
+              '```json',
+              process.env.VERIFY_JSON || '{}',
+              '```',
+              '',
+              'Run locally to reproduce:',
+              '```bash',
+              './scripts/verify_failover.sh',
+              '```',
+              '',
+              'Remediation quick-reference:',
+              '- **observed_secondary != expected_secondary** → Railway rotated the edge. Re-run `RAILWAY_DNS=<new>.up.railway.app scripts/setup_failover.sh`.',
+              '- **txt_present = fail** → restore the `_railway-verify.api.telecomtowerpower.com.br` TXT record (value from Railway UI → Settings → Networking).',
+              '- **cert_ok = fail** → Railway custom domain lost validation; re-attach it in Railway and re-add the TXT record.',
+              '- **edge_resolves = fail** → Railway outage or the edge hostname was deleted.',
+            ].join('\n');
+
+            // Reuse an open drift issue if one exists, otherwise create a new one.
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'failover-drift', per_page: 5,
+            });
+            if (existing.data.length > 0) {
+              const n = existing.data[0].number;
+              await github.rest.issues.createComment({ owner, repo, issue_number: n, body });
+              core.notice(`Updated existing drift issue #${n}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner, repo,
+                title: 'Failover drift detected by scheduled check',
+                body,
+                labels: ['failover-drift', 'ops'],
+              });
+              core.notice(`Opened drift issue #${created.data.number}`);
+            }

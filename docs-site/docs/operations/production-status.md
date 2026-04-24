@@ -10,12 +10,18 @@ Snapshot of the production environment. Last verified: **April 2026**.
     - Memória: `1,9 GB total`, `~800 MB disponíveis`, `~200 MB swap em uso` — estável, porém justo.
     - Disco: `15 GB / 19 GB em uso (82 %)` — monitorado pelo alerta `disk-space-low`.
 - **Caddy** listens on `:80` behind the ALB (which terminates TLS). Routing rules:
-    - `api.telecomtowerpower.com.br` → Railway edge (`i1fuknjg.up.railway.app`), TLS terminated by Railway with Let's Encrypt cert issued for the custom domain.
+    - `api.telecomtowerpower.com.br` → Railway edge (`i1fuknjg.up.railway.app`).
+      **A terminação TLS depende do estado do failover do Route 53** — veja abaixo.
     - `www.*` / `app.*` API paths (`/api/*`, `/health*`, `/calculate*`, `/towers*`, `/batch*`, `/jobs*`, `/docs*`, `/openapi.json`, `/stripe*`, `/usage*`, `/api-key*`, `/signup*`, `/login*`, `/profile*`, `/portal*`, `/analyze*`, `/plan_repeater*`, `/export_report*`, `/bedrock*`, `/srtm*`) → Railway.
     - `/webhook*` → local Stripe handler on `localhost:8001`.
     - `/grafana*` → local Grafana on `localhost:3001`.
     - Fallback → React SPA on `localhost:3000`.
     - `docs.telecomtowerpower.com.br` → static MkDocs build served from `/srv/docs` inside the Caddy container.
+
+!!! info "Terminação de TLS para `api.telecomtowerpower.com.br`"
+    - **Modo normal (PRIMARY, ALB saudável):** cliente → **ALB termina TLS** com cert ACM → Caddy em `:80` → Railway via HTTPS (Caddy reorigina TLS para o edge Railway).
+    - **Modo failover (SECONDARY, ALB não-saudável):** cliente → **edge Railway termina TLS** com o certificado Let's Encrypt emitido pela Railway para o domínio customizado (depende do registro TXT `_railway-verify.api` no Route 53).
+    - Durante um incidente, confirme em qual modo você está (`dig api.telecomtowerpower.com.br +short`) antes de assumir onde o TLS está terminando.
 - **ALB direct bypass** (no Caddy):
     - `monitoring.telecomtowerpower.com.br` → target group `ttp-grafana-tg:3001`.
     - `prometheus.telecomtowerpower.com.br` → target group `ttp-prometheus-tg:9090`.
