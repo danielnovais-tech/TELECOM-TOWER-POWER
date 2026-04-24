@@ -69,9 +69,13 @@ jobs:
           cd /home/ubuntu/TELECOM-TOWER-POWER
 
           # Resolve the actual Docker volume name (compose prefixes with project name).
-          VOL=$(docker volume ls --format '{{.Name}}' | grep -E '(^|_)grafana-data$' | head -1)
+          # Volume is declared as `grafana_data` in docker-compose.yml, so the full
+          # name is something like `telecom-tower-power_grafana_data`. `|| true`
+          # keeps `set -e` from killing the script on grep-no-match so we can
+          # actually print the helpful error below.
+          VOL=$(docker volume ls --format '{{.Name}}' | grep -E '(^|_)grafana[_-]data$' | head -1 || true)
           if [ -z "$VOL" ]; then
-            echo "ERROR: grafana-data volume not found"
+            echo "ERROR: grafana_data volume not found"
             docker volume ls
             exit 1
           fi
