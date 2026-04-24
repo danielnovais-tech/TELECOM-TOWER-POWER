@@ -1,0 +1,28 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ScopedWriteToFailoverZone",
+      "Effect": "Allow",
+      "Action": [
+        "route53:ChangeResourceRecordSets",
+        "route53:ListResourceRecordSets",
+        "route53:GetChange"
+      ],
+      "Resource": "arn:aws:route53:::hostedzone/Z01723123PIF6651ZDGY5"
+    },
+    {
+      "Sid": "HealthCheckAndListing",
+      "Effect": "Allow",
+      "Action": [
+        "route53:ListHostedZonesByName",
+        "route53:ListHealthChecks",
+        "route53:GetHealthCheck",
+        "route53:GetHealthCheckStatus",
+        "route53:CreateHealthCheck",
+        "route53:ChangeTagsForResource"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
