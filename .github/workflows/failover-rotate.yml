@@ -68,7 +68,7 @@ jobs:
           echo "railway_dns OK: $RAILWAY_DNS"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials (OIDC, Route 53 write scoped to zone)
         # Required repo variable:
