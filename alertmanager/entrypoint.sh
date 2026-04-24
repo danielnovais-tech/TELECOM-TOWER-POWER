@@ -48,6 +48,7 @@ route:
     - match:
         severity: critical
       receiver: critical
+      group_wait: 15s
       repeat_interval: 1h
     - match:
         severity: warning

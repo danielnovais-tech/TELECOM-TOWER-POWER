@@ -1,3 +1,10 @@
+# ─────────────────────────────────────────────────────────────
+# REFERENCE / DOCUMENTATION ONLY
+# This template is NOT consumed at runtime.
+# The actual Alertmanager config is generated dynamically by
+# entrypoint.sh via an unquoted heredoc that performs env
+# substitution at container start.
+# ─────────────────────────────────────────────────────────────
 global:
   resolve_timeout: 5m
   smtp_smarthost: "${SMTP_HOST}"
@@ -17,6 +24,7 @@ route:
     - match:
         severity: critical
       receiver: critical
+      group_wait: 15s
       repeat_interval: 1h
     - match:
         severity: warning

@@ -1,3 +1,10 @@
+# ─────────────────────────────────────────────────────────────
+# REFERENCE / DOCUMENTATION ONLY
+# This file is NOT used at runtime.
+# The actual Alertmanager config is generated dynamically by
+# alertmanager/entrypoint.sh via an unquoted heredoc that performs
+# env substitution at container start.
+# ─────────────────────────────────────────────────────────────
 global:
   resolve_timeout: 5m
   # ── SMTP (Amazon SES) ──────────────────────────────────────
@@ -26,6 +33,7 @@ route:
     - match:
         severity: critical
       receiver: critical
+      group_wait: 15s
       repeat_interval: 1h
 
     # Warning alerts → Slack only
