@@ -73,17 +73,20 @@ jobs:
 
       - name: Prune backups older than 14 days
         run: |
+          # pipefail so a failing `aws s3 ls` (creds/5xx/etc.) is not masked by
+          # the `while read` consumer silently succeeding on empty input.
+          set -euo pipefail
           CUTOFF=$(date -d "-14 days" +%Y-%m-%d)
           echo "Pruning backups older than $CUTOFF..."
-          aws s3 ls s3://telecom-tower-power-results/backups/railway-postgres/ \
-            | while read -r line; do
-                FILE_DATE=$(echo "$line" | awk '{print $1}')
-                FILE_NAME=$(echo "$line" | awk '{print $4}')
-                if [[ -n "$FILE_NAME" && "$FILE_DATE" < "$CUTOFF" ]]; then
-                  echo "  Deleting $FILE_NAME (from $FILE_DATE)"
-                  aws s3 rm "s3://telecom-tower-power-results/backups/railway-postgres/${FILE_NAME}"
-                fi
-              done
+          LISTING=$(aws s3 ls s3://telecom-tower-power-results/backups/railway-postgres/)
+          while read -r line; do
+            FILE_DATE=$(echo "$line" | awk '{print $1}')
+            FILE_NAME=$(echo "$line" | awk '{print $4}')
+            if [[ -n "$FILE_NAME" && "$FILE_DATE" < "$CUTOFF" ]]; then
+              echo "  Deleting $FILE_NAME (from $FILE_DATE)"
+              aws s3 rm "s3://telecom-tower-power-results/backups/railway-postgres/${FILE_NAME}"
+            fi
+          done <<< "$LISTING"
 
       - name: Notify Slack
         if: always()
