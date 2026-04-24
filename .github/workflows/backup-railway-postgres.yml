@@ -17,8 +17,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Install PostgreSQL client
-        run: sudo apt-get update -qq && sudo apt-get install -yqq postgresql-client
+      - name: Install PostgreSQL 17 client (match Railway server version)
+        run: |
+          set -euo pipefail
+          # Ubuntu ships with pg_dump 16, but Railway runs Postgres 17. A
+          # version-mismatched pg_dump fails with "server version X, but
+          # pg_dump version Y" and exits non-zero. Without pipefail the
+          # resulting empty pipe still produces a ~20-byte gzip, which is
+          # exactly what was happening nightly.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -yqq postgresql-client-17
+          pg_dump --version
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
@@ -31,12 +46,19 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: |
+          set -euo pipefail  # propagate pg_dump failure through the gzip pipe
           TIMESTAMP=$(date +%Y-%m-%d_%H%M)
           DUMP_FILE="/tmp/railway_towers_${TIMESTAMP}.sql.gz"
           echo "Dumping Railway Postgres..."
           pg_dump "$DATABASE_URL" --no-owner --no-acl | gzip > "$DUMP_FILE"
-          DUMP_KB=$(( $(stat -c%s "$DUMP_FILE") / 1024 ))
-          echo "Dump size: ${DUMP_KB} KB"
+          DUMP_BYTES=$(stat -c%s "$DUMP_FILE")
+          DUMP_KB=$(( DUMP_BYTES / 1024 ))
+          echo "Dump size: ${DUMP_BYTES} bytes (${DUMP_KB} KB)"
+          # An empty gzip is ~20 bytes; treat anything < 1 KB as a failed dump.
+          if [ "$DUMP_BYTES" -lt 1024 ]; then
+            echo "ERROR: dump is suspiciously small (${DUMP_BYTES} B). Failing the job."
+            exit 1
+          fi
           echo "DUMP_FILE=$DUMP_FILE" >> "$GITHUB_ENV"
           echo "DUMP_KB=$DUMP_KB" >> "$GITHUB_ENV"
           echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"
