@@ -1,0 +1,236 @@
+name: Failover rotate (Route 53 SECONDARY)
+
+# One-click rotation of the Route 53 SECONDARY CNAME for
+# api.telecomtowerpower.com.br when Railway rotates the custom-domain edge.
+#
+# Why manual-dispatch only:
+#   Drift detection (failover-drift-check.yml) CANNOT be the authoritative
+#   source of the new edge value — a Railway outage can transiently look like
+#   drift. A human must confirm the new edge from the Railway UI before we
+#   mutate production DNS.
+#
+# Flow:
+#   1. You read the new edge hostname from Railway UI
+#        (service web → Settings → Networking → Show DNS records)
+#   2. Trigger this workflow with that value + a reason
+#   3. GitHub Environment `production-dns` blocks for your approval click
+#   4. Job runs scripts/setup_failover.sh --yes
+#   5. Job runs scripts/verify_failover.sh --json to confirm
+#   6. Any open `failover-drift` issue is auto-closed; Slack is notified
+
+on:
+  workflow_dispatch:
+    inputs:
+      railway_dns:
+        description: "New Railway edge hostname (e.g. i1fuknjg.up.railway.app). Copy from Railway UI — do NOT guess."
+        required: true
+      reason:
+        description: "Why are you rotating? (audit log — e.g. 'Railway rotated edge 2026-04-24, ticket #42')"
+        required: true
+      skip_preflight:
+        description: "Bypass preflight (emergency only — default false)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: failover-rotate
+  cancel-in-progress: false
+
+permissions:
+  id-token: write          # OIDC
+  contents: read
+  issues: write            # to close drift issue on success
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Environment gate: configure required reviewers + allowed branches in
+    # GitHub UI → Settings → Environments → production-dns.
+    # Without at least one required reviewer, this workflow will run without
+    # approval, defeating the point — configure it before using.
+    environment:
+      name: production-dns
+      url: https://api.telecomtowerpower.com.br/health
+
+    steps:
+      - name: Validate input shape
+        # Reject obvious junk BEFORE assuming the write role so we never
+        # generate audit noise for malformed inputs.
+        env:
+          RAILWAY_DNS: ${{ github.event.inputs.railway_dns }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RAILWAY_DNS" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*\.up\.railway\.app$ ]]; then
+            echo "::error::railway_dns does not look like a Railway edge (*.up.railway.app): $RAILWAY_DNS"
+            exit 1
+          fi
+          echo "railway_dns OK: $RAILWAY_DNS"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, Route 53 write scoped to zone)
+        # Required repo variable:
+        #   AWS_FAILOVER_ROTATE_ROLE_ARN =
+        #     arn:aws:iam::490083271496:role/Route53FailoverRotateRole
+        #
+        # IAM trust policy (attach to the role above):
+        # {
+        #   "Version": "2012-10-17",
+        #   "Statement": [{
+        #     "Effect": "Allow",
+        #     "Principal": { "Federated":
+        #       "arn:aws:iam::490083271496:oidc-provider/token.actions.githubusercontent.com" },
+        #     "Action": "sts:AssumeRoleWithWebIdentity",
+        #     "Condition": {
+        #       "StringEquals": {
+        #         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+        #       },
+        #       "StringLike": {
+        #         "token.actions.githubusercontent.com:sub":
+        #           "repo:danielnovais-tech/TELECOM-TOWER-POWER:environment:production-dns"
+        #       }
+        #     }
+        #   }]
+        # }
+        #
+        # IAM permissions policy (least-privilege, write scoped to the zone):
+        # {
+        #   "Version": "2012-10-17",
+        #   "Statement": [
+        #     {
+        #       "Effect": "Allow",
+        #       "Action": [
+        #         "route53:ChangeResourceRecordSets",
+        #         "route53:ListResourceRecordSets",
+        #         "route53:GetChange"
+        #       ],
+        #       "Resource": "arn:aws:route53:::hostedzone/Z01723123PIF6651ZDGY5"
+        #     },
+        #     {
+        #       "Effect": "Allow",
+        #       "Action": [
+        #         "route53:ListHostedZonesByName",
+        #         "route53:ListHealthChecks",
+        #         "route53:GetHealthCheck",
+        #         "route53:GetHealthCheckStatus",
+        #         "route53:CreateHealthCheck",
+        #         "route53:ChangeTagsForResource"
+        #       ],
+        #       "Resource": "*"
+        #     }
+        #   ]
+        # }
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_FAILOVER_ROTATE_ROLE_ARN }}
+          role-session-name: gh-failover-rotate-${{ github.run_id }}
+          aws-region: sa-east-1
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends dnsutils openssl bind9-host jq python3
+          aws --version
+
+      - name: Capture pre-rotation state
+        id: before
+        run: |
+          set -euo pipefail
+          chmod +x scripts/verify_failover.sh
+          set +e
+          scripts/verify_failover.sh --json --quiet > /tmp/before.json
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          echo "### Pre-rotation state" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/before.json >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Rotate SECONDARY CNAME
+        id: rotate
+        env:
+          RAILWAY_DNS: ${{ github.event.inputs.railway_dns }}
+          SKIP_PREFLIGHT: ${{ github.event.inputs.skip_preflight }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/setup_failover.sh
+          args=(--yes)
+          if [[ "$SKIP_PREFLIGHT" == "true" ]]; then
+            args+=(--skip-preflight)
+            echo "::warning::Preflight bypassed by operator request."
+          fi
+          scripts/setup_failover.sh "${args[@]}"
+
+      - name: Verify post-rotation
+        id: verify
+        run: |
+          set -euo pipefail
+          set +e
+          scripts/verify_failover.sh --json --quiet > /tmp/after.json
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Post-rotation state'
+            echo '```json'
+            cat /tmp/after.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Close open drift issues on success
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          RAILWAY_DNS: ${{ github.event.inputs.railway_dns }}
+          ROTATION_REASON: ${{ github.event.inputs.reason }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'failover-drift', per_page: 20,
+            });
+            for (const issue of existing.data) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: [
+                  `Resolved by rotation run: ${runUrl}`,
+                  `- **New SECONDARY**: \`${process.env.RAILWAY_DNS}\``,
+                  `- **Reason**: ${process.env.ROTATION_REASON}`,
+                  `- **Operator**: @${context.actor}`,
+                ].join('\n'),
+              });
+              await github.rest.issues.update({
+                owner, repo, issue_number: issue.number, state: 'closed',
+              });
+              core.notice(`Closed drift issue #${issue.number}`);
+            }
+
+      - name: Notify Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          JOB_STATUS: ${{ job.status }}
+          RAILWAY_DNS: ${{ github.event.inputs.railway_dns }}
+          ROTATION_REASON: ${{ github.event.inputs.reason }}
+        run: |
+          set +e
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "::notice::SLACK_WEBHOOK_URL not set; skipping."
+            exit 0
+          fi
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "$JOB_STATUS" = "success" ]; then
+            ICON=":white_check_mark:"
+            MSG="failover SECONDARY rotated to \`${RAILWAY_DNS}\` by ${GITHUB_ACTOR}. Reason: ${ROTATION_REASON}. <${RUN_URL}|View run>"
+          else
+            ICON=":rotating_light:"
+            MSG="failover rotation FAILED (target \`${RAILWAY_DNS}\`, operator ${GITHUB_ACTOR}). <${RUN_URL}|View run> — manual intervention likely needed."
+          fi
+          payload=$(jq -n --arg text "${ICON} ${MSG}" '{text: $text}')
+          curl -sf -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL" \
+            || echo "::notice::Slack post failed (non-fatal)."
+          exit 0
