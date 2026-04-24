@@ -141,29 +141,21 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
+          set +e  # never mask the real drift failure with a Slack issue
           if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
             echo "::notice::SLACK_WEBHOOK_URL secret is not set; skipping Slack notification."
             exit 0
           fi
 
-          FAILING=$(jq -r '["route53_secondary_matches","txt_present","edge_resolves","cert_ok"]
-            | map(select(. as $k | (. as $k) and ($k)))
-            | map(select(. != ""))' /tmp/verify.json 2>/dev/null)
-
-          # The JSON format is expected to contain boolean fields with the names above.
-          # Extract the ones that are false/failed.
-          FAILING=$(jq -r '[
-              "route53_secondary_matches",
-              "txt_present",
-              "edge_resolves",
-              "cert_ok"
-            ]
-            | map(select(. as $k | (.[ $k ] == false)))
-            | join(", ")' /tmp/verify.json 2>/dev/null || true)
-
-          if [ -z "${FAILING:-}" ]; then
-            FAILING="(unknown)"
-          fi
+          # Actual JSON schema (from scripts/verify_failover.sh --json):
+          #   { "checks": { "<name>": { "status": "pass|fail", "detail": "..." }, ... }, "ok": bool, ... }
+          FAILING=$(jq -r '
+              .checks
+              | to_entries
+              | map(select(.value.status == "fail") | .key)
+              | join(", ")
+            ' /tmp/verify.json 2>/dev/null)
+          [ -z "$FAILING" ] && FAILING="(unknown)"
 
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           TEXT=":rotating_light: failover-drift detected — failing checks: ${FAILING} · <${RUN_URL}|View run> · issue will be opened/updated in repo"
@@ -171,6 +163,7 @@ jobs:
           payload=$(jq -n --arg text "$TEXT" '{text: $text}')
           curl -sf -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL" \
             || echo "::notice::Slack notification failed (non-fatal)."
+          exit 0
 
       - name: Open drift issue on failure
         if: failure()
