@@ -193,6 +193,16 @@ class TelecomTowerAPIClient:
             params={"tower_id": tower_id, "max_hops": max_hops},
         )
 
+    def coverage_predict(self, body: dict) -> dict:
+        """ML-based signal coverage prediction (Pro/Business/Enterprise tier).
+
+        ``body`` accepts either a point query (``rx_lat``/``rx_lon``) or a
+        grid query (``bbox``/``grid_size``).  Provide either ``tower_id`` or
+        the explicit ``tx_lat``/``tx_lon``/``tx_height_m``/``band`` quartet.
+        See ``CoveragePredictRequest`` in the API for the full schema.
+        """
+        return self._post("/coverage/predict", json_body=body)
+
     def export_report_pdf(self, tower_id: str, lat: float, lon: float,
                           height_m: float = 10.0, antenna_gain: float = 12.0) -> bytes:
         """Returns raw PDF bytes."""

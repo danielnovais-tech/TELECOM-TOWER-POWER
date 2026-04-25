@@ -102,6 +102,13 @@ services:
       - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-telecom-tower-power-api}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
       - OTEL_EXPORTER_OTLP_INSECURE=${OTEL_EXPORTER_OTLP_INSECURE:-true}
+      # ML coverage prediction (Bedrock + SageMaker + local model fallback)
+      - BEDROCK_REGION=${BEDROCK_REGION:-us-east-1}
+      - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID:-amazon.nova-micro-v1:0}
+      - SAGEMAKER_REGION=${SAGEMAKER_REGION:-us-east-1}
+      - SAGEMAKER_COVERAGE_ENDPOINT=${SAGEMAKER_COVERAGE_ENDPOINT:-}
+      - COVERAGE_MODEL_PATH=${COVERAGE_MODEL_PATH:-/app/coverage_model.npz}
+      - COVERAGE_MODEL_S3_URI=${COVERAGE_MODEL_S3_URI:-}
     secrets:
       - database_url
       - aws_access_key_id

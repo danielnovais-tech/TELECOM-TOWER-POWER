@@ -1127,7 +1127,7 @@ async def root():
         "docs": "/docs",
         "endpoints": [
             "/towers", "/towers/{id}", "/towers/nearest",
-            "/analyze", "/plan_repeater",
+            "/analyze", "/plan_repeater", "/coverage/predict",
             "/export_report", "/export_report/pdf",
             "/batch_reports", "/health",
         ],
@@ -1410,6 +1410,184 @@ async def analyze_link(tower_id: str, receiver: ReceiverInput, key_data: Dict = 
     rx = Receiver(**receiver.dict())
     result = await platform.analyze_link(tower, rx, terrain_profile=None)
     return LinkAnalysisResponse(**asdict(result))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# /coverage/predict – ML-based signal prediction (Pro / Business / Enterprise)
+# ─────────────────────────────────────────────────────────────────────
+
+class CoveragePredictRequest(BaseModel):
+    """Request body for /coverage/predict.
+
+    Provide either ``tower_id`` (existing tower) **or** the explicit
+    ``tx_lat`` / ``tx_lon`` / ``tx_height_m`` / ``band`` quartet.
+    Provide either a single receiver (``rx_lat``/``rx_lon``) **or** a
+    bounding box (``bbox``) to compute a coverage grid.
+    """
+
+    # Transmitter selection
+    tower_id: Optional[str] = None
+    tx_lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    tx_lon: Optional[float] = Field(default=None, ge=-180, le=180)
+    tx_height_m: Optional[float] = Field(default=None, gt=0)
+    tx_power_dbm: float = 43.0
+    tx_gain_dbi: float = 17.0
+    band: Optional[Band] = None
+
+    # Receiver – either a point ...
+    rx_lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    rx_lon: Optional[float] = Field(default=None, ge=-180, le=180)
+    rx_height_m: float = 10.0
+    rx_gain_dbi: float = 12.0
+
+    # ... or a bbox for grid coverage maps
+    bbox: Optional[List[float]] = Field(
+        default=None,
+        description="[min_lat, min_lon, max_lat, max_lon] for grid mode",
+        min_length=4,
+        max_length=4,
+    )
+    grid_size: int = Field(default=20, ge=2, le=100)
+
+    feasibility_threshold_dbm: float = -95.0
+    explain: bool = False
+
+
+@app.post("/coverage/predict")
+async def coverage_predict(
+    body: CoveragePredictRequest,
+    _key: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+):
+    """ML-based signal coverage prediction.
+
+    Uses a terrain-aware regression model trained on SRTM elevation
+    features. Routes to a SageMaker endpoint when
+    ``SAGEMAKER_COVERAGE_ENDPOINT`` is configured, otherwise serves the
+    locally-trained model, with a deterministic physics fallback when
+    no model artefact is available.
+
+    Modes:
+    - **point** — provide ``rx_lat``/``rx_lon`` for a single prediction.
+    - **grid**  — provide ``bbox`` and ``grid_size`` for a coverage map.
+
+    Restricted to Pro / Business / Enterprise tiers.
+    """
+    # Lazy import to keep cold-start cost off endpoints that don't use ML.
+    import coverage_predict as _cp
+
+    # ── Resolve transmitter ────────────────────────────────────────
+    if body.tower_id:
+        tower = platform.get_tower(body.tower_id)
+        if not tower:
+            raise HTTPException(status_code=404, detail=f"Tower {body.tower_id} not found")
+        tx_lat = tower.lat
+        tx_lon = tower.lon
+        tx_h = tower.height_m
+        tx_power = tower.power_dbm
+        f_hz = tower.primary_freq_hz()
+    else:
+        if (
+            body.tx_lat is None or body.tx_lon is None
+            or body.tx_height_m is None or body.band is None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Provide either tower_id or tx_lat/tx_lon/tx_height_m/band",
+            )
+        tx_lat = body.tx_lat
+        tx_lon = body.tx_lon
+        tx_h = body.tx_height_m
+        tx_power = body.tx_power_dbm
+        f_hz = body.band.to_hz()
+
+    # ── Grid mode ──────────────────────────────────────────────────
+    if body.bbox is not None:
+        try:
+            grid = await _cp.predict_coverage_grid(
+                tx_lat=tx_lat,
+                tx_lon=tx_lon,
+                tx_h_m=tx_h,
+                f_hz=f_hz,
+                bbox=tuple(body.bbox),
+                grid_size=body.grid_size,
+                rx_h_m=body.rx_height_m,
+                tx_power_dbm=tx_power,
+                tx_gain_dbi=body.tx_gain_dbi,
+                rx_gain_dbi=body.rx_gain_dbi,
+                elevation_service=platform.elevation,
+                feasibility_threshold_dbm=body.feasibility_threshold_dbm,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        signals = [p.signal_dbm for p in grid]
+        feasible_pct = round(100.0 * sum(1 for p in grid if p.feasible) / len(grid), 1)
+        model = _cp.get_model()
+        return {
+            "mode": "grid",
+            "tx": {"lat": tx_lat, "lon": tx_lon, "height_m": tx_h, "power_dbm": tx_power, "freq_hz": f_hz},
+            "grid_size": body.grid_size,
+            "bbox": body.bbox,
+            "feasible_coverage_pct": feasible_pct,
+            "signal_min_dbm": round(min(signals), 2),
+            "signal_max_dbm": round(max(signals), 2),
+            "signal_mean_dbm": round(sum(signals) / len(signals), 2),
+            "model_source": (
+                "sagemaker" if _cp.SAGEMAKER_ENDPOINT
+                else ("local-model" if model else "physics-fallback")
+            ),
+            "model_version": (
+                f"sagemaker:{_cp.SAGEMAKER_ENDPOINT}" if _cp.SAGEMAKER_ENDPOINT
+                else (model.version if model else "physics-v1")
+            ),
+            "points": [
+                {"lat": p.lat, "lon": p.lon, "signal_dbm": p.signal_dbm, "feasible": p.feasible}
+                for p in grid
+            ],
+        }
+
+    # ── Point mode ─────────────────────────────────────────────────
+    if body.rx_lat is None or body.rx_lon is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Point mode requires rx_lat and rx_lon (or pass bbox for grid mode)",
+        )
+    d_km = LinkEngine.haversine_km(tx_lat, tx_lon, body.rx_lat, body.rx_lon)
+    profile = await platform.elevation.get_profile(tx_lat, tx_lon, body.rx_lat, body.rx_lon)
+    tx_ground = profile[0] if profile else 0.0
+    rx_ground = profile[-1] if profile else 0.0
+
+    result = _cp.predict_signal(
+        d_km=d_km,
+        f_hz=f_hz,
+        tx_h_m=tx_h,
+        rx_h_m=body.rx_height_m,
+        tx_power_dbm=tx_power,
+        tx_gain_dbi=body.tx_gain_dbi,
+        rx_gain_dbi=body.rx_gain_dbi,
+        terrain_profile=profile,
+        tx_ground_elev_m=tx_ground,
+        rx_ground_elev_m=rx_ground,
+        feasibility_threshold_dbm=body.feasibility_threshold_dbm,
+    )
+
+    response: Dict[str, Any] = {
+        "mode": "point",
+        "tx": {"lat": tx_lat, "lon": tx_lon, "height_m": tx_h, "power_dbm": tx_power, "freq_hz": f_hz},
+        "rx": {"lat": body.rx_lat, "lon": body.rx_lon, "height_m": body.rx_height_m},
+        "distance_km": round(d_km, 3),
+        "signal_dbm": result.signal_dbm,
+        "feasible": result.feasible,
+        "confidence": result.confidence,
+        "model_source": result.source,
+        "model_version": result.model_version,
+        "features": result.features,
+    }
+    if body.explain:
+        explanation = _cp.explain_with_bedrock(response)
+        if explanation:
+            response["explanation"] = explanation
+    return response
+
 
 @app.post("/plan_repeater")
 async def plan_repeater(tower_id: str, receiver: ReceiverInput, max_hops: int = 3, key_data: Dict = Depends(verify_api_key)):

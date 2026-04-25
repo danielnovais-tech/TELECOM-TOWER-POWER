@@ -43,6 +43,26 @@
         {
           "name": "ENABLE_DEMO_KEYS",
           "value": "true"
+        },
+        {
+          "name": "BEDROCK_REGION",
+          "value": "us-east-1"
+        },
+        {
+          "name": "BEDROCK_MODEL_ID",
+          "value": "amazon.nova-micro-v1:0"
+        },
+        {
+          "name": "SAGEMAKER_REGION",
+          "value": "us-east-1"
+        },
+        {
+          "name": "COVERAGE_MODEL_PATH",
+          "value": "/app/coverage_model.npz"
+        },
+        {
+          "name": "COVERAGE_MODEL_S3_URI",
+          "value": ""
         }
       ],
       "secrets": [
@@ -85,6 +105,10 @@
         {
           "name": "SLACK_WEBHOOK_URL",
           "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/SLACK_WEBHOOK_URL"
+        },
+        {
+          "name": "SAGEMAKER_COVERAGE_ENDPOINT",
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/SAGEMAKER_COVERAGE_ENDPOINT"
         }
       ],
       "mountPoints": [

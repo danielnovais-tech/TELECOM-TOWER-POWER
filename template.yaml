@@ -107,6 +107,11 @@ Resources:
           RDS_PROXY_PORT: !Ref RdsProxyPort
           DB_NAME: !Ref DbName
           DB_USER: !Ref DbUser
+          # ML coverage prediction
+          BEDROCK_REGION: !Ref AWS::Region
+          BEDROCK_MODEL_ID: amazon.nova-micro-v1:0
+          SAGEMAKER_REGION: !Ref AWS::Region
+          COVERAGE_MODEL_PATH: /var/task/coverage_model.npz
       Policies:
         - AWSLambdaBasicExecutionRole
         - !If
@@ -123,6 +128,14 @@ Resources:
               Action:
                 - sqs:SendMessage
               Resource: !GetAtt BatchJobQueue.Arn
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - sagemaker:InvokeEndpoint
+              Resource: "*"
         - !If
           - HasRdsProxy
           - Statement:

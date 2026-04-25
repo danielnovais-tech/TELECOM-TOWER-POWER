@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "TELECOM TOWER POWER API",
-    "description": "Cell tower coverage, link analysis, and repeater planning. 140,906 towers across Brazil — 105,240 from ANATEL (12 operators, 5,570 municipalities) plus OpenCelliD data. Requires an API key via the `X-API-Key` header.",
+    "description": "Cell tower coverage, link analysis, and repeater planning. Requires an API key via the `X-API-Key` header.",
     "version": "0.1.0"
   },
   "paths": {
@@ -113,9 +113,9 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 1000,
+              "maximum": 50000,
               "minimum": 1,
-              "default": 100,
+              "default": 1000,
               "title": "Limit"
             }
           },
@@ -421,6 +421,48 @@
         }
       }
     },
+    "/coverage/predict": {
+      "post": {
+        "summary": "Coverage Predict",
+        "description": "ML-based signal coverage prediction.\n\nUses a terrain-aware regression model trained on SRTM elevation\nfeatures. Routes to a SageMaker endpoint when\n``SAGEMAKER_COVERAGE_ENDPOINT`` is configured, otherwise serves the\nlocally-trained model, with a deterministic physics fallback when\nno model artefact is available.\n\nModes:\n- **point** \u2014 provide ``rx_lat``/``rx_lon`` for a single prediction.\n- **grid**  \u2014 provide ``bbox`` and ``grid_size`` for a coverage map.\n\nRestricted to Pro / Business / Enterprise tiers.",
+        "operationId": "coverage_predict_coverage_predict_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoveragePredictRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
     "/plan_repeater": {
       "post": {
         "summary": "Plan Repeater",
@@ -484,10 +526,116 @@
         }
       }
     },
+    "/plan_repeater/async": {
+      "post": {
+        "summary": "Plan Repeater Async",
+        "description": "Submit a repeater-planning job. Returns a job_id; poll\n``GET /plan_repeater/jobs/{job_id}`` for progress and the final chain.\n\nUseful for large candidate sets (max_hops >= 4) where synchronous\ncompletion may exceed edge/CDN HTTP timeouts.",
+        "operationId": "plan_repeater_async_plan_repeater_async_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "tower_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tower Id"
+            }
+          },
+          {
+            "name": "max_hops",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 3,
+              "title": "Max Hops"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceiverInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/plan_repeater/jobs/{job_id}": {
+      "get": {
+        "summary": "Plan Repeater Job Status",
+        "description": "Return the state (queued / running / done / error) and, when ready,\nthe repeater_chain produced by ``POST /plan_repeater/async``.",
+        "operationId": "plan_repeater_job_status_plan_repeater_jobs__job_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/export_report": {
       "get": {
         "summary": "Export Report",
-        "description": "Generate a professional PDF engineering report (Pro/Enterprise tiers only).",
+        "description": "Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).",
         "operationId": "export_report_export_report_get",
         "security": [
           {
@@ -568,7 +716,7 @@
     "/export_report/pdf": {
       "get": {
         "summary": "Export Report Pdf",
-        "description": "Generate a professional PDF engineering report (Pro/Enterprise tiers only).",
+        "description": "Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).",
         "operationId": "export_report_pdf_export_report_pdf_get",
         "security": [
           {
@@ -1248,6 +1396,132 @@
           }
         ]
       }
+    },
+    "/bedrock/compare": {
+      "post": {
+        "summary": "Bedrock Compare Scenarios",
+        "description": "Compare multiple RF scenarios using AI analysis.\nAccepts 2-10 scenarios (e.g. different frequencies, antenna heights)\nand returns an engineering comparison with recommendations.\nRequires PRO or ENTERPRISE tier.",
+        "operationId": "bedrock_compare_scenarios_bedrock_compare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BedrockScenarioRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/bedrock/batch-analyze": {
+      "post": {
+        "summary": "Bedrock Batch Analyze",
+        "description": "Analyze a batch of link analysis results with AI.\nProcesses up to 500 link results and provides consolidated\ncoverage assessment, worst-link identification, and prioritized\nremediation recommendations.\nRequires PRO or ENTERPRISE tier.",
+        "operationId": "bedrock_batch_analyze_bedrock_batch_analyze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BedrockBatchAnalysisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/bedrock/suggest-height": {
+      "post": {
+        "summary": "Bedrock Suggest Height",
+        "description": "AI-powered antenna height recommendation based on link analysis\nand terrain profile. Calculates the optimal height for the desired\nFresnel zone clearance.\nRequires PRO or ENTERPRISE tier.",
+        "operationId": "bedrock_suggest_height_bedrock_suggest_height_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BedrockAntennaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1264,6 +1538,116 @@
           "3500MHz"
         ],
         "title": "Band"
+      },
+      "BedrockAntennaRequest": {
+        "properties": {
+          "analysis": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Analysis",
+            "description": "Link analysis result"
+          },
+          "tower": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Tower",
+            "description": "Tower information"
+          },
+          "target_clearance": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Target Clearance",
+            "description": "Target Fresnel zone clearance fraction",
+            "default": 0.6
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis",
+          "tower"
+        ],
+        "title": "BedrockAntennaRequest"
+      },
+      "BedrockBatchAnalysisRequest": {
+        "properties": {
+          "batch_results": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Batch Results",
+            "description": "Link analysis results to analyze"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4096.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          }
+        },
+        "type": "object",
+        "required": [
+          "batch_results"
+        ],
+        "title": "BedrockBatchAnalysisRequest"
       },
       "BedrockChatRequest": {
         "properties": {
@@ -1334,6 +1718,77 @@
         ],
         "title": "BedrockChatRequest"
       },
+      "BedrockScenarioRequest": {
+        "properties": {
+          "scenarios": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 2,
+            "title": "Scenarios",
+            "description": "List of scenario dicts to compare"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question",
+            "description": "Optional custom question"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id",
+            "description": "Bedrock model ID override"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4096.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scenarios"
+        ],
+        "title": "BedrockScenarioRequest"
+      },
       "Body_batch_reports_batch_reports_post": {
         "properties": {
           "csv_file": {
@@ -1358,8 +1813,14 @@
           },
           "tier": {
             "type": "string",
-            "pattern": "^(pro|enterprise)$",
+            "pattern": "^(starter|pro|business|enterprise)$",
             "title": "Tier"
+          },
+          "billing_cycle": {
+            "type": "string",
+            "pattern": "^(monthly|annual)$",
+            "title": "Billing Cycle",
+            "default": "monthly"
           },
           "country": {
             "anyOf": [
@@ -1382,6 +1843,152 @@
           "tier"
         ],
         "title": "CheckoutRequest"
+      },
+      "CoveragePredictRequest": {
+        "properties": {
+          "tower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tower Id"
+          },
+          "tx_lat": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Lat"
+          },
+          "tx_lon": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": -180.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Lon"
+          },
+          "tx_height_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Height M"
+          },
+          "tx_power_dbm": {
+            "type": "number",
+            "title": "Tx Power Dbm",
+            "default": 43.0
+          },
+          "tx_gain_dbi": {
+            "type": "number",
+            "title": "Tx Gain Dbi",
+            "default": 17.0
+          },
+          "band": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Band"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rx_lat": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rx Lat"
+          },
+          "rx_lon": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": -180.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rx Lon"
+          },
+          "rx_height_m": {
+            "type": "number",
+            "title": "Rx Height M",
+            "default": 10.0
+          },
+          "rx_gain_dbi": {
+            "type": "number",
+            "title": "Rx Gain Dbi",
+            "default": 12.0
+          },
+          "bbox": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array",
+                "maxItems": 4,
+                "minItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox",
+            "description": "[min_lat, min_lon, max_lat, max_lon] for grid mode"
+          },
+          "grid_size": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 2.0,
+            "title": "Grid Size",
+            "default": 20
+          },
+          "feasibility_threshold_dbm": {
+            "type": "number",
+            "title": "Feasibility Threshold Dbm",
+            "default": -95.0
+          },
+          "explain": {
+            "type": "boolean",
+            "title": "Explain",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "CoveragePredictRequest",
+        "description": "Request body for /coverage/predict.\n\nProvide either ``tower_id`` (existing tower) **or** the explicit\n``tx_lat`` / ``tx_lon`` / ``tx_height_m`` / ``band`` quartet.\nProvide either a single receiver (``rx_lat``/``rx_lon``) **or** a\nbounding box (``bbox``) to compute a coverage grid."
       },
       "HTTPValidationError": {
         "properties": {

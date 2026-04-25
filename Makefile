@@ -15,6 +15,7 @@ LAMBDA_PY_FILES = \
 	geocoder_br.py \
 	tower_db.py \
 	bedrock_service.py \
+	coverage_predict.py \
 	stripe_billing.py \
 	stripe_webhook_service.py \
 	job_store.py \
@@ -24,6 +25,7 @@ LAMBDA_PY_FILES = \
 LAMBDA_DATA_FILES = \
 	geocode_cache_br.json \
 	municipios_brasileiros.csv \
+	coverage_model.npz \
 	key_store.json
 
 .PHONY: build-TelecomTowerPowerFunction build-BatchWorkerFunction

@@ -11,6 +11,7 @@ OpenAPI: [/openapi.json](https://api.telecomtowerpower.com.br/openapi.json) · S
 | POST | `/analyze_link` | Analisa um receptor contra todas as torres no raio |
 | POST | `/plan_repeater` | Encontra cadeia multi-saltos para cenário NLOS |
 | POST | `/plan_repeater/async` | Versão assíncrona com job id |
+| POST | `/coverage/predict` | Predição de cobertura via ML com terreno SRTM (tier Pro+) |
 | GET  | `/job/{id}` | Status e resultado de job assíncrono |
 | POST | `/batch` | Processa CSV de receptores (tier Pro+) |
 | GET  | `/towers` | Lista/filtra torres por bbox, operadora, banda |
