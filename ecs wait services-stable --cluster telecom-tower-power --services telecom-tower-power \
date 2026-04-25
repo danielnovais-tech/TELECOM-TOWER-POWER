@@ -1,0 +1,167 @@
+{
+    "service": {
+        "serviceArn": "arn:aws:ecs:sa-east-1:490083271496:service/telecom-tower-power/telecom-tower-power",
+        "serviceName": "telecom-tower-power",
+        "clusterArn": "arn:aws:ecs:sa-east-1:490083271496:cluster/telecom-tower-power",
+        "loadBalancers": [
+            {
+                "targetGroupArn": "arn:aws:elasticloadbalancing:sa-east-1:490083271496:targetgroup/telecom-tower-power-api-tg/745d4c4b816c7aeb",
+                "containerName": "api",
+                "containerPort": 8000
+            }
+        ],
+        "serviceRegistries": [],
+        "status": "ACTIVE",
+        "desiredCount": 1,
+        "runningCount": 1,
+        "pendingCount": 0,
+        "launchType": "FARGATE",
+        "platformVersion": "LATEST",
+        "platformFamily": "Linux",
+        "taskDefinition": "arn:aws:ecs:sa-east-1:490083271496:task-definition/telecom-tower-power:20",
+        "deploymentConfiguration": {
+            "deploymentCircuitBreaker": {
+                "enable": false,
+                "rollback": false
+            },
+            "maximumPercent": 200,
+            "minimumHealthyPercent": 100,
+            "strategy": "ROLLING",
+            "bakeTimeInMinutes": 0
+        },
+        "deployments": [
+            {
+                "id": "ecs-svc/8516885801854770865",
+                "status": "PRIMARY",
+                "taskDefinition": "arn:aws:ecs:sa-east-1:490083271496:task-definition/telecom-tower-power:20",
+                "desiredCount": 0,
+                "pendingCount": 0,
+                "runningCount": 0,
+                "failedTasks": 0,
+                "createdAt": "2026-04-25T17:34:56.101000-03:00",
+                "updatedAt": "2026-04-25T17:34:56.101000-03:00",
+                "launchType": "FARGATE",
+                "platformVersion": "1.4.0",
+                "platformFamily": "Linux",
+                "networkConfiguration": {
+                    "awsvpcConfiguration": {
+                        "subnets": [
+                            "subnet-0455f02ba70359087",
+                            "subnet-01d2842549ded7c71",
+                            "subnet-07402e9d4181c6a78"
+                        ],
+                        "securityGroups": [
+                            "sg-0fd5fb2fa66191719"
+                        ],
+                        "assignPublicIp": "ENABLED"
+                    }
+                },
+                "rolloutState": "IN_PROGRESS",
+                "rolloutStateReason": "ECS deployment ecs-svc/8516885801854770865 in progress."
+            },
+            {
+                "id": "ecs-svc/3847233962052045231",
+                "status": "ACTIVE",
+                "taskDefinition": "arn:aws:ecs:sa-east-1:490083271496:task-definition/telecom-tower-power:20",
+                "desiredCount": 1,
+                "pendingCount": 0,
+                "runningCount": 1,
+                "failedTasks": 0,
+                "createdAt": "2026-04-25T17:23:22.561000-03:00",
+                "updatedAt": "2026-04-25T17:26:25.901000-03:00",
+                "launchType": "FARGATE",
+                "platformVersion": "1.4.0",
+                "platformFamily": "Linux",
+                "networkConfiguration": {
+                    "awsvpcConfiguration": {
+                        "subnets": [
+                            "subnet-0455f02ba70359087",
+                            "subnet-01d2842549ded7c71",
+                            "subnet-07402e9d4181c6a78"
+                        ],
+                        "securityGroups": [
+                            "sg-0fd5fb2fa66191719"
+                        ],
+                        "assignPublicIp": "ENABLED"
+                    }
+                },
+                "rolloutState": "COMPLETED",
+                "rolloutStateReason": "ECS deployment ecs-svc/3847233962052045231 completed."
+            }
+        ],
+        "roleArn": "arn:aws:iam::490083271496:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS",
+        "events": [
+            {
+                "id": "de7786e5-49a9-46ce-9015-6dce4501182d",
+                "createdAt": "2026-04-25T17:26:25.911000-03:00",
+                "message": "(service telecom-tower-power) has reached a steady state."
+            },
+            {
+                "id": "58db4cfc-2c28-4a3c-bcdc-7466dd7a832d",
+                "createdAt": "2026-04-25T17:26:25.910000-03:00",
+                "message": "(service telecom-tower-power) (deployment ecs-svc/3847233962052045231) deployment completed."
+            },
+            {
+                "id": "fe180355-e9cb-423d-b9a9-a7cfdb66af5d",
+                "createdAt": "2026-04-25T17:25:25.330000-03:00",
+                "message": "(service telecom-tower-power, taskSet ecs-svc/7912587790335496662) has begun draining connections on 1 tasks."
+            },
+            {
+                "id": "75481cad-cb45-47d1-aaf6-87225cab3058",
+                "createdAt": "2026-04-25T17:25:25.323000-03:00",
+                "message": "(service telecom-tower-power) deregistered 1 targets in (target-group arn:aws:elasticloadbalancing:sa-east-1:490083271496:targetgroup/telecom-tower-power-api-tg/745d4c4b816c7aeb)"
+            },
+            {
+                "id": "4db581ca-7161-4466-a20e-46df4735d8ae",
+                "createdAt": "2026-04-25T17:25:15.100000-03:00",
+                "message": "(service telecom-tower-power) has stopped 1 running tasks: (task 8afb53e97ca64a4085a49b0da9fd35ec)."
+            },
+            {
+                "id": "b7d90fb8-9eec-4382-b592-06ebb80bcede",
+                "createdAt": "2026-04-25T17:24:24.370000-03:00",
+                "message": "(service telecom-tower-power) registered 1 targets in (target-group arn:aws:elasticloadbalancing:sa-east-1:490083271496:targetgroup/telecom-tower-power-api-tg/745d4c4b816c7aeb)"
+            },
+            {
+                "id": "04a0ee46-0425-4f0f-a0e6-d952d54d7875",
+                "createdAt": "2026-04-25T17:23:43.223000-03:00",
+                "message": "(service telecom-tower-power) has started 1 tasks: (task ee32f2e416664820b0b1b61d844ba584)."
+            },
+            {
+                "id": "f2e8844d-907d-498f-8cbf-6bb7d9744a33",
+                "createdAt": "2026-04-25T16:31:35.658000-03:00",
+                "message": "(service telecom-tower-power) has reached a steady state."
+            },
+            {
+                "id": "80009634-04d2-4b4d-ba24-2d261ec3d464",
+                "createdAt": "2026-04-25T10:30:55.944000-03:00",
+                "message": "(service telecom-tower-power) has reached a steady state."
+            },
+            {
+                "id": "1c32125a-9dfa-4d74-9758-84e8a6eea554",
+                "createdAt": "2026-04-25T10:30:55.943000-03:00",
+                "message": "(service telecom-tower-power) (deployment ecs-svc/7912587790335496662) deployment completed."
+            },
+            {
+                "id": "4881fd4c-13b7-41cb-ab4a-43b7bf76ce89",
+                "createdAt": "2026-04-25T10:30:26.036000-03:00",
+                "message": "(service telecom-tower-power) registered 1 targets in (target-group arn:aws:elasticloadbalancing:sa-east-1:490083271496:targetgroup/telecom-tower-power-api-tg/745d4c4b816c7aeb)"
+            },
+            {
+                "id": "fa1cdc02-8a1e-44f0-98cc-c4ad0880ed45",
+                "createdAt": "2026-04-25T10:29:45.684000-03:00",
+                "message": "(service telecom-tower-power) has started 1 tasks: (task 8afb53e97ca64a4085a49b0da9fd35ec)."
+            },
+            {
+                "id": "7a8a6b60-8d57-4f77-aaae-4051f02f3549",
+                "createdAt": "2026-04-25T10:28:53.168000-03:00",
+                "message": "(service telecom-tower-power) has reached a steady state."
+            },
+            {
+                "id": "e77e78dc-c8ba-4157-ab98-485c81760b3c",
+                "createdAt": "2026-04-25T10:28:53.167000-03:00",
+                "message": "(service telecom-tower-power) (deployment ecs-svc/2471402769683798482) deployment completed."
+            },
+            {
+                "id": "441a8bc2-ba94-4095-bb40-09a3432b92d9",
+                "createdAt": "2026-04-25T09:44:17.524000-03:00",
+                "message": "(service te
