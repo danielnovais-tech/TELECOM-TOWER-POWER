@@ -174,5 +174,14 @@
     "stripe_customer_id": null,
     "stripe_subscription_id": null,
     "created": 1776572691.0593867
+  },
+  "ttp_3WChBVFZQaDxlB7O44VjFL4rRsStLz0wh34tVCxZlIo": {
+    "tier": "pro",
+    "billing_cycle": "monthly",
+    "owner": "test-pro@example.com",
+    "email": "test-pro@example.com",
+    "stripe_customer_id": null,
+    "stripe_subscription_id": null,
+    "created": 1777160115.0335774
   }
 }
