@@ -62,7 +62,7 @@
         },
         {
           "name": "COVERAGE_MODEL_S3_URI",
-          "value": ""
+          "value": "s3://telecom-tower-power-results/models/coverage_model.npz"
         }
       ],
       "secrets": [
