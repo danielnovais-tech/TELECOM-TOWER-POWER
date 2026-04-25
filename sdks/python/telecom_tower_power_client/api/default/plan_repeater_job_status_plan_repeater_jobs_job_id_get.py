@@ -1,41 +1,24 @@
 from http import HTTPStatus
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.http_validation_error import HTTPValidationError
-from ...types import UNSET, Response, Unset
+from ...types import Response
 
 
 def _get_kwargs(
-    *,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
+    job_id: str,
 ) -> dict[str, Any]:
-
-    params: dict[str, Any] = {}
-
-    params["tower_id"] = tower_id
-
-    params["lat"] = lat
-
-    params["lon"] = lon
-
-    params["height_m"] = height_m
-
-    params["antenna_gain"] = antenna_gain
-
-    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/export_report/pdf",
-        "params": params,
+        "url": "/plan_repeater/jobs/{job_id}".format(
+            job_id=quote(str(job_id), safe=""),
+        ),
     }
 
     return _kwargs
@@ -71,24 +54,17 @@ def _build_response(
 
 
 def sync_detailed(
+    job_id: str,
     *,
     client: AuthenticatedClient,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
 ) -> Response[Any | HTTPValidationError]:
-    """Export Report Pdf
+    """Plan Repeater Job Status
 
-     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
+     Return the state (queued / running / done / error) and, when ready,
+    the repeater_chain produced by ``POST /plan_repeater/async``.
 
     Args:
-        tower_id (str):
-        lat (float):
-        lon (float):
-        height_m (float | Unset):  Default: 10.0.
-        antenna_gain (float | Unset):  Default: 12.0.
+        job_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -99,11 +75,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        tower_id=tower_id,
-        lat=lat,
-        lon=lon,
-        height_m=height_m,
-        antenna_gain=antenna_gain,
+        job_id=job_id,
     )
 
     response = client.get_httpx_client().request(
@@ -114,24 +86,17 @@ def sync_detailed(
 
 
 def sync(
+    job_id: str,
     *,
     client: AuthenticatedClient,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
 ) -> Any | HTTPValidationError | None:
-    """Export Report Pdf
+    """Plan Repeater Job Status
 
-     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
+     Return the state (queued / running / done / error) and, when ready,
+    the repeater_chain produced by ``POST /plan_repeater/async``.
 
     Args:
-        tower_id (str):
-        lat (float):
-        lon (float):
-        height_m (float | Unset):  Default: 10.0.
-        antenna_gain (float | Unset):  Default: 12.0.
+        job_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -142,34 +107,23 @@ def sync(
     """
 
     return sync_detailed(
+        job_id=job_id,
         client=client,
-        tower_id=tower_id,
-        lat=lat,
-        lon=lon,
-        height_m=height_m,
-        antenna_gain=antenna_gain,
     ).parsed
 
 
 async def asyncio_detailed(
+    job_id: str,
     *,
     client: AuthenticatedClient,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
 ) -> Response[Any | HTTPValidationError]:
-    """Export Report Pdf
+    """Plan Repeater Job Status
 
-     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
+     Return the state (queued / running / done / error) and, when ready,
+    the repeater_chain produced by ``POST /plan_repeater/async``.
 
     Args:
-        tower_id (str):
-        lat (float):
-        lon (float):
-        height_m (float | Unset):  Default: 10.0.
-        antenna_gain (float | Unset):  Default: 12.0.
+        job_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -180,11 +134,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        tower_id=tower_id,
-        lat=lat,
-        lon=lon,
-        height_m=height_m,
-        antenna_gain=antenna_gain,
+        job_id=job_id,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -193,24 +143,17 @@ async def asyncio_detailed(
 
 
 async def asyncio(
+    job_id: str,
     *,
     client: AuthenticatedClient,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
 ) -> Any | HTTPValidationError | None:
-    """Export Report Pdf
+    """Plan Repeater Job Status
 
-     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
+     Return the state (queued / running / done / error) and, when ready,
+    the repeater_chain produced by ``POST /plan_repeater/async``.
 
     Args:
-        tower_id (str):
-        lat (float):
-        lon (float):
-        height_m (float | Unset):  Default: 10.0.
-        antenna_gain (float | Unset):  Default: 12.0.
+        job_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -222,11 +165,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
+            job_id=job_id,
             client=client,
-            tower_id=tower_id,
-            lat=lat,
-            lon=lon,
-            height_m=height_m,
-            antenna_gain=antenna_gain,
         )
     ).parsed

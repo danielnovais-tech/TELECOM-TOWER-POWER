@@ -81,7 +81,7 @@ def sync_detailed(
 ) -> Response[Any | HTTPValidationError]:
     """Export Report
 
-     Generate a professional PDF engineering report (Pro/Enterprise tiers only).
+     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
 
     Args:
         tower_id (str):
@@ -124,7 +124,7 @@ def sync(
 ) -> Any | HTTPValidationError | None:
     """Export Report
 
-     Generate a professional PDF engineering report (Pro/Enterprise tiers only).
+     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
 
     Args:
         tower_id (str):
@@ -162,7 +162,7 @@ async def asyncio_detailed(
 ) -> Response[Any | HTTPValidationError]:
     """Export Report
 
-     Generate a professional PDF engineering report (Pro/Enterprise tiers only).
+     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
 
     Args:
         tower_id (str):
@@ -203,7 +203,7 @@ async def asyncio(
 ) -> Any | HTTPValidationError | None:
     """Export Report
 
-     Generate a professional PDF engineering report (Pro/Enterprise tiers only).
+     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
 
     Args:
         tower_id (str):

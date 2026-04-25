@@ -5,39 +5,27 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.bedrock_antenna_request import BedrockAntennaRequest
 from ...models.http_validation_error import HTTPValidationError
-from ...types import UNSET, Response, Unset
+from ...types import Response
 
 
 def _get_kwargs(
     *,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
+    body: BedrockAntennaRequest,
 ) -> dict[str, Any]:
-
-    params: dict[str, Any] = {}
-
-    params["tower_id"] = tower_id
-
-    params["lat"] = lat
-
-    params["lon"] = lon
-
-    params["height_m"] = height_m
-
-    params["antenna_gain"] = antenna_gain
-
-    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
+    headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
-        "method": "get",
-        "url": "/export_report/pdf",
-        "params": params,
+        "method": "post",
+        "url": "/bedrock/suggest-height",
     }
 
+    _kwargs["json"] = body.to_dict()
+
+    headers["Content-Type"] = "application/json"
+
+    _kwargs["headers"] = headers
     return _kwargs
 
 
@@ -73,22 +61,17 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
+    body: BedrockAntennaRequest,
 ) -> Response[Any | HTTPValidationError]:
-    """Export Report Pdf
+    """Bedrock Suggest Height
 
-     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
+     AI-powered antenna height recommendation based on link analysis
+    and terrain profile. Calculates the optimal height for the desired
+    Fresnel zone clearance.
+    Requires PRO or ENTERPRISE tier.
 
     Args:
-        tower_id (str):
-        lat (float):
-        lon (float):
-        height_m (float | Unset):  Default: 10.0.
-        antenna_gain (float | Unset):  Default: 12.0.
+        body (BedrockAntennaRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -99,11 +82,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        tower_id=tower_id,
-        lat=lat,
-        lon=lon,
-        height_m=height_m,
-        antenna_gain=antenna_gain,
+        body=body,
     )
 
     response = client.get_httpx_client().request(
@@ -116,22 +95,17 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
+    body: BedrockAntennaRequest,
 ) -> Any | HTTPValidationError | None:
-    """Export Report Pdf
+    """Bedrock Suggest Height
 
-     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
+     AI-powered antenna height recommendation based on link analysis
+    and terrain profile. Calculates the optimal height for the desired
+    Fresnel zone clearance.
+    Requires PRO or ENTERPRISE tier.
 
     Args:
-        tower_id (str):
-        lat (float):
-        lon (float):
-        height_m (float | Unset):  Default: 10.0.
-        antenna_gain (float | Unset):  Default: 12.0.
+        body (BedrockAntennaRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -143,33 +117,24 @@ def sync(
 
     return sync_detailed(
         client=client,
-        tower_id=tower_id,
-        lat=lat,
-        lon=lon,
-        height_m=height_m,
-        antenna_gain=antenna_gain,
+        body=body,
     ).parsed
 
 
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
+    body: BedrockAntennaRequest,
 ) -> Response[Any | HTTPValidationError]:
-    """Export Report Pdf
+    """Bedrock Suggest Height
 
-     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
+     AI-powered antenna height recommendation based on link analysis
+    and terrain profile. Calculates the optimal height for the desired
+    Fresnel zone clearance.
+    Requires PRO or ENTERPRISE tier.
 
     Args:
-        tower_id (str):
-        lat (float):
-        lon (float):
-        height_m (float | Unset):  Default: 10.0.
-        antenna_gain (float | Unset):  Default: 12.0.
+        body (BedrockAntennaRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -180,11 +145,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        tower_id=tower_id,
-        lat=lat,
-        lon=lon,
-        height_m=height_m,
-        antenna_gain=antenna_gain,
+        body=body,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -195,22 +156,17 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    tower_id: str,
-    lat: float,
-    lon: float,
-    height_m: float | Unset = 10.0,
-    antenna_gain: float | Unset = 12.0,
+    body: BedrockAntennaRequest,
 ) -> Any | HTTPValidationError | None:
-    """Export Report Pdf
+    """Bedrock Suggest Height
 
-     Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
+     AI-powered antenna height recommendation based on link analysis
+    and terrain profile. Calculates the optimal height for the desired
+    Fresnel zone clearance.
+    Requires PRO or ENTERPRISE tier.
 
     Args:
-        tower_id (str):
-        lat (float):
-        lon (float):
-        height_m (float | Unset):  Default: 10.0.
-        antenna_gain (float | Unset):  Default: 12.0.
+        body (BedrockAntennaRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -223,10 +179,6 @@ async def asyncio(
     return (
         await asyncio_detailed(
             client=client,
-            tower_id=tower_id,
-            lat=lat,
-            lon=lon,
-            height_m=height_m,
-            antenna_gain=antenna_gain,
+            body=body,
         )
     ).parsed

@@ -53,7 +53,7 @@ export interface paths {
         };
         /**
          * List Towers
-         * @description List all towers, optionally filtered by operator.
+         * @description List towers with pagination. Use *offset* and *limit* to page through results.
          */
         get: operations["list_towers_towers_get"];
         put?: never;
@@ -137,6 +137,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/coverage/predict": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Coverage Predict
+         * @description ML-based signal coverage prediction.
+         *
+         *     Uses a terrain-aware regression model trained on SRTM elevation
+         *     features. Routes to a SageMaker endpoint when
+         *     ``SAGEMAKER_COVERAGE_ENDPOINT`` is configured, otherwise serves the
+         *     locally-trained model, with a deterministic physics fallback when
+         *     no model artefact is available.
+         *
+         *     Modes:
+         *     - **point** — provide ``rx_lat``/``rx_lon`` for a single prediction.
+         *     - **grid**  — provide ``bbox`` and ``grid_size`` for a coverage map.
+         *
+         *     Restricted to Pro / Business / Enterprise tiers.
+         */
+        post: operations["coverage_predict_coverage_predict_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/plan_repeater": {
         parameters: {
             query?: never;
@@ -157,6 +189,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/plan_repeater/async": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Plan Repeater Async
+         * @description Submit a repeater-planning job. Returns a job_id; poll
+         *     ``GET /plan_repeater/jobs/{job_id}`` for progress and the final chain.
+         *
+         *     Useful for large candidate sets (max_hops >= 4) where synchronous
+         *     completion may exceed edge/CDN HTTP timeouts.
+         */
+        post: operations["plan_repeater_async_plan_repeater_async_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/plan_repeater/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plan Repeater Job Status
+         * @description Return the state (queued / running / done / error) and, when ready,
+         *     the repeater_chain produced by ``POST /plan_repeater/async``.
+         */
+        get: operations["plan_repeater_job_status_plan_repeater_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/export_report": {
         parameters: {
             query?: never;
@@ -166,7 +243,7 @@ export interface paths {
         };
         /**
          * Export Report
-         * @description Generate a professional PDF engineering report (Pro/Enterprise tiers only).
+         * @description Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
          */
         get: operations["export_report_export_report_get"];
         put?: never;
@@ -186,7 +263,7 @@ export interface paths {
         };
         /**
          * Export Report Pdf
-         * @description Generate a professional PDF engineering report (Pro/Enterprise tiers only).
+         * @description Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
          */
         get: operations["export_report_pdf_export_report_pdf_get"];
         put?: never;
@@ -230,7 +307,7 @@ export interface paths {
         };
         /**
          * Get Job Status
-         * @description Poll the status of a background batch job.
+         * @description Poll the status of a background batch job (Pro/Enterprise only).
          */
         get: operations["get_job_status_jobs__job_id__get"];
         put?: never;
@@ -250,7 +327,10 @@ export interface paths {
         };
         /**
          * Download Job Result
-         * @description Download the ZIP file produced by a completed batch job.
+         * @description Download the ZIP file produced by a completed batch job (Pro/Enterprise only).
+         *
+         *     If the result is stored in S3, returns a redirect to a presigned URL.
+         *     If stored locally, streams the file directly.
          */
         get: operations["download_job_result_jobs__job_id__download_get"];
         put?: never;
@@ -297,6 +377,27 @@ export interface paths {
          *     For enterprise plans, pass *country* to pre-download SRTM elevation tiles.
          */
         post: operations["signup_checkout_signup_checkout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/stripe_webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stripe Webhook
+         * @description Receive Stripe webhook events (checkout.session.completed,
+         *     customer.subscription.deleted, etc.).
+         */
+        post: operations["stripe_webhook_stripe_webhook_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -357,9 +458,89 @@ export interface paths {
         /**
          * Signup Status
          * @description Look up an existing API key by email address.
-         *     Returns the key, tier, and account status.
+         *     Returns a masked key, tier, and account status.
          */
         post: operations["signup_status_signup_status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/portal/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Portal Profile
+         * @description Return the caller's profile: masked API key, tier, limits, and account info.
+         */
+        get: operations["portal_profile_portal_profile_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/portal/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Portal Usage
+         * @description Return usage statistics for the caller's API key.
+         */
+        get: operations["portal_usage_portal_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/portal/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Portal Jobs
+         * @description Return the caller's batch jobs (most recent first).
+         */
+        get: operations["portal_jobs_portal_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/portal/billing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Portal Billing
+         * @description Return billing information from Stripe for the caller.
+         */
+        get: operations["portal_billing_portal_billing_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -407,6 +588,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bedrock/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bedrock Chat
+         * @description Send a prompt to an Amazon Bedrock base foundation model and return
+         *     the generated response.  Supports Titan, Claude, and Llama model families.
+         *     Requires PRO or ENTERPRISE tier.
+         */
+        post: operations["bedrock_chat_bedrock_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bedrock/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bedrock Models
+         * @description List available Bedrock foundation models for the AI playground.
+         */
+        get: operations["bedrock_models_bedrock_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bedrock/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bedrock Compare Scenarios
+         * @description Compare multiple RF scenarios using AI analysis.
+         *     Accepts 2-10 scenarios (e.g. different frequencies, antenna heights)
+         *     and returns an engineering comparison with recommendations.
+         *     Requires PRO or ENTERPRISE tier.
+         */
+        post: operations["bedrock_compare_scenarios_bedrock_compare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bedrock/batch-analyze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bedrock Batch Analyze
+         * @description Analyze a batch of link analysis results with AI.
+         *     Processes up to 500 link results and provides consolidated
+         *     coverage assessment, worst-link identification, and prioritized
+         *     remediation recommendations.
+         *     Requires PRO or ENTERPRISE tier.
+         */
+        post: operations["bedrock_batch_analyze_bedrock_batch_analyze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bedrock/suggest-height": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bedrock Suggest Height
+         * @description AI-powered antenna height recommendation based on link analysis
+         *     and terrain profile. Calculates the optimal height for the desired
+         *     Fresnel zone clearance.
+         *     Requires PRO or ENTERPRISE tier.
+         */
+        post: operations["bedrock_suggest_height_bedrock_suggest_height_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -415,7 +708,102 @@ export interface components {
          * Band
          * @enum {string}
          */
-        Band: "700MHz" | "1800MHz" | "2600MHz" | "3500MHz";
+        Band: "700MHz" | "850MHz" | "900MHz" | "1800MHz" | "2100MHz" | "2600MHz" | "3500MHz";
+        /** BedrockAntennaRequest */
+        BedrockAntennaRequest: {
+            /**
+             * Analysis
+             * @description Link analysis result
+             */
+            analysis: {
+                [key: string]: unknown;
+            };
+            /**
+             * Tower
+             * @description Tower information
+             */
+            tower: {
+                [key: string]: unknown;
+            };
+            /**
+             * Target Clearance
+             * @description Target Fresnel zone clearance fraction
+             * @default 0.6
+             */
+            target_clearance: number;
+            /** Model Id */
+            model_id?: string | null;
+        };
+        /** BedrockBatchAnalysisRequest */
+        BedrockBatchAnalysisRequest: {
+            /**
+             * Batch Results
+             * @description Link analysis results to analyze
+             */
+            batch_results: {
+                [key: string]: unknown;
+            }[];
+            /** Question */
+            question?: string | null;
+            /** Model Id */
+            model_id?: string | null;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Temperature */
+            temperature?: number | null;
+        };
+        /** BedrockChatRequest */
+        BedrockChatRequest: {
+            /**
+             * Prompt
+             * @description User prompt
+             */
+            prompt: string;
+            /**
+             * Model Id
+             * @description Bedrock model ID override
+             */
+            model_id?: string | null;
+            /**
+             * Max Tokens
+             * @description Max response tokens
+             */
+            max_tokens?: number | null;
+            /**
+             * Temperature
+             * @description Sampling temperature
+             */
+            temperature?: number | null;
+            /**
+             * Context
+             * @description Analysis context JSON
+             */
+            context?: string | null;
+        };
+        /** BedrockScenarioRequest */
+        BedrockScenarioRequest: {
+            /**
+             * Scenarios
+             * @description List of scenario dicts to compare
+             */
+            scenarios: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Question
+             * @description Optional custom question
+             */
+            question?: string | null;
+            /**
+             * Model Id
+             * @description Bedrock model ID override
+             */
+            model_id?: string | null;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Temperature */
+            temperature?: number | null;
+        };
         /** Body_batch_reports_batch_reports_post */
         Body_batch_reports_batch_reports_post: {
             /** Csv File */
@@ -428,10 +816,79 @@ export interface components {
             /** Tier */
             tier: string;
             /**
+             * Billing Cycle
+             * @default monthly
+             */
+            billing_cycle: string;
+            /**
              * Country
              * @description ISO 3166-1 alpha-2 country code for SRTM tile pre-download (enterprise only)
              */
             country?: string | null;
+        };
+        /**
+         * CoveragePredictRequest
+         * @description Request body for /coverage/predict.
+         *
+         *     Provide either ``tower_id`` (existing tower) **or** the explicit
+         *     ``tx_lat`` / ``tx_lon`` / ``tx_height_m`` / ``band`` quartet.
+         *     Provide either a single receiver (``rx_lat``/``rx_lon``) **or** a
+         *     bounding box (``bbox``) to compute a coverage grid.
+         */
+        CoveragePredictRequest: {
+            /** Tower Id */
+            tower_id?: string | null;
+            /** Tx Lat */
+            tx_lat?: number | null;
+            /** Tx Lon */
+            tx_lon?: number | null;
+            /** Tx Height M */
+            tx_height_m?: number | null;
+            /**
+             * Tx Power Dbm
+             * @default 43
+             */
+            tx_power_dbm: number;
+            /**
+             * Tx Gain Dbi
+             * @default 17
+             */
+            tx_gain_dbi: number;
+            band?: components["schemas"]["Band"] | null;
+            /** Rx Lat */
+            rx_lat?: number | null;
+            /** Rx Lon */
+            rx_lon?: number | null;
+            /**
+             * Rx Height M
+             * @default 10
+             */
+            rx_height_m: number;
+            /**
+             * Rx Gain Dbi
+             * @default 12
+             */
+            rx_gain_dbi: number;
+            /**
+             * Bbox
+             * @description [min_lat, min_lon, max_lat, max_lon] for grid mode
+             */
+            bbox?: number[] | null;
+            /**
+             * Grid Size
+             * @default 20
+             */
+            grid_size: number;
+            /**
+             * Feasibility Threshold Dbm
+             * @default -95
+             */
+            feasibility_threshold_dbm: number;
+            /**
+             * Explain
+             * @default false
+             */
+            explain: boolean;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -581,6 +1038,7 @@ export interface operations {
             query?: {
                 operator?: string | null;
                 limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -807,6 +1265,39 @@ export interface operations {
             };
         };
     };
+    coverage_predict_coverage_predict_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoveragePredictRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     plan_repeater_plan_repeater_post: {
         parameters: {
             query: {
@@ -822,6 +1313,73 @@ export interface operations {
                 "application/json": components["schemas"]["ReceiverInput"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plan_repeater_async_plan_repeater_async_post: {
+        parameters: {
+            query: {
+                tower_id: string;
+                max_hops?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReceiverInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plan_repeater_job_status_plan_repeater_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -1098,6 +1656,26 @@ export interface operations {
             };
         };
     };
+    stripe_webhook_stripe_webhook_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     signup_success_signup_success_get: {
         parameters: {
             query: {
@@ -1162,6 +1740,97 @@ export interface operations {
             };
         };
     };
+    portal_profile_portal_profile_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    portal_usage_portal_usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    portal_jobs_portal_jobs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    portal_billing_portal_billing_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     srtm_tile_status_srtm_status__country__get: {
         parameters: {
             query?: never;
@@ -1203,6 +1872,158 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PrefetchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bedrock_chat_bedrock_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BedrockChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bedrock_models_bedrock_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    bedrock_compare_scenarios_bedrock_compare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BedrockScenarioRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bedrock_batch_analyze_bedrock_batch_analyze_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BedrockBatchAnalysisRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bedrock_suggest_height_bedrock_suggest_height_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BedrockAntennaRequest"];
             };
         };
         responses: {

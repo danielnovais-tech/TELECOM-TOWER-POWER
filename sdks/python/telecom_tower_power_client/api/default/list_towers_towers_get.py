@@ -12,7 +12,7 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     *,
     operator: None | str | Unset = UNSET,
-    limit: int | Unset = 100,
+    limit: int | Unset = 1000,
     offset: int | Unset = 0,
 ) -> dict[str, Any]:
 
@@ -73,7 +73,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient,
     operator: None | str | Unset = UNSET,
-    limit: int | Unset = 100,
+    limit: int | Unset = 1000,
     offset: int | Unset = 0,
 ) -> Response[Any | HTTPValidationError]:
     """List Towers
@@ -82,7 +82,7 @@ def sync_detailed(
 
     Args:
         operator (None | str | Unset):
-        limit (int | Unset):  Default: 100.
+        limit (int | Unset):  Default: 1000.
         offset (int | Unset):  Default: 0.
 
     Raises:
@@ -110,7 +110,7 @@ def sync(
     *,
     client: AuthenticatedClient,
     operator: None | str | Unset = UNSET,
-    limit: int | Unset = 100,
+    limit: int | Unset = 1000,
     offset: int | Unset = 0,
 ) -> Any | HTTPValidationError | None:
     """List Towers
@@ -119,7 +119,7 @@ def sync(
 
     Args:
         operator (None | str | Unset):
-        limit (int | Unset):  Default: 100.
+        limit (int | Unset):  Default: 1000.
         offset (int | Unset):  Default: 0.
 
     Raises:
@@ -142,7 +142,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
     operator: None | str | Unset = UNSET,
-    limit: int | Unset = 100,
+    limit: int | Unset = 1000,
     offset: int | Unset = 0,
 ) -> Response[Any | HTTPValidationError]:
     """List Towers
@@ -151,7 +151,7 @@ async def asyncio_detailed(
 
     Args:
         operator (None | str | Unset):
-        limit (int | Unset):  Default: 100.
+        limit (int | Unset):  Default: 1000.
         offset (int | Unset):  Default: 0.
 
     Raises:
@@ -177,7 +177,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient,
     operator: None | str | Unset = UNSET,
-    limit: int | Unset = 100,
+    limit: int | Unset = 1000,
     offset: int | Unset = 0,
 ) -> Any | HTTPValidationError | None:
     """List Towers
@@ -186,7 +186,7 @@ async def asyncio(
 
     Args:
         operator (None | str | Unset):
-        limit (int | Unset):  Default: 100.
+        limit (int | Unset):  Default: 1000.
         offset (int | Unset):  Default: 0.
 
     Raises:

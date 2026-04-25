@@ -12,7 +12,7 @@ Snapshot of the production environment. Last verified: **April 2026**.
 - **Caddy** listens on `:80` behind the ALB (which terminates TLS). Routing rules:
     - `api.telecomtowerpower.com.br` → Railway edge (`i1fuknjg.up.railway.app`).
       **TLS termination depends on Route 53 failover state** — see below.
-    - `www.*` / `app.*` API paths (`/api/*`, `/health*`, `/calculate*`, `/towers*`, `/batch*`, `/jobs*`, `/docs*`, `/openapi.json`, `/stripe*`, `/usage*`, `/api-key*`, `/signup*`, `/login*`, `/profile*`, `/portal*`, `/analyze*`, `/plan_repeater*`, `/export_report*`, `/bedrock*`, `/srtm*`) → Railway.
+    - `www.*` / `app.*` API paths (`/api/*`, `/health*`, `/calculate*`, `/towers*`, `/batch*`, `/jobs*`, `/docs*`, `/openapi.json`, `/stripe*`, `/usage*`, `/api-key*`, `/signup*`, `/login*`, `/profile*`, `/portal*`, `/analyze*`, `/plan_repeater*`, `/export_report*`, `/bedrock*`, `/coverage*`, `/srtm*`) → Railway.
     - `/webhook*` → local Stripe handler on `localhost:8001`.
     - `/grafana*` → local Grafana on `localhost:3001`.
     - Fallback → React SPA on `localhost:3000`.

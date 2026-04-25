@@ -2,9 +2,13 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { BedrockAntennaRequest } from '../models/BedrockAntennaRequest';
+import type { BedrockBatchAnalysisRequest } from '../models/BedrockBatchAnalysisRequest';
 import type { BedrockChatRequest } from '../models/BedrockChatRequest';
+import type { BedrockScenarioRequest } from '../models/BedrockScenarioRequest';
 import type { Body_batch_reports_batch_reports_post } from '../models/Body_batch_reports_batch_reports_post';
 import type { CheckoutRequest } from '../models/CheckoutRequest';
+import type { CoveragePredictRequest } from '../models/CoveragePredictRequest';
 import type { KeyLookupRequest } from '../models/KeyLookupRequest';
 import type { LinkAnalysisResponse } from '../models/LinkAnalysisResponse';
 import type { PrefetchRequest } from '../models/PrefetchRequest';
@@ -70,7 +74,7 @@ export class DefaultService {
      */
     public listTowersTowersGet(
         operator?: (string | null),
-        limit: number = 100,
+        limit: number = 1000,
         offset?: number,
     ): CancelablePromise<any> {
         return this.httpRequest.request({
@@ -210,6 +214,38 @@ export class DefaultService {
         });
     }
     /**
+     * Coverage Predict
+     * ML-based signal coverage prediction.
+     *
+     * Uses a terrain-aware regression model trained on SRTM elevation
+     * features. Routes to a SageMaker endpoint when
+     * ``SAGEMAKER_COVERAGE_ENDPOINT`` is configured, otherwise serves the
+     * locally-trained model, with a deterministic physics fallback when
+     * no model artefact is available.
+     *
+     * Modes:
+     * - **point** — provide ``rx_lat``/``rx_lon`` for a single prediction.
+     * - **grid**  — provide ``bbox`` and ``grid_size`` for a coverage map.
+     *
+     * Restricted to Pro / Business / Enterprise tiers.
+     * @param requestBody
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public coveragePredictCoveragePredictPost(
+        requestBody: CoveragePredictRequest,
+    ): CancelablePromise<any> {
+        return this.httpRequest.request({
+            method: 'POST',
+            url: '/coverage/predict',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Plan Repeater
      * Propose an optimized repeater chain using Dijkstra path search.
      * @param towerId
@@ -238,8 +274,62 @@ export class DefaultService {
         });
     }
     /**
+     * Plan Repeater Async
+     * Submit a repeater-planning job. Returns a job_id; poll
+     * ``GET /plan_repeater/jobs/{job_id}`` for progress and the final chain.
+     *
+     * Useful for large candidate sets (max_hops >= 4) where synchronous
+     * completion may exceed edge/CDN HTTP timeouts.
+     * @param towerId
+     * @param requestBody
+     * @param maxHops
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public planRepeaterAsyncPlanRepeaterAsyncPost(
+        towerId: string,
+        requestBody: ReceiverInput,
+        maxHops: number = 3,
+    ): CancelablePromise<any> {
+        return this.httpRequest.request({
+            method: 'POST',
+            url: '/plan_repeater/async',
+            query: {
+                'tower_id': towerId,
+                'max_hops': maxHops,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Plan Repeater Job Status
+     * Return the state (queued / running / done / error) and, when ready,
+     * the repeater_chain produced by ``POST /plan_repeater/async``.
+     * @param jobId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public planRepeaterJobStatusPlanRepeaterJobsJobIdGet(
+        jobId: string,
+    ): CancelablePromise<any> {
+        return this.httpRequest.request({
+            method: 'GET',
+            url: '/plan_repeater/jobs/{job_id}',
+            path: {
+                'job_id': jobId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Export Report
-     * Generate a professional PDF engineering report (Pro/Enterprise tiers only).
+     * Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
      * @param towerId
      * @param lat
      * @param lon
@@ -272,7 +362,7 @@ export class DefaultService {
     }
     /**
      * Export Report Pdf
-     * Generate a professional PDF engineering report (Pro/Enterprise tiers only).
+     * Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo).
      * @param towerId
      * @param lat
      * @param lon
@@ -625,6 +715,76 @@ export class DefaultService {
         return this.httpRequest.request({
             method: 'GET',
             url: '/bedrock/models',
+        });
+    }
+    /**
+     * Bedrock Compare Scenarios
+     * Compare multiple RF scenarios using AI analysis.
+     * Accepts 2-10 scenarios (e.g. different frequencies, antenna heights)
+     * and returns an engineering comparison with recommendations.
+     * Requires PRO or ENTERPRISE tier.
+     * @param requestBody
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public bedrockCompareScenariosBedrockComparePost(
+        requestBody: BedrockScenarioRequest,
+    ): CancelablePromise<any> {
+        return this.httpRequest.request({
+            method: 'POST',
+            url: '/bedrock/compare',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Bedrock Batch Analyze
+     * Analyze a batch of link analysis results with AI.
+     * Processes up to 500 link results and provides consolidated
+     * coverage assessment, worst-link identification, and prioritized
+     * remediation recommendations.
+     * Requires PRO or ENTERPRISE tier.
+     * @param requestBody
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public bedrockBatchAnalyzeBedrockBatchAnalyzePost(
+        requestBody: BedrockBatchAnalysisRequest,
+    ): CancelablePromise<any> {
+        return this.httpRequest.request({
+            method: 'POST',
+            url: '/bedrock/batch-analyze',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Bedrock Suggest Height
+     * AI-powered antenna height recommendation based on link analysis
+     * and terrain profile. Calculates the optimal height for the desired
+     * Fresnel zone clearance.
+     * Requires PRO or ENTERPRISE tier.
+     * @param requestBody
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public bedrockSuggestHeightBedrockSuggestHeightPost(
+        requestBody: BedrockAntennaRequest,
+    ): CancelablePromise<any> {
+        return this.httpRequest.request({
+            method: 'POST',
+            url: '/bedrock/suggest-height',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
         });
     }
 }

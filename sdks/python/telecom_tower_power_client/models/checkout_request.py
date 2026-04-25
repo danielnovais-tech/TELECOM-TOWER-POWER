@@ -17,11 +17,13 @@ class CheckoutRequest:
     Attributes:
         email (str):
         tier (str):
+        billing_cycle (str | Unset):  Default: 'monthly'.
         country (None | str | Unset): ISO 3166-1 alpha-2 country code for SRTM tile pre-download (enterprise only)
     """
 
     email: str
     tier: str
+    billing_cycle: str | Unset = "monthly"
     country: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -29,6 +31,8 @@ class CheckoutRequest:
         email = self.email
 
         tier = self.tier
+
+        billing_cycle = self.billing_cycle
 
         country: None | str | Unset
         if isinstance(self.country, Unset):
@@ -44,6 +48,8 @@ class CheckoutRequest:
                 "tier": tier,
             }
         )
+        if billing_cycle is not UNSET:
+            field_dict["billing_cycle"] = billing_cycle
         if country is not UNSET:
             field_dict["country"] = country
 
@@ -55,6 +61,8 @@ class CheckoutRequest:
         email = d.pop("email")
 
         tier = d.pop("tier")
+
+        billing_cycle = d.pop("billing_cycle", UNSET)
 
         def _parse_country(data: object) -> None | str | Unset:
             if data is None:
@@ -68,6 +76,7 @@ class CheckoutRequest:
         checkout_request = cls(
             email=email,
             tier=tier,
+            billing_cycle=billing_cycle,
             country=country,
         )
 
