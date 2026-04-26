@@ -123,6 +123,11 @@ STALE_JOBS_REAPED = Counter(
     "stale_jobs_reaped_total",
     "Total stale running jobs released back to queue by the reaper",
 )
+HOP_CACHE_OPS = Gauge(
+    "hop_cache_ops_total",
+    "Hop-viability cache operation counters (hits/misses/errors/puts)",
+    labelnames=["op"],
+)
 # Depth of the batch-job queue, broken down by status.
 # Sampled by a background task (see _batch_queue_metrics_updater).
 BATCH_QUEUE_DEPTH = Gauge(
@@ -1177,6 +1182,12 @@ async def root():
 @app.get("/metrics", include_in_schema=False)
 async def metrics():
     """Prometheus metrics endpoint."""
+    try:
+        import hop_cache  # noqa: PLC0415
+        for op, n in hop_cache.get_metrics().items():
+            HOP_CACHE_OPS.labels(op=op).set(n)
+    except Exception:  # noqa: BLE001
+        logger.debug("hop_cache metrics unavailable", exc_info=True)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/health")

@@ -562,8 +562,42 @@ class TelecomTowerPower:
         # Max feasible single-hop distance: solve FSPL = Pt + Gt + Gr - (-95)
         max_hop_km = 10 ** ((start_tower.power_dbm + tx_gain + rx_gain + 95 - 20 * math.log10(f_hz) + 147.55) / 20) / 1000
 
-        # Pre-compute hop costs with terrain obstruction penalties
+        # Pre-compute hop costs with terrain obstruction penalties.
+        # Each pair is memoised in hop_cache (Redis-shared, terrain-stable
+        # 30d TTL) so repeat planning calls hit O(1) per edge instead of
+        # re-sampling the SRTM profile.
+        try:
+            from hop_cache import get_or_compute as _hop_get_or_compute, make_key as _hop_make_key  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            _hop_get_or_compute = None  # type: ignore[assignment]
+            _hop_make_key = None  # type: ignore[assignment]
+
         hop_cost: Dict[Tuple[str, str], float] = {}
+
+        def _compute_edge(a: Tower, b: Tower, d_km: float) -> Tuple[float, bool]:
+            fspl = LinkEngine.free_space_path_loss(d_km, f_hz)
+            # Scale terrain sample count with distance (min 10 points)
+            num_terrain_pts = max(10, int(d_km * 2))
+            obstruction_penalty = 0.0
+            try:
+                profile = self.terrain.profile(
+                    a.lat, a.lon, b.lat, b.lon, num_points=num_terrain_pts
+                )
+                if profile:
+                    tx_h_asl = profile[0] + a.height_m
+                    rx_h_asl = profile[-1] + b.height_m
+                    clearance = LinkEngine.terrain_clearance(
+                        profile, d_km, f_hz, tx_h_asl, rx_h_asl
+                    )
+                    if clearance < 0.6:
+                        obstruction_penalty = (0.6 - clearance) * 33.0
+            except RuntimeError:
+                pass
+            cost = fspl + obstruction_penalty
+            # Feasibility = RSSI threshold at -95 dBm (match Dijkstra prune).
+            feasible = (a.power_dbm + tx_gain + rx_gain - cost) >= -95.0
+            return cost, feasible
+
         for a in all_nodes:
             for b in all_nodes:
                 if a.id == b.id or b.id == start_tower.id:
@@ -575,28 +609,20 @@ class TelecomTowerPower:
                 # Prune edges beyond max feasible distance
                 if d_km > max_hop_km:
                     continue
-                fspl = LinkEngine.free_space_path_loss(d_km, f_hz)
 
-                # Scale terrain sample count with distance (1 point per km, min 10)
-                num_terrain_pts = max(10, int(d_km * 2))
-
-                obstruction_penalty = 0.0
-                try:
-                    profile = self.terrain.profile(
-                        a.lat, a.lon, b.lat, b.lon, num_points=num_terrain_pts
+                if _hop_get_or_compute is not None and _hop_make_key is not None:
+                    key = _hop_make_key(
+                        a.lat, a.lon, a.height_m,
+                        b.lat, b.lon, b.height_m,
+                        f_hz, a.power_dbm,
                     )
-                    if profile:
-                        tx_h_asl = profile[0] + a.height_m
-                        rx_h_asl = profile[-1] + b.height_m
-                        clearance = LinkEngine.terrain_clearance(
-                            profile, d_km, f_hz, tx_h_asl, rx_h_asl
-                        )
-                        if clearance < 0.6:
-                            obstruction_penalty = (0.6 - clearance) * 33.0
-                except RuntimeError:
-                    pass
+                    cost, _feasible = _hop_get_or_compute(
+                        key, lambda a=a, b=b, d_km=d_km: _compute_edge(a, b, d_km)
+                    )
+                else:
+                    cost, _feasible = _compute_edge(a, b, d_km)
 
-                hop_cost[(a.id, b.id)] = fspl + obstruction_penalty
+                hop_cost[(a.id, b.id)] = cost
 
         # Build adjacency list from pre-computed costs for faster neighbor lookup
         adjacency: Dict[str, List[str]] = {t.id: [] for t in all_nodes}
