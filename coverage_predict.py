@@ -231,15 +231,15 @@ class CoverageModel:
             weights=self.weights,
             feature_mean=self.feature_mean,
             feature_std=self.feature_std,
-            meta=np.array(
+            meta=np.frombuffer(
                 json.dumps({
                     "version": self.version,
                     "trained_at": self.trained_at,
                     "rmse_db": self.rmse_db,
                     "n_train": self.n_train,
                     "feature_names": list(_FEATURE_NAMES),
-                }),
-                dtype=object,
+                }).encode("utf-8"),
+                dtype=np.uint8,
             ),
         )
         logger.info("Saved coverage model to %s (rmse=%.2f dB, n=%d)",
@@ -247,8 +247,12 @@ class CoverageModel:
 
     @classmethod
     def load(cls, path: str) -> "CoverageModel":
-        with np.load(path, allow_pickle=True) as npz:
-            meta = json.loads(str(npz["meta"]))
+        # SECURITY: allow_pickle=False (default) prevents arbitrary code
+        # execution if a model file is tampered with. Meta is stored as
+        # a uint8 byte buffer of JSON, never as a pickled object.
+        with np.load(path, allow_pickle=False) as npz:
+            meta_bytes = bytes(np.asarray(npz["meta"], dtype=np.uint8).tobytes())
+            meta = json.loads(meta_bytes.decode("utf-8"))
             return cls(
                 weights=npz["weights"],
                 feature_mean=npz["feature_mean"],

@@ -16,6 +16,7 @@ import asyncio
 import heapq
 import os
 import pathlib
+import re
 import secrets
 import time
 import uuid
@@ -955,19 +956,38 @@ def require_tier(*allowed: Tier):
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 10 MB
 MAX_BATCH_ROWS = int(os.getenv("MAX_BATCH_ROWS", "5000"))
 
-_DEFAULT_ORIGINS = (
+_DEFAULT_ORIGINS_PROD = (
     "https://www.telecomtowerpower.com.br,"
     "https://telecomtowerpower.com.br,"
     "https://app.telecomtowerpower.com.br,"
     "https://api.telecomtowerpower.com.br,"
     "https://app.telecomtowerpower.com,"
     "https://dashboard.telecomtowerpower.com,"
-    "https://frontend-production-3542d.up.railway.app,"
-    "http://localhost:3000,"
-    "http://localhost:8000"
+    "https://frontend-production-3542d.up.railway.app"
 )
+_DEFAULT_ORIGINS_DEV = (
+    _DEFAULT_ORIGINS_PROD
+    + ",http://localhost:3000,http://localhost:8000"
+)
+# SECURITY: never expose the public API to http://localhost:* origins in
+# production — that would make any locally-running attacker page able to
+# call the API with the user's browser credentials. Localhost origins are
+# only allowed when APP_ENV is unset, "dev", "development", or "test".
+_APP_ENV = os.getenv("APP_ENV", "").strip().lower()
+_IS_PROD = _APP_ENV in ("production", "prod")
+_DEFAULT_ORIGINS = _DEFAULT_ORIGINS_PROD if _IS_PROD else _DEFAULT_ORIGINS_DEV
+
 _allowed_origins_raw = os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS)
 _allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
+if _IS_PROD:
+    _bad = [o for o in _allowed_origins if "localhost" in o or "127.0.0.1" in o]
+    if _bad:
+        # Refuse to ship a config that would CSRF-expose us. Operator must
+        # remove these or set APP_ENV to a non-prod value.
+        raise RuntimeError(
+            f"CORS_ORIGINS contains localhost entries in production: {_bad}. "
+            "Remove them or set APP_ENV=dev for local testing."
+        )
 
 # ------------------------------------------------------------
 # FastAPI application
@@ -1262,6 +1282,33 @@ async def _stale_job_reaper(interval_seconds: int = 60,
 
 @app.on_event("startup")
 async def startup():
+    # ── Security: validate critical config at boot ────────────────
+    # 1. Stripe webhook secret must be set whenever a Stripe API key is
+    #    set, otherwise webhooks would be processed without signature
+    #    verification (or rejected unexpectedly in prod). Refuse to boot.
+    try:
+        import stripe_billing as _sb
+        if _sb.STRIPE_SECRET_KEY and not _sb.STRIPE_WEBHOOK_SECRET:
+            raise RuntimeError(
+                "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is missing — "
+                "webhook signature verification would fail. Refusing to start."
+            )
+    except RuntimeError:
+        raise
+    except Exception:
+        logger.exception("Stripe config validation skipped (module unavailable)")
+
+    # 2. SAGEMAKER_COVERAGE_ENDPOINT, when set, must be a syntactically
+    #    valid SageMaker endpoint name (1-63 chars, [A-Za-z0-9-]). This
+    #    blocks an attacker from coaxing the service into invoking an
+    #    arbitrary endpoint via a poisoned env var or SSM param.
+    _sm_endpoint = os.getenv("SAGEMAKER_COVERAGE_ENDPOINT", "").strip()
+    if _sm_endpoint and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,62}", _sm_endpoint):
+        raise RuntimeError(
+            f"SAGEMAKER_COVERAGE_ENDPOINT={_sm_endpoint!r} is not a valid "
+            "SageMaker endpoint name (must match [A-Za-z0-9][A-Za-z0-9-]{0,62})."
+        )
+
     # Fail stale running jobs from previous deploys (one-time cleanup on boot)
     try:
         recovered = job_store.fail_stale_jobs(max_age_seconds=600)
