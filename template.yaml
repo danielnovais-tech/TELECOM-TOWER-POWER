@@ -70,12 +70,49 @@ Parameters:
     Default: 5
     MinValue: 1
     MaxValue: 50
+  # ---- RDS Proxy provisioning (optional) ----
+  # When all three of RdsInstanceIdentifier, DbMasterSecretArn, and
+  # RdsProxySecurityGroupId are set, this stack will create an RDS Proxy
+  # in front of the RDS instance and Lambdas will connect through it
+  # using IAM auth (no DB password in env). Leave empty to skip.
+  RdsInstanceIdentifier:
+    Type: String
+    Description: Existing RDS DB instance identifier to put behind RDS Proxy (empty = skip provisioning)
+    Default: ""
+  DbMasterSecretArn:
+    Type: String
+    Description: Secrets Manager ARN holding RDS master credentials (required when RdsInstanceIdentifier is set)
+    Default: ""
+  RdsProxySecurityGroupId:
+    Type: String
+    Description: Security group ID for the RDS Proxy ENIs (must allow 5432 from Lambda SG and to RDS)
+    Default: ""
+  RdsProxyMaxConnectionsPercent:
+    Type: Number
+    Description: Max % of RDS max_connections the proxy may use
+    Default: 80
+    MinValue: 10
+    MaxValue: 100
+  RdsProxyIdleClientTimeout:
+    Type: Number
+    Description: Idle client connection timeout (seconds) for RDS Proxy
+    Default: 1800
+    MinValue: 60
+    MaxValue: 28800
 
 Conditions:
   HasRdsProxy: !Not [!Equals [!Ref RdsProxyHost, ""]]
   HasVpcConfig: !And
     - !Not [!Equals [!Ref LambdaSecurityGroupId, ""]]
     - !Not [!Equals [!Select [0, !Ref VpcSubnetIds], ""]]
+  CreateRdsProxy: !And
+    - !Not [!Equals [!Ref RdsInstanceIdentifier, ""]]
+    - !Not [!Equals [!Ref DbMasterSecretArn, ""]]
+    - !Not [!Equals [!Ref RdsProxySecurityGroupId, ""]]
+    - !Not [!Equals [!Select [0, !Ref VpcSubnetIds], ""]]
+  UseProxyEnv: !Or
+    - !Condition HasRdsProxy
+    - !Condition CreateRdsProxy
 
 Resources:
   # ---- Lambda Function (API) ----
@@ -103,7 +140,10 @@ Resources:
           SRTM_DATA_DIR: /tmp/srtm_data
           S3_BUCKET_NAME: !Ref ReportsBucket
           SQS_QUEUE_URL: !Ref BatchJobQueue
-          RDS_PROXY_HOST: !Ref RdsProxyHost
+          RDS_PROXY_HOST: !If
+            - CreateRdsProxy
+            - !GetAtt RdsProxy.Endpoint
+            - !Ref RdsProxyHost
           RDS_PROXY_PORT: !Ref RdsProxyPort
           DB_NAME: !Ref DbName
           DB_USER: !Ref DbUser
@@ -137,7 +177,7 @@ Resources:
                 - sagemaker:InvokeEndpoint
               Resource: "*"
         - !If
-          - HasRdsProxy
+          - UseProxyEnv
           - Statement:
               - Effect: Allow
                 Action: rds-db:connect
@@ -183,7 +223,10 @@ Resources:
           S3_BUCKET_NAME: !Ref ReportsBucket
           S3_PREFIX: "batch-results/"
           SRTM_DATA_DIR: /tmp/srtm_data
-          RDS_PROXY_HOST: !Ref RdsProxyHost
+          RDS_PROXY_HOST: !If
+            - CreateRdsProxy
+            - !GetAtt RdsProxy.Endpoint
+            - !Ref RdsProxyHost
           RDS_PROXY_PORT: !Ref RdsProxyPort
           DB_NAME: !Ref DbName
           DB_USER: !Ref DbUser
@@ -206,7 +249,7 @@ Resources:
                 - sqs:GetQueueAttributes
               Resource: !GetAtt BatchJobQueue.Arn
         - !If
-          - HasRdsProxy
+          - UseProxyEnv
           - Statement:
               - Effect: Allow
                 Action: rds-db:connect
@@ -279,6 +322,63 @@ Resources:
             Prefix: "batch-results/enterprise/"
             ExpirationInDays: 365
 
+  # ---- RDS Proxy (optional, gated by CreateRdsProxy condition) ----
+  # Provides connection pooling + IAM auth for Lambdas connecting to RDS.
+  # Avoids exhausting Postgres max_connections under burst load and
+  # eliminates the need to ship DB passwords in Lambda env vars.
+  RdsProxyRole:
+    Type: AWS::IAM::Role
+    Condition: CreateRdsProxy
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadDbSecret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref DbMasterSecretArn
+
+  RdsProxy:
+    Type: AWS::RDS::DBProxy
+    Condition: CreateRdsProxy
+    Properties:
+      DBProxyName: !Sub "telecom-tower-power-${Stage}"
+      EngineFamily: POSTGRESQL
+      RoleArn: !GetAtt RdsProxyRole.Arn
+      Auth:
+        - AuthScheme: SECRETS
+          IAMAuth: REQUIRED
+          SecretArn: !Ref DbMasterSecretArn
+      VpcSubnetIds: !Ref VpcSubnetIds
+      VpcSecurityGroupIds:
+        - !Ref RdsProxySecurityGroupId
+      RequireTLS: true
+      IdleClientTimeout: !Ref RdsProxyIdleClientTimeout
+      DebugLogging: false
+
+  RdsProxyTargetGroup:
+    Type: AWS::RDS::DBProxyTargetGroup
+    Condition: CreateRdsProxy
+    Properties:
+      DBProxyName: !Ref RdsProxy
+      TargetGroupName: default
+      DBInstanceIdentifiers:
+        - !Ref RdsInstanceIdentifier
+      ConnectionPoolConfigurationInfo:
+        MaxConnectionsPercent: !Ref RdsProxyMaxConnectionsPercent
+        MaxIdleConnectionsPercent: 50
+        ConnectionBorrowTimeout: 120
+
 Outputs:
   ApiUrl:
     Description: API Gateway endpoint URL
@@ -305,3 +405,11 @@ Outputs:
     Condition: HasRdsProxy
     Description: RDS Proxy endpoint for database connections
     Value: !Ref RdsProxyHost
+  CreatedRdsProxyEndpoint:
+    Condition: CreateRdsProxy
+    Description: RDS Proxy endpoint provisioned by this stack
+    Value: !GetAtt RdsProxy.Endpoint
+  CreatedRdsProxyArn:
+    Condition: CreateRdsProxy
+    Description: ARN of the RDS Proxy provisioned by this stack
+    Value: !GetAtt RdsProxy.DBProxyArn
