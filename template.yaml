@@ -140,6 +140,7 @@ Resources:
           SRTM_DATA_DIR: /tmp/srtm_data
           S3_BUCKET_NAME: !Ref ReportsBucket
           SQS_QUEUE_URL: !Ref BatchJobQueue
+          SQS_QUEUE_URL_PRIORITY: !Ref BatchJobQueuePriority
           RDS_PROXY_HOST: !If
             - CreateRdsProxy
             - !GetAtt RdsProxy.Endpoint
@@ -167,7 +168,9 @@ Resources:
             - Effect: Allow
               Action:
                 - sqs:SendMessage
-              Resource: !GetAtt BatchJobQueue.Arn
+              Resource:
+                - !GetAtt BatchJobQueue.Arn
+                - !GetAtt BatchJobQueuePriority.Arn
             - Effect: Allow
               Action:
                 - bedrock:InvokeModel
@@ -264,11 +267,96 @@ Resources:
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
+  # ---- Lambda Function (SQS Batch Worker - PRIORITY / Enterprise) ----
+  # Same handler/code as BatchWorkerFunction but bound to the priority queue
+  # and given ReservedConcurrentExecutions so Enterprise jobs always get a
+  # dedicated pool (no head-of-line blocking by Pro/Business backlog).
+  BatchWorkerPriorityFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      Handler: sqs_lambda_worker.handler
+      CodeUri: .
+      Description: >
+        Priority SQS-triggered Lambda for Enterprise batch jobs. Mirrors
+        BatchWorkerFunction but consumes only the priority queue and runs with
+        reserved concurrency so 10k-row jobs land in <30s.
+      MemorySize: 1024
+      Timeout: 900
+      ReservedConcurrentExecutions: 20
+      VpcConfig:
+        !If
+          - HasVpcConfig
+          - SecurityGroupIds: [!Ref LambdaSecurityGroupId]
+            SubnetIds: !Ref VpcSubnetIds
+          - !Ref "AWS::NoValue"
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref DatabaseUrl
+          S3_BUCKET_NAME: !Ref ReportsBucket
+          S3_PREFIX: "batch-results/"
+          SRTM_DATA_DIR: /tmp/srtm_data
+          RDS_PROXY_HOST: !If
+            - CreateRdsProxy
+            - !GetAtt RdsProxy.Endpoint
+            - !Ref RdsProxyHost
+          RDS_PROXY_PORT: !Ref RdsProxyPort
+          DB_NAME: !Ref DbName
+          DB_USER: !Ref DbUser
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - !If
+          - HasVpcConfig
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - !Ref "AWS::NoValue"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub "arn:aws:s3:::${ReportsBucket}/*"
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt BatchJobQueuePriority.Arn
+        - !If
+          - UseProxyEnv
+          - Statement:
+              - Effect: Allow
+                Action: rds-db:connect
+                Resource: !Sub "arn:aws:rds-db:${AWS::Region}:${AWS::AccountId}:dbuser:*/${DbUser}"
+          - !Ref "AWS::NoValue"
+      Events:
+        SQSTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt BatchJobQueuePriority.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
   # ---- SQS Queue (Batch Jobs) ----
   BatchJobQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: !Sub "telecom-batch-jobs-${Stage}"
+      VisibilityTimeout: 960
+      MessageRetentionPeriod: 1209600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt BatchJobDLQ.Arn
+        maxReceiveCount: 3
+
+  # ---- SQS Priority Queue (Enterprise) ----
+  # Enterprise tier traffic lands here. A dedicated Lambda function with
+  # ReservedConcurrentExecutions consumes it so a Pro/Business backlog
+  # in the default queue can never starve Enterprise SLAs.
+  BatchJobQueuePriority:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "telecom-batch-jobs-priority-${Stage}"
       VisibilityTimeout: 960
       MessageRetentionPeriod: 1209600
       RedrivePolicy:
@@ -389,12 +477,21 @@ Outputs:
   BatchWorkerFunctionArn:
     Description: Batch worker Lambda function ARN
     Value: !GetAtt BatchWorkerFunction.Arn
+  BatchWorkerPriorityFunctionArn:
+    Description: Priority (Enterprise) batch worker Lambda function ARN
+    Value: !GetAtt BatchWorkerPriorityFunction.Arn
   BatchJobQueueUrl:
     Description: SQS queue URL for batch jobs
     Value: !Ref BatchJobQueue
   BatchJobQueueArn:
     Description: SQS queue ARN for batch jobs
     Value: !GetAtt BatchJobQueue.Arn
+  BatchJobQueuePriorityUrl:
+    Description: SQS priority queue URL (Enterprise tier)
+    Value: !Ref BatchJobQueuePriority
+  BatchJobQueuePriorityArn:
+    Description: SQS priority queue ARN (Enterprise tier)
+    Value: !GetAtt BatchJobQueuePriority.Arn
   BatchJobDLQUrl:
     Description: Dead letter queue URL for failed batch jobs
     Value: !Ref BatchJobDLQ

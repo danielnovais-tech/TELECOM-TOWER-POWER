@@ -1125,8 +1125,12 @@ platform = TelecomTowerPower()
 job_store = JobStore()
 
 # ── SQS client for async batch pipeline ──
+# Two queues: default (Starter/Pro/Business) and high-priority (Enterprise).
+# Falls back to the default queue if the priority URL is unset, so single-queue
+# deployments keep working unchanged.
 _sqs_client = None
 SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL", "")
+SQS_QUEUE_URL_PRIORITY = os.getenv("SQS_QUEUE_URL_PRIORITY", "")
 
 
 def _get_sqs():
@@ -1135,6 +1139,13 @@ def _get_sqs():
         import boto3
         _sqs_client = boto3.client("sqs")
     return _sqs_client
+
+
+def _queue_for_tier(tier_value: str) -> str:
+    """Pick the SQS queue URL for a given tier. Enterprise → priority queue."""
+    if tier_value == "enterprise" and SQS_QUEUE_URL_PRIORITY:
+        return SQS_QUEUE_URL_PRIORITY
+    return SQS_QUEUE_URL
 
 # Pydantic models for API
 class TowerInput(BaseModel):
@@ -1920,14 +1931,19 @@ async def batch_reports(
             api_key=_caller_key,
         )
 
-        # Publish to SQS if configured (serverless Lambda worker path)
-        if SQS_QUEUE_URL:
+        # Publish to SQS if configured (serverless Lambda worker path).
+        # Enterprise traffic goes to the high-priority queue (separate Lambda
+        # function with reserved concurrency) so 10k-row jobs are not blocked
+        # by Pro/Business work in the default queue.
+        _tier_value = key_data["tier"].value
+        _queue_url = _queue_for_tier(_tier_value)
+        if _queue_url:
             _get_sqs().send_message(
-                QueueUrl=SQS_QUEUE_URL,
+                QueueUrl=_queue_url,
                 MessageBody=json.dumps({
                     "job_id": job_id,
                     "tower_id": tower_id,
-                    "tier": key_data["tier"].value,
+                    "tier": _tier_value,
                 }),
             )
 
@@ -2553,6 +2569,32 @@ async def bedrock_suggest_height(
 # React PWA: serve built frontend (same approach as telecom_tower_power_db)
 FRONTEND_DIR = pathlib.Path(__file__).parent / "frontend_dist"
 
+# ── GraphQL router (Strawberry) ───────────────────────────────────────────────
+# Mounted at /graphql, side-by-side with REST. Reuses verify_api_key so all
+# tier/quota rules apply identically. Optional: GraphiQL UI is gated by
+# GRAPHQL_GRAPHIQL=true (off in prod by default to avoid schema disclosure).
+try:
+    from graphql_schema import get_graphql_router as _build_graphql_router
+    _gql_router = _build_graphql_router(verify_api_key, platform)
+    if os.getenv("GRAPHQL_GRAPHIQL", "").lower() in ("1", "true", "yes"):
+        # Rebuild with GraphiQL on for dev environments.
+        from graphql_schema import schema as _gql_schema
+        from strawberry.fastapi import GraphQLRouter as _GraphQLRouter
+        from fastapi import Depends as _Depends
+
+        async def _ctx(key_data: dict = _Depends(verify_api_key)) -> dict:
+            return {
+                "key_data": key_data,
+                "owner": key_data.get("owner") or "system",
+                "tier": key_data.get("tier"), "platform": platform,
+            }
+        _gql_router = _GraphQLRouter(_gql_schema, context_getter=_ctx, graphql_ide="graphiql")
+    app.include_router(_gql_router, prefix="/graphql")
+    logger.info("GraphQL router mounted at /graphql (graphiql=%s)",
+                os.getenv("GRAPHQL_GRAPHIQL", "false"))
+except Exception:
+    logger.exception("GraphQL router failed to mount; REST API still active")
+
 if FRONTEND_DIR.is_dir():
     from starlette.staticfiles import StaticFiles
     from starlette.responses import FileResponse
@@ -2562,7 +2604,7 @@ if FRONTEND_DIR.is_dir():
         "/towers", "/analyze", "/plan_repeater", "/batch_reports",
         "/jobs", "/export_report", "/bedrock", "/srtm",
         "/signup", "/stripe", "/health", "/metrics", "/openapi",
-        "/docs", "/redoc",
+        "/docs", "/redoc", "/graphql",
     )
 
     @app.middleware("http")

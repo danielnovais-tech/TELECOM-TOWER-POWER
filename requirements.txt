@@ -27,6 +27,8 @@ boto3
 aiofiles
 openpyxl
 geopy
+# ── GraphQL (side-by-side with REST) ─────────────────────────
+strawberry-graphql[fastapi]>=0.235.0
 # ── OpenTelemetry (distributed tracing, evaluation mode) ─────
 # Only loaded when OTEL_ENABLED=true; see tracing.py.
 opentelemetry-api>=1.27.0

@@ -43,6 +43,7 @@ COPY tower_db.py .
 COPY job_store.py .
 COPY repeater_jobs_store.py .
 COPY hop_cache.py .
+COPY graphql_schema.py .
 COPY batch_worker.py .
 COPY tracing.py .
 COPY migrate_csv_to_db.py .
