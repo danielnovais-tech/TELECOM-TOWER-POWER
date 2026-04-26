@@ -1601,48 +1601,35 @@ async def plan_repeater(tower_id: str, receiver: ReceiverInput, max_hops: int = 
 # Intended for very large candidate sets (max_hops >= 4) where per-edge
 # terrain fetches may still exceed HTTP timeouts even after asyncio.gather.
 # ---------------------------------------------------------------------------
-_REPEATER_JOBS: Dict[str, Dict[str, Any]] = {}
-_REPEATER_JOBS_LOCK = asyncio.Lock()
+import repeater_jobs_store as _repeater_jobs_store
+
 _REPEATER_JOBS_TTL_S = int(os.getenv("REPEATER_JOBS_TTL_S", "900"))  # 15 min
 _REPEATER_JOBS_MAX = int(os.getenv("REPEATER_JOBS_MAX", "256"))
 
 async def _reap_repeater_jobs() -> None:
-    """Drop completed/failed repeater jobs older than TTL."""
-    now = time.time()
-    async with _REPEATER_JOBS_LOCK:
-        stale = [
-            jid for jid, j in _REPEATER_JOBS.items()
-            if j["status"] in ("done", "error")
-            and (now - j.get("finished_at", now)) > _REPEATER_JOBS_TTL_S
-        ]
-        for jid in stale:
-            _REPEATER_JOBS.pop(jid, None)
-        # Hard cap: drop oldest if we're over budget
-        if len(_REPEATER_JOBS) > _REPEATER_JOBS_MAX:
-            oldest = sorted(
-                _REPEATER_JOBS.items(),
-                key=lambda kv: kv[1].get("created_at", 0),
-            )[: len(_REPEATER_JOBS) - _REPEATER_JOBS_MAX]
-            for jid, _ in oldest:
-                _REPEATER_JOBS.pop(jid, None)
+    """Drop completed/failed repeater jobs older than TTL (no-op on Redis)."""
+    await _repeater_jobs_store.get_store().reap(
+        _REPEATER_JOBS_TTL_S, _REPEATER_JOBS_MAX
+    )
 
 async def _run_repeater_job(job_id: str, tower: Tower, rx: Receiver, max_hops: int) -> None:
+    store = _repeater_jobs_store.get_store()
     try:
         chain = await platform.plan_repeater_chain(tower, rx, max_hops)
-        async with _REPEATER_JOBS_LOCK:
-            _REPEATER_JOBS[job_id].update(
-                status="done",
-                finished_at=time.time(),
-                result={"repeater_chain": [asdict(t) for t in chain]},
-            )
+        await store.update(
+            job_id,
+            status="done",
+            finished_at=time.time(),
+            result={"repeater_chain": [asdict(t) for t in chain]},
+        )
     except Exception as exc:  # noqa: BLE001 – surface in job state
         logger.exception("repeater job %s failed", job_id)
-        async with _REPEATER_JOBS_LOCK:
-            _REPEATER_JOBS[job_id].update(
-                status="error",
-                finished_at=time.time(),
-                error=str(exc),
-            )
+        await store.update(
+            job_id,
+            status="error",
+            finished_at=time.time(),
+            error=str(exc),
+        )
 
 @app.post("/plan_repeater/async")
 async def plan_repeater_async(
@@ -1667,8 +1654,9 @@ async def plan_repeater_async(
     await _reap_repeater_jobs()
     job_id = uuid.uuid4().hex
     now = time.time()
-    async with _REPEATER_JOBS_LOCK:
-        _REPEATER_JOBS[job_id] = {
+    await _repeater_jobs_store.get_store().create(
+        job_id,
+        {
             "job_id": job_id,
             "status": "running",
             "created_at": now,
@@ -1677,7 +1665,8 @@ async def plan_repeater_async(
             # OWASP A01 (IDOR) – lock job to caller's API-key owner so other
             # tenants can't read each other's repeater chains by guessing job_id.
             "owner": key_data.get("owner"),
-        }
+        },
+    )
     asyncio.create_task(_run_repeater_job(job_id, tower, rx, max_hops))
     return {
         "job_id": job_id,
@@ -1692,13 +1681,12 @@ async def plan_repeater_job_status(
 ):
     """Return the state (queued / running / done / error) and, when ready,
     the repeater_chain produced by ``POST /plan_repeater/async``."""
-    async with _REPEATER_JOBS_LOCK:
-        job = _REPEATER_JOBS.get(job_id)
-        # OWASP A01 (IDOR) – return 404 (not 403) when the job belongs to a
-        # different owner so we don't leak existence of other tenants' jobs.
-        if job is None or (job.get("owner") and job.get("owner") != key_data.get("owner")):
-            raise HTTPException(status_code=404, detail="job not found or expired")
-        return dict(job)
+    job = await _repeater_jobs_store.get_store().get(job_id)
+    # OWASP A01 (IDOR) – return 404 (not 403) when the job belongs to a
+    # different owner so we don't leak existence of other tenants' jobs.
+    if job is None or (job.get("owner") and job.get("owner") != key_data.get("owner")):
+        raise HTTPException(status_code=404, detail="job not found or expired")
+    return job
 
 @app.get("/export_report")
 async def export_report(request: Request, tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.FREE, Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE))):
