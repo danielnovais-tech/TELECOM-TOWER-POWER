@@ -526,13 +526,98 @@ def nearest_tab(engine: TelecomTowerPower):
             st.info("No towers found.")
 
 
+# ── SRTM Tiles tab (Enterprise) ─────────────────────────────
+# Lets ops/enterprise users inspect SRTM tile coverage for a country
+# and trigger a background prefetch. Calls /srtm/status/{country}
+# (GET) and /srtm/prefetch (POST) — both require Tier.ENTERPRISE.
+_SRTM_KNOWN_COUNTRIES = ["BR", "AR", "CL", "CO", "PE", "MX", "US"]
+
+
+def srtm_tab() -> None:
+    st.subheader("🌍 SRTM Tile Management")
+    st.caption(
+        "Inspect SRTM tile coverage and pre-download tiles for a country. "
+        "**Enterprise tier required.** Prefetch runs as a background job — "
+        "the status view auto-counts cached vs. missing tiles."
+    )
+
+    if not st.session_state.get("api_key"):
+        st.info("Set an Enterprise API key in the sidebar to use this tab.")
+        return
+
+    col_a, col_b = st.columns([2, 1])
+    with col_a:
+        country = st.selectbox(
+            "Country (ISO 3166-1 alpha-2)",
+            options=_SRTM_KNOWN_COUNTRIES,
+            index=0,
+            help="Only countries with a defined bounding box appear here.",
+        )
+        custom = st.text_input(
+            "…or enter a custom 2-letter code",
+            value="",
+            max_chars=2,
+            help="Leave empty to use the dropdown selection.",
+        ).strip().upper()
+        code = custom if len(custom) == 2 else country
+    with col_b:
+        st.write("")
+        st.write("")
+        refresh = st.button("🔄 Refresh status", use_container_width=True)
+        prefetch = st.button("⬇️ Start prefetch", use_container_width=True, type="primary")
+
+    if prefetch:
+        resp = api_post("/srtm/prefetch", json={"country": code})
+        if resp is not None and resp.status_code == 200:
+            st.success(f"Prefetch started for {code}. Use 'Refresh status' to track progress.")
+        elif resp is not None:
+            st.error(f"Failed to start prefetch ({resp.status_code}): {resp.text[:300]}")
+
+    # Always render the latest status (refresh button just re-runs the page).
+    resp = api_get(f"/srtm/status/{code}")
+    if resp is None:
+        return
+    if resp.status_code == 403:
+        st.error("🔒 This endpoint requires an **Enterprise** API key.")
+        return
+    if resp.status_code == 404:
+        st.warning(f"No bounding box defined for `{code}`. Try one of: {', '.join(_SRTM_KNOWN_COUNTRIES)}")
+        return
+    if resp.status_code != 200:
+        st.error(f"Status request failed ({resp.status_code}): {resp.text[:300]}")
+        return
+
+    data = resp.json() if resp.content else {}
+    total = int(data.get("total_tiles") or data.get("total") or 0)
+    cached = int(data.get("cached_tiles") or data.get("cached") or 0)
+    missing = int(data.get("missing_tiles") or data.get("missing") or max(total - cached, 0))
+    pct = (cached / total) if total > 0 else 0.0
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total tiles", f"{total:,}")
+    m2.metric("Cached", f"{cached:,}")
+    m3.metric("Missing", f"{missing:,}")
+    m4.metric("Coverage", f"{pct * 100:.1f}%")
+    st.progress(min(max(pct, 0.0), 1.0))
+
+    bounds = data.get("bounds")
+    if bounds:
+        st.caption(f"Bounding box: `{bounds}`")
+    if "missing_list" in data and isinstance(data["missing_list"], list) and data["missing_list"]:
+        with st.expander(f"Show first {min(50, len(data['missing_list']))} missing tile names"):
+            st.code("\n".join(data["missing_list"][:50]))
+
+    if refresh:
+        st.toast("Status refreshed.", icon="✅")
+
+
 # ── Main ────────────────────────────────────────────────────
 def main():
     engine = get_engine()
     ensure_towers_loaded(engine)
 
-    tab_map, tab_batch, tab_nearest, tab_about = st.tabs(
-        ["🗺️ Map & Analysis", "📊 Batch Analysis", "📍 Nearest Towers", "ℹ️ About"]
+    tab_map, tab_batch, tab_nearest, tab_srtm, tab_about = st.tabs(
+        ["🗺️ Map & Analysis", "📊 Batch Analysis", "📍 Nearest Towers", "🌍 SRTM Tiles", "ℹ️ About"]
     )
 
     # ── Map & Analysis tab ──────────────────────────────────
@@ -601,6 +686,10 @@ def main():
     # ── Nearest tab ─────────────────────────────────────────
     with tab_nearest:
         nearest_tab(engine)
+
+    # ── SRTM Tiles tab (Enterprise) ─────────────────────────
+    with tab_srtm:
+        srtm_tab()
 
     # ── About tab ───────────────────────────────────────────
     with tab_about:
