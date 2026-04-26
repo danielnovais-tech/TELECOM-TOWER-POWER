@@ -58,6 +58,8 @@ COPY towers_brazil.csv .
 COPY sample_receivers.csv .
 COPY sample_batch_test.csv .
 COPY key_store.json .
+COPY key_store_db.py .
+COPY migrate_keystore_to_db.py .
 COPY start.sh .
 COPY entrypoint.sh .
 COPY load_secrets.sh .
