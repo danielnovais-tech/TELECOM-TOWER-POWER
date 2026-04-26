@@ -178,6 +178,7 @@ class Tower:
     height_m: float          # antenna height above ground
     operator: str
     bands: List[Band]
+    owner: str = "system"
     power_dbm: float = 43.0
 
     def __post_init__(self):
