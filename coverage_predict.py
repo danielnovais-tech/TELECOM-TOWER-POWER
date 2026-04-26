@@ -503,6 +503,105 @@ def explain_with_bedrock(prediction: Dict[str, Any]) -> Optional[str]:
         return None
 
 
+def explain_locally(prediction: Dict[str, Any]) -> str:
+    """Deterministic, template-based explanation derived from features.
+
+    Used as a fallback when Bedrock is unavailable. Output is intentionally
+    concise (<120 words) and free of hallucination: every claim is anchored to
+    a numeric feature in ``prediction``.
+    """
+    sig = float(prediction.get("signal_dbm", -120.0))
+    feasible = bool(prediction.get("feasible", False))
+    dist_km = float(prediction.get("distance_km", 0.0))
+    feats = prediction.get("features") or {}
+    f_ghz = math.exp(float(feats.get("log_f_ghz", 0.0)))
+    min_fres = float(feats.get("min_fresnel_ratio", 1.0))
+    n_obs = int(feats.get("n_obstructions", 0))
+    max_obs = float(feats.get("max_obstruction_m", 0.0))
+    slope = float(feats.get("terrain_slope_m_per_km", 0.0))
+    tx_h = float(feats.get("tx_h_m", 0.0))
+
+    # Service tier from RSSI bands (typical cellular thresholds)
+    if sig >= -75:
+        tier = "broadband (HD voice + high-throughput data)"
+    elif sig >= -85:
+        tier = "broadband (standard data + voice)"
+    elif sig >= -95:
+        tier = "voice and narrowband IoT only"
+    elif sig >= -105:
+        tier = "narrowband IoT (NB-IoT/LTE-M) at the edge of usability"
+    else:
+        tier = "no usable service"
+
+    # Identify the dominant limiting factor
+    limits: list[str] = []
+    if min_fres < 0.6:
+        limits.append(
+            f"Fresnel zone obstructed ({min_fres:.0%} of the first zone clear; "
+            f"≥60% required)"
+        )
+    if n_obs > 0:
+        limits.append(
+            f"{n_obs} terrain obstruction(s) up to {max_obs:.0f} m above the "
+            "line-of-sight"
+        )
+    if dist_km > 15 and f_ghz > 2.0:
+        limits.append(
+            f"long path ({dist_km:.1f} km) at {f_ghz:.2f} GHz — free-space loss "
+            "dominates"
+        )
+    elif dist_km > 25:
+        limits.append(f"long path ({dist_km:.1f} km) — free-space loss dominates")
+    if slope > 50:
+        limits.append(f"steep terrain ({slope:.0f} m/km slope)")
+
+    if not limits:
+        limits.append("no significant RF impairments detected on this path")
+
+    # Concrete remediation
+    if min_fres < 0.6 or n_obs > 0:
+        remediation = (
+            f"Raise the transmitter mast (currently {tx_h:.0f} m AGL) or relocate "
+            "to a site with clearer line-of-sight."
+        )
+    elif sig < -95 and f_ghz > 2.5:
+        remediation = (
+            "Switch to a lower frequency band (sub-GHz) or add a higher-gain "
+            "directional antenna at the receiver."
+        )
+    elif sig < -95:
+        remediation = (
+            "Increase EIRP (higher tx power or antenna gain) or deploy a "
+            "repeater at roughly the midpoint of the link."
+        )
+    else:
+        remediation = (
+            "Link is healthy; monitor for seasonal foliage and adjacent-cell "
+            "interference."
+        )
+
+    verdict = "Feasible" if feasible else "Not feasible"
+    return (
+        f"{verdict} link at {sig:.1f} dBm over {dist_km:.1f} km @ {f_ghz:.2f} GHz. "
+        f"Expected service: {tier}. "
+        f"Limiting factors: {'; '.join(limits)}. "
+        f"Recommendation: {remediation}"
+    )
+
+
+def explain(prediction: Dict[str, Any]) -> str:
+    """Return a natural-language explanation, preferring Bedrock when available.
+
+    Always returns a string — falls back to the deterministic template if the
+    LLM is not configured / not authorized / errors out. This guarantees that
+    the public ``?explain=true`` flag works regardless of Bedrock availability.
+    """
+    out = explain_with_bedrock(prediction)
+    if out:
+        return out
+    return explain_locally(prediction)
+
+
 # ---------------------------------------------------------------------------
 # Physics fallback (mirrors LinkEngine but kept self-contained so the module
 # is importable from training/CLI environments without FastAPI)

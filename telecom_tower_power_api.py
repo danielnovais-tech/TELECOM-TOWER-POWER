@@ -1583,9 +1583,7 @@ async def coverage_predict(
         "features": result.features,
     }
     if body.explain:
-        explanation = _cp.explain_with_bedrock(response)
-        if explanation:
-            response["explanation"] = explanation
+        response["explanation"] = _cp.explain(response)
     return response
 
 
