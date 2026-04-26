@@ -62,6 +62,21 @@ else
     done
     wait "$ALEMBIC_PID" 2>/dev/null || echo "WARN: alembic exited with error (exit $?), continuing..."
 fi
+
+# One-shot, idempotent backfill of legacy key_store.json into Postgres.
+# Safe to re-run on every boot: upserts only, no destructive ops. Skips when
+# DATABASE_URL is unset (local dev) or when key_store.json is absent.
+if [ -n "${DATABASE_URL:-}" ] && [ -f "${KEY_STORE_PATH:-key_store.json}" ]; then
+    echo "Running key_store backfill (idempotent, 30s timeout)..."
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 30 python migrate_keystore_to_db.py 2>&1 \
+            || echo "WARN: key_store backfill failed or timed out (exit $?), continuing..."
+    else
+        python migrate_keystore_to_db.py 2>&1 \
+            || echo "WARN: key_store backfill exit $?, continuing..."
+    fi
+fi
+
 echo "Starting uvicorn..."
 if [ "${SERVICE_TYPE:-}" = "webhook" ]; then
     echo "SERVICE_TYPE=webhook → starting stripe_webhook_service"
