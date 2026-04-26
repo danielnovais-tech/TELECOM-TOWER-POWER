@@ -284,7 +284,10 @@ Resources:
         reserved concurrency so 10k-row jobs land in <30s.
       MemorySize: 1024
       Timeout: 900
-      ReservedConcurrentExecutions: 20
+      # ReservedConcurrentExecutions intentionally omitted: the AWS account's
+      # ConcurrentExecutions limit is currently 10, so reserving here would
+      # starve the rest of the stack. The SQS event source provides natural
+      # backpressure; raise the account limit and re-add a reservation later.
       VpcConfig:
         !If
           - HasVpcConfig

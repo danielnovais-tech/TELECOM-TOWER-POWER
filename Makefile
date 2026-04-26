@@ -28,7 +28,7 @@ LAMBDA_DATA_FILES = \
 	coverage_model.npz \
 	key_store.json
 
-.PHONY: build-TelecomTowerPowerFunction build-BatchWorkerFunction
+.PHONY: build-TelecomTowerPowerFunction build-BatchWorkerFunction build-BatchWorkerPriorityFunction
 
 # Strip commands to reduce package size below Lambda 250MB limit
 define strip_package
@@ -63,6 +63,12 @@ build-TelecomTowerPowerFunction:
 	$(call strip_package)
 
 build-BatchWorkerFunction:
+	pip install -r requirements-lambda.txt -t $(ARTIFACTS_DIR)/ --quiet
+	cp $(LAMBDA_PY_FILES) $(ARTIFACTS_DIR)/
+	cp $(LAMBDA_DATA_FILES) $(ARTIFACTS_DIR)/ 2>/dev/null || true
+	$(call strip_package)
+
+build-BatchWorkerPriorityFunction:
 	pip install -r requirements-lambda.txt -t $(ARTIFACTS_DIR)/ --quiet
 	cp $(LAMBDA_PY_FILES) $(ARTIFACTS_DIR)/
 	cp $(LAMBDA_DATA_FILES) $(ARTIFACTS_DIR)/ 2>/dev/null || true
