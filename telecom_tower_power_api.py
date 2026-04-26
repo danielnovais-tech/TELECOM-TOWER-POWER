@@ -856,8 +856,10 @@ _towers_created_per_key: Dict[str, int] = {}
 _usage_counters: Dict[str, Dict] = {}
 
 # ---- Per-key monthly PDF quota counter ----
-# _pdf_counter[api_key] = {"month": "2026-04", "count": int}
-_pdf_counter: Dict[str, Dict] = {}
+# Backed by ``key_store_db`` (PostgreSQL when DATABASE_URL is set, in-memory
+# fallback otherwise). The counter is keyed on (api_key, YYYY-MM) so it
+# survives container restarts and rolling deploys.
+import key_store_db as _key_store_db
 
 def _enforce_pdf_quota(api_key: str, tier: Tier) -> int:
     """Raise 429 if the caller exceeds the monthly PDF quota for their tier.
@@ -866,12 +868,10 @@ def _enforce_pdf_quota(api_key: str, tier: Tier) -> int:
     quota = limits.get("pdf_per_month")
     if quota is None:
         return 0
-    month = time.strftime("%Y-%m", time.gmtime())
-    entry = _pdf_counter.get(api_key)
-    if entry is None or entry.get("month") != month:
-        entry = {"month": month, "count": 0}
-        _pdf_counter[api_key] = entry
-    if entry["count"] >= quota:
+    period = time.strftime("%Y-%m", time.gmtime())
+    try:
+        return _key_store_db.consume_pdf_quota(api_key, period, int(quota))
+    except _key_store_db.QuotaExceeded:
         raise HTTPException(
             status_code=429,
             detail=(
@@ -879,8 +879,6 @@ def _enforce_pdf_quota(api_key: str, tier: Tier) -> int:
                 "Upgrade your plan at https://app.telecomtowerpower.com.br/pricing"
             ),
         )
-    entry["count"] += 1
-    return entry["count"]
 
 def _track_usage(api_key: str):
     """Increment per-key request counter."""
@@ -1676,6 +1674,9 @@ async def plan_repeater_async(
             "created_at": now,
             "tower_id": tower_id,
             "max_hops": max_hops,
+            # OWASP A01 (IDOR) – lock job to caller's API-key owner so other
+            # tenants can't read each other's repeater chains by guessing job_id.
+            "owner": key_data.get("owner"),
         }
     asyncio.create_task(_run_repeater_job(job_id, tower, rx, max_hops))
     return {
@@ -1693,7 +1694,9 @@ async def plan_repeater_job_status(
     the repeater_chain produced by ``POST /plan_repeater/async``."""
     async with _REPEATER_JOBS_LOCK:
         job = _REPEATER_JOBS.get(job_id)
-        if job is None:
+        # OWASP A01 (IDOR) – return 404 (not 403) when the job belongs to a
+        # different owner so we don't leak existence of other tenants' jobs.
+        if job is None or (job.get("owner") and job.get("owner") != key_data.get("owner")):
             raise HTTPException(status_code=404, detail="job not found or expired")
         return dict(job)
 

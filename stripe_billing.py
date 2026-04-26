@@ -31,6 +31,8 @@ from typing import Dict, Optional
 
 import stripe
 
+import key_store_db
+
 logger = logging.getLogger("stripe_billing")
 
 # ---------------------------------------------------------------------------
@@ -78,43 +80,32 @@ TIER_PRICE_MAP_ANNUAL: Dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Persistent key-store  (in-memory primary + JSON file as seed/backup)
+# Persistent key-store
 # ---------------------------------------------------------------------------
+# Backend is selected by ``key_store_db`` (PostgreSQL when DATABASE_URL is
+# set, JSON file fallback otherwise).  KEY_STORE_PATH is still honoured by
+# the JSON backend for local dev compatibility.
 _STORE_PATH = Path(os.getenv("KEY_STORE_PATH", "./key_store.json"))
-
-# In-memory store – initialised from the JSON file at import time, then
-# treated as the single source of truth.  File writes are best-effort
-# (container filesystems on ECS/Fargate can silently drop writes).
-_mem_store: Dict[str, Dict] = {}
-_mem_store_initialised = False
-
-
-def _ensure_mem_store() -> None:
-    """Seed the in-memory store from the JSON file (once)."""
-    global _mem_store_initialised
-    if _mem_store_initialised:
-        return
-    _mem_store_initialised = True
-    try:
-        if _STORE_PATH.exists():
-            _mem_store.update(json.loads(_STORE_PATH.read_text()))
-            logger.info("Loaded %d keys from %s", len(_mem_store), _STORE_PATH)
-    except Exception as exc:
-        logger.warning("Could not read key store file %s: %s", _STORE_PATH, exc)
 
 
 def _load_store() -> Dict:
-    _ensure_mem_store()
-    return dict(_mem_store)
+    return key_store_db.get_all_keys()
 
 
 def _save_store(data: Dict) -> None:
-    _mem_store.clear()
-    _mem_store.update(data)
-    try:
-        _STORE_PATH.write_text(json.dumps(data, indent=2))
-    except Exception as exc:
-        logger.warning("Could not persist key store to %s: %s", _STORE_PATH, exc)
+    """Reconcile the in-memory snapshot with the backend.
+
+    The legacy code path called this with a *full* dict snapshot after every
+    mutation. With the DB backend we translate that into per-key upserts and
+    deletes for keys removed from the snapshot.
+    """
+    backend = key_store_db.get_backend()
+    current = backend.get_all_keys()
+    for k, rec in data.items():
+        if current.get(k) != rec:
+            backend.upsert_key(k, rec)
+    for k in current.keys() - data.keys():
+        backend.delete_key(k)
 
 
 def _generate_api_key() -> str:
@@ -128,12 +119,12 @@ def _generate_api_key() -> str:
 
 def get_all_keys() -> Dict[str, Dict]:
     """Return the full key→metadata mapping (for the auth layer)."""
-    return _load_store()
+    return key_store_db.get_all_keys()
 
 
 def lookup_key(api_key: str) -> Optional[Dict]:
     """Return metadata for a single key, or None."""
-    return _load_store().get(api_key)
+    return key_store_db.lookup_key(api_key)
 
 
 def register_free_user(email: str) -> Dict:
@@ -146,7 +137,7 @@ def register_free_user(email: str) -> Dict:
     existing_emails = [m.get("email") for m in store.values()]
     logger.info(
         "register_free_user: email=%s store_id=%s keys=%d emails=%s",
-        email, id(_mem_store), len(store), existing_emails,
+        email, id(store), len(store), existing_emails,
     )
 
     # prevent duplicate sign-ups for the same e-mail
@@ -164,8 +155,7 @@ def register_free_user(email: str) -> Dict:
         "stripe_subscription_id": None,
         "created": time.time(),
     }
-    store[key] = record
-    _save_store(store)
+    key_store_db.upsert_key(key, record)
     logger.info("Registered free user %s", email)
     return {"api_key": key, **record}
 
@@ -346,7 +336,7 @@ def _on_checkout_completed(session: dict) -> Dict:
         store[existing_key]["billing_cycle"] = billing_cycle
         store[existing_key]["stripe_customer_id"] = customer_id
         store[existing_key]["stripe_subscription_id"] = subscription_id
-        _save_store(store)
+        key_store_db.upsert_key(existing_key, store[existing_key])
         logger.info("Upgraded %s to %s/%s (key %s…)", email, tier, billing_cycle, existing_key[:12])
         _maybe_prefetch_srtm(tier, session)
         send_welcome_email(email, existing_key, tier)
@@ -354,7 +344,7 @@ def _on_checkout_completed(session: dict) -> Dict:
 
     # Otherwise create a new key
     key = _generate_api_key()
-    store[key] = {
+    record = {
         "tier": tier,
         "billing_cycle": billing_cycle,
         "owner": email,
@@ -363,7 +353,7 @@ def _on_checkout_completed(session: dict) -> Dict:
         "stripe_subscription_id": subscription_id,
         "created": time.time(),
     }
-    _save_store(store)
+    key_store_db.upsert_key(key, record)
     logger.info("Provisioned %s/%s key for %s", tier, billing_cycle, email)
     _maybe_prefetch_srtm(tier, session)
     send_welcome_email(email, key, tier)
@@ -379,7 +369,7 @@ def _on_subscription_deleted(subscription: dict) -> Dict:
         if meta.get("stripe_subscription_id") == sub_id:
             meta["tier"] = "free"
             meta["stripe_subscription_id"] = None
-            _save_store(store)
+            key_store_db.upsert_key(key, meta)
             logger.info("Downgraded %s to free (subscription cancelled)", meta["email"])
             return {"action": "downgraded", "email": meta["email"]}
 
@@ -388,20 +378,12 @@ def _on_subscription_deleted(subscription: dict) -> Dict:
 
 def get_key_for_email(email: str) -> Optional[str]:
     """Look up the API key for a given email address."""
-    store = _load_store()
-    for key, meta in store.items():
-        if meta.get("email") == email:
-            return key
-    return None
+    return key_store_db.get_key_for_email(email)
 
 
 def get_key_info_for_email(email: str) -> Optional[Dict]:
     """Return the API key and its metadata for a given email, or None."""
-    store = _load_store()
-    for key, meta in store.items():
-        if meta.get("email") == email:
-            return {"api_key": key, **meta}
-    return None
+    return key_store_db.get_record_by_email(email)
 
 
 def retrieve_key_from_checkout_session(session_id: str) -> Dict:

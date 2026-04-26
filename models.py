@@ -5,7 +5,7 @@ These mirror the tables already created by tower_db.py and job_store.py
 so that Alembic can manage schema versioning going forward.
 """
 
-from sqlalchemy import Column, Float, Integer, Text
+from sqlalchemy import Column, Float, Integer, PrimaryKeyConstraint, Text
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -38,3 +38,33 @@ class BatchJob(Base):
     error = Column(Text)
     created_at = Column(Float, nullable=False)
     updated_at = Column(Float, nullable=False)
+
+
+class ApiKey(Base):
+    """Persistent API-key store (replaces key_store.json)."""
+
+    __tablename__ = "api_keys"
+
+    api_key = Column(Text, primary_key=True)
+    tier = Column(Text, nullable=False)
+    owner = Column(Text, nullable=False)
+    email = Column(Text, nullable=False, index=True)
+    stripe_customer_id = Column(Text)
+    stripe_subscription_id = Column(Text)
+    billing_cycle = Column(Text)
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)
+
+
+class PdfUsageMonthly(Base):
+    """Per-(api_key, YYYY-MM) PDF export counter for monthly quota enforcement."""
+
+    __tablename__ = "pdf_usage_monthly"
+
+    api_key = Column(Text, nullable=False)
+    period = Column(Text, nullable=False)  # YYYY-MM (UTC)
+    count = Column(Integer, nullable=False, server_default="0")
+
+    __table_args__ = (
+        PrimaryKeyConstraint("api_key", "period", name="pk_pdf_usage_monthly"),
+    )
