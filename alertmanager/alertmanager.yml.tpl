@@ -43,6 +43,11 @@ receivers:
         send_resolved: true
         title: '{{ .GroupLabels.alertname }}'
         text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+    pagerduty_configs:
+      - routing_key: "${PAGERDUTY_ROUTING_KEY}"
+        send_resolved: true
+        severity: '{{ if .CommonLabels.severity }}{{ .CommonLabels.severity }}{{ else }}critical{{ end }}'
+        description: '{{ .GroupLabels.alertname }}: {{ range .Alerts }}{{ .Annotations.summary }} {{ end }}'
     email_configs:
       - to: "${ALERT_EMAIL_TO}"
         send_resolved: true

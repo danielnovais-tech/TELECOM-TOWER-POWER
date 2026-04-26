@@ -340,6 +340,7 @@ services:
       - ses_smtp_username
       - ses_smtp_password
       - slack_webhook_url
+      - pagerduty_routing_key
     depends_on:
       - prometheus
     restart: unless-stopped
@@ -423,3 +424,5 @@ secrets:
     file: ./secrets/slack_webhook_url
   grafana_admin_password:
     file: ./secrets/grafana_admin_password
+  pagerduty_routing_key:
+    file: ./secrets/pagerduty_routing_key

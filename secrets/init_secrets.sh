@@ -20,7 +20,8 @@ for name in \
     ses_smtp_password \
     valid_api_keys \
     slack_webhook_url \
-    grafana_admin_password
+    grafana_admin_password \
+    pagerduty_routing_key
 do
     if [ ! -f "$name" ]; then
         touch "$name"

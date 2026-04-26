@@ -5,6 +5,7 @@ set -e
 SES_SMTP_USERNAME=$(cat /run/secrets/ses_smtp_username 2>/dev/null || echo "${SES_SMTP_USERNAME:-}")
 SES_SMTP_PASSWORD=$(cat /run/secrets/ses_smtp_password 2>/dev/null || echo "${SES_SMTP_PASSWORD:-}")
 SLACK_WEBHOOK_URL=$(cat /run/secrets/slack_webhook_url 2>/dev/null || echo "${SLACK_WEBHOOK_URL:-}")
+PAGERDUTY_ROUTING_KEY=$(cat /run/secrets/pagerduty_routing_key 2>/dev/null || echo "${PAGERDUTY_ROUTING_KEY:-}")
 
 # Build the config dynamically — only include slack if a real URL is set
 SLACK_GLOBAL=""
@@ -26,6 +27,16 @@ if [ -n "$SLACK_WEBHOOK_URL" ] && echo "$SLACK_WEBHOOK_URL" | grep -q "^https://
         send_resolved: true
         title: '"'"'{{ .GroupLabels.alertname }}'"'"'
         text: '"'"'{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'"'"''
+fi
+
+# PagerDuty — only attached to the `critical` receiver (we never page on warnings)
+PD_CRITICAL=""
+if [ -n "$PAGERDUTY_ROUTING_KEY" ]; then
+  PD_CRITICAL='    pagerduty_configs:
+      - routing_key: "'"${PAGERDUTY_ROUTING_KEY}"'"
+        send_resolved: true
+        severity: '"'"'{{ if .CommonLabels.severity }}{{ .CommonLabels.severity }}{{ else }}critical{{ end }}'"'"'
+        description: '"'"'{{ .GroupLabels.alertname }}: {{ range .Alerts }}{{ .Annotations.summary }} {{ end }}'"'"''
 fi
 
 cat > /etc/alertmanager/alertmanager.yml <<ENDCFG
@@ -61,6 +72,7 @@ ${SLACK_DEFAULT}
 
   - name: critical
 ${SLACK_CRITICAL}
+${PD_CRITICAL}
     email_configs:
       - to: "${ALERT_EMAIL_TO}"
         send_resolved: true
