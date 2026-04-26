@@ -23,6 +23,9 @@ class Tower(Base):
     operator = Column(Text, nullable=False)
     bands = Column(Text, nullable=False)
     power_dbm = Column(Float, nullable=False, server_default="43.0")
+    # OWASP A01: per-row tenant scope. Pre-existing imports (Anatel,
+    # OpenCellID, …) are owned by "system" and are read-only for tenants.
+    owner = Column(Text, nullable=False, server_default="system", index=True)
 
 
 class BatchJob(Base):

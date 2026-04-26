@@ -40,6 +40,7 @@ class Tower:
     bands: List[Band]
     power_dbm: float = 43.0  # typical eirp per band (dBm)
     frequency_mhz: float = None  # auto-set from primary band
+    owner: str = "system"    # OWASP A01: tenant scope. "system" = legacy/import.
 
     def __post_init__(self):
         if not self.id:

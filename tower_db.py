@@ -84,12 +84,21 @@ class _SQLiteStore:
                     height_m   REAL NOT NULL,
                     operator   TEXT NOT NULL,
                     bands      TEXT NOT NULL,
-                    power_dbm  REAL NOT NULL DEFAULT 43.0
+                    power_dbm  REAL NOT NULL DEFAULT 43.0,
+                    owner      TEXT NOT NULL DEFAULT 'system'
                 )
             """)
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_towers_operator
                 ON towers(operator)
+            """)
+            # Idempotent ALTER for pre-owner SQLite databases.
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(towers)").fetchall()}
+            if "owner" not in cols:
+                conn.execute("ALTER TABLE towers ADD COLUMN owner TEXT NOT NULL DEFAULT 'system'")
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_towers_owner
+                ON towers(owner)
             """)
 
     # ---- write --------------------------------------------------
@@ -101,8 +110,8 @@ class _SQLiteStore:
         with self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO towers
-                   (id, lat, lon, height_m, operator, bands, power_dbm)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (id, lat, lon, height_m, operator, bands, power_dbm, owner)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tower_dict["id"],
                     tower_dict["lat"],
@@ -111,12 +120,22 @@ class _SQLiteStore:
                     tower_dict["operator"],
                     bands,
                     tower_dict.get("power_dbm", 43.0),
+                    tower_dict.get("owner", "system"),
                 ),
             )
 
-    def delete(self, tower_id: str) -> bool:
+    def delete(self, tower_id: str, owner: Optional[str] = None) -> bool:
+        """Delete a tower. If *owner* is given, only delete when it matches
+        (system-owned rows are immutable for tenants — pass owner=None to
+        delete unconditionally for admin/import paths)."""
         with self._conn() as conn:
-            cur = conn.execute("DELETE FROM towers WHERE id = ?", (tower_id,))
+            if owner is None:
+                cur = conn.execute("DELETE FROM towers WHERE id = ?", (tower_id,))
+            else:
+                cur = conn.execute(
+                    "DELETE FROM towers WHERE id = ? AND owner = ?",
+                    (tower_id, owner),
+                )
             return cur.rowcount > 0
 
     # ---- read ---------------------------------------------------
@@ -129,17 +148,26 @@ class _SQLiteStore:
         return self._row_to_dict(row) if row else None
 
     def list_all(self, operator: Optional[str] = None,
-                 limit: int = 50000, offset: int = 0) -> List[Dict[str, Any]]:
+                 limit: int = 50000, offset: int = 0,
+                 owner: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List towers. If *owner* is given, restrict to rows where
+        ``owner = <owner>`` OR ``owner = 'system'`` (the default tenant
+        view). Pass owner=None for unrestricted listings (admin/internal)."""
+        clauses: List[str] = []
+        params: List[Any] = []
+        if operator:
+            clauses.append("operator = ?")
+            params.append(operator)
+        if owner is not None:
+            clauses.append("(owner = ? OR owner = 'system')")
+            params.append(owner)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.extend([limit, offset])
         with self._conn() as conn:
-            if operator:
-                rows = conn.execute(
-                    "SELECT * FROM towers WHERE operator = ? LIMIT ? OFFSET ?",
-                    (operator, limit, offset),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM towers LIMIT ? OFFSET ?", (limit, offset)
-                ).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM towers {where} LIMIT ? OFFSET ?",
+                tuple(params),
+            ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
     def count(self) -> int:
@@ -148,9 +176,10 @@ class _SQLiteStore:
 
     def find_nearest(self, lat: float, lon: float,
                      operator: Optional[str] = None,
-                     limit: int = 5) -> List[Dict[str, Any]]:
+                     limit: int = 5,
+                     owner: Optional[str] = None) -> List[Dict[str, Any]]:
         """Return the *limit* closest towers sorted by haversine distance."""
-        rows = self.list_all(operator=operator, limit=10000)
+        rows = self.list_all(operator=operator, limit=10000, owner=owner)
         scored: List[Tuple[float, Dict[str, Any]]] = []
         for r in rows:
             d = _haversine_km(lat, lon, r["lat"], r["lon"])
@@ -167,10 +196,11 @@ class _SQLiteStore:
                     bands = json.dumps(bands)
                 conn.execute(
                     """INSERT OR REPLACE INTO towers
-                       (id, lat, lon, height_m, operator, bands, power_dbm)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (id, lat, lon, height_m, operator, bands, power_dbm, owner)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (td["id"], td["lat"], td["lon"], td["height_m"],
-                     td["operator"], bands, td.get("power_dbm", 43.0)),
+                     td["operator"], bands, td.get("power_dbm", 43.0),
+                     td.get("owner", "system")),
                 )
         return len(tower_dicts)
 
@@ -236,12 +266,22 @@ class _PgStore:
                         height_m   DOUBLE PRECISION NOT NULL,
                         operator   TEXT NOT NULL,
                         bands      TEXT NOT NULL,
-                        power_dbm  DOUBLE PRECISION NOT NULL DEFAULT 43.0
+                        power_dbm  DOUBLE PRECISION NOT NULL DEFAULT 43.0,
+                        owner      TEXT NOT NULL DEFAULT 'system'
                     )
                 """)
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_towers_operator
                     ON towers(operator)
+                """)
+                # Idempotent ALTER for pre-owner Postgres databases.
+                cur.execute("""
+                    ALTER TABLE towers
+                    ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT 'system'
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_towers_owner
+                    ON towers(owner)
                 """)
                 # Spatial index for fast proximity queries (requires earthdistance)
                 try:
@@ -264,15 +304,16 @@ class _PgStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO towers
-                       (id, lat, lon, height_m, operator, bands, power_dbm)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)
+                       (id, lat, lon, height_m, operator, bands, power_dbm, owner)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                        ON CONFLICT (id) DO UPDATE SET
                            lat       = EXCLUDED.lat,
                            lon       = EXCLUDED.lon,
                            height_m  = EXCLUDED.height_m,
                            operator  = EXCLUDED.operator,
                            bands     = EXCLUDED.bands,
-                           power_dbm = EXCLUDED.power_dbm""",
+                           power_dbm = EXCLUDED.power_dbm,
+                           owner     = EXCLUDED.owner""",
                     (
                         tower_dict["id"],
                         tower_dict["lat"],
@@ -281,13 +322,21 @@ class _PgStore:
                         tower_dict["operator"],
                         bands,
                         tower_dict.get("power_dbm", 43.0),
+                        tower_dict.get("owner", "system"),
                     ),
                 )
 
-    def delete(self, tower_id: str) -> bool:
+    def delete(self, tower_id: str, owner: Optional[str] = None) -> bool:
+        """Delete a tower. If *owner* is given, only delete when it matches."""
         with self._conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM towers WHERE id = %s", (tower_id,))
+                if owner is None:
+                    cur.execute("DELETE FROM towers WHERE id = %s", (tower_id,))
+                else:
+                    cur.execute(
+                        "DELETE FROM towers WHERE id = %s AND owner = %s",
+                        (tower_id, owner),
+                    )
                 return cur.rowcount > 0
 
     # ---- read ---------------------------------------------------
@@ -303,17 +352,27 @@ class _PgStore:
         return self._row_to_dict(row)
 
     def list_all(self, operator: Optional[str] = None,
-                 limit: int = 50000, offset: int = 0) -> List[Dict[str, Any]]:
+                 limit: int = 50000, offset: int = 0,
+                 owner: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List towers. If *owner* is given, restrict to rows where
+        ``owner = <owner>`` OR ``owner = 'system'`` (default tenant view)."""
         assert psycopg2 is not None
+        clauses: List[str] = []
+        params: List[Any] = []
+        if operator:
+            clauses.append("operator = %s")
+            params.append(operator)
+        if owner is not None:
+            clauses.append("(owner = %s OR owner = 'system')")
+            params.append(owner)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.extend([limit, offset])
         with self._conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                if operator:
-                    cur.execute(
-                        "SELECT * FROM towers WHERE operator = %s LIMIT %s OFFSET %s",
-                        (operator, limit, offset),
-                    )
-                else:
-                    cur.execute("SELECT * FROM towers LIMIT %s OFFSET %s", (limit, offset))
+                cur.execute(
+                    f"SELECT * FROM towers {where} LIMIT %s OFFSET %s",
+                    tuple(params),
+                )
                 rows = cur.fetchall()
         return [self._row_to_dict(r) for r in rows]
 
@@ -326,9 +385,10 @@ class _PgStore:
 
     def find_nearest(self, lat: float, lon: float,
                      operator: Optional[str] = None,
-                     limit: int = 5) -> List[Dict[str, Any]]:
+                     limit: int = 5,
+                     owner: Optional[str] = None) -> List[Dict[str, Any]]:
         """Return the *limit* closest towers sorted by haversine distance."""
-        rows = self.list_all(operator=operator, limit=10000)
+        rows = self.list_all(operator=operator, limit=10000, owner=owner)
         scored: List[Tuple[float, Dict[str, Any]]] = []
         for r in rows:
             d = _haversine_km(lat, lon, r["lat"], r["lon"])

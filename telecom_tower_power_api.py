@@ -8,6 +8,7 @@ Run: uvicorn telecom_tower_power_api:app --reload
 
 import collections
 import csv
+import hashlib
 import io
 import logging
 import math
@@ -479,6 +480,7 @@ class TelecomTowerPower:
             height_m=row["height_m"], operator=row["operator"],
             bands=[Band(b) for b in row["bands"]],
             power_dbm=row["power_dbm"],
+            owner=row.get("owner", "system"),
         )
 
     @staticmethod
@@ -488,6 +490,7 @@ class TelecomTowerPower:
             "height_m": tower.height_m, "operator": tower.operator,
             "bands": [b.value for b in tower.bands],
             "power_dbm": tower.power_dbm,
+            "owner": getattr(tower, "owner", "system"),
         }
 
     # ── CRUD (all go through DB) ─────────────────────────────────
@@ -498,8 +501,8 @@ class TelecomTowerPower:
     def update_tower(self, tower: Tower):
         self.db.upsert(self._tower_to_row(tower))
 
-    def remove_tower(self, tower_id: str) -> bool:
-        return self.db.delete(tower_id)
+    def remove_tower(self, tower_id: str, owner: Optional[str] = None) -> bool:
+        return self.db.delete(tower_id, owner=owner)
 
     def get_tower(self, tower_id: str) -> Optional[Tower]:
         row = self.db.get(tower_id)
@@ -508,8 +511,9 @@ class TelecomTowerPower:
         return self._row_to_tower(row)
 
     def list_towers(self, operator: Optional[str] = None,
-                    limit: int = 50000, offset: int = 0) -> List[Tower]:
-        rows = self.db.list_all(operator=operator, limit=limit, offset=offset)
+                    limit: int = 50000, offset: int = 0,
+                    owner: Optional[str] = None) -> List[Tower]:
+        rows = self.db.list_all(operator=operator, limit=limit, offset=offset, owner=owner)
         return [self._row_to_tower(r) for r in rows]
 
     def tower_count(self) -> int:
@@ -517,8 +521,9 @@ class TelecomTowerPower:
 
     def find_nearest_towers(self, lat: float, lon: float,
                             operator: Optional[str] = None,
-                            limit: int = 5) -> List[Tower]:
-        rows = self.db.find_nearest(lat, lon, operator=operator, limit=limit)
+                            limit: int = 5,
+                            owner: Optional[str] = None) -> List[Tower]:
+        rows = self.db.find_nearest(lat, lon, operator=operator, limit=limit, owner=owner)
         return [self._row_to_tower(r) for r in rows]
 
     async def analyze_link(self, tower: Tower, receiver: Receiver,
@@ -919,6 +924,23 @@ def _check_rate_limit(api_key: str, tier: Tier, is_demo: bool = False) -> Tuple[
     bucket.append(now)
     remaining = max(0, limit - len(bucket))
     return remaining, limit
+
+def _caller_owner(request: Request, key_data: Dict) -> str:
+    """Return a stable, non-empty *owner* string identifying the caller for
+    OWASP A01 (broken-object-level-authorization) checks on tenant-scoped
+    rows. Prefers ``key_data['owner']`` (set for Stripe-provisioned keys);
+    falls back to a SHA-256 fingerprint of the raw API key so static keys
+    are still tenant-isolated without persisting raw secrets in row data.
+    Never returns ``"system"`` (reserved for shared/public datasets).
+    """
+    owner = key_data.get("owner") if isinstance(key_data, dict) else None
+    if owner and owner != "system":
+        return str(owner)
+    raw_key = request.headers.get("x-api-key", "") or ""
+    if not raw_key:
+        return "anonymous"
+    return "key:" + hashlib.sha256(raw_key.encode("utf-8")).hexdigest()[:16]
+
 
 async def verify_api_key(request: Request, api_key: str = Security(api_key_header)) -> Dict:
     """Validate the API key, enforce rate limit, and return key metadata."""
@@ -1370,13 +1392,14 @@ async def shutdown():
     await platform.close()
 
 @app.post("/towers", status_code=201)
-async def add_tower(tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
+async def add_tower(request: Request, tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
     """Add a new tower to the database."""
     tier_limit = TIER_LIMITS[key_data["tier"]]["max_towers"]
     api_key = key_data.get("owner", "unknown")
     created = _towers_created_per_key.get(api_key, 0)
     if created >= tier_limit:
         raise HTTPException(status_code=403, detail=f"Tower creation limit reached for {key_data['tier'].value} tier ({tier_limit})")
+    owner = _caller_owner(request, key_data)
     new_tower = Tower(
         id=tower.id,
         lat=tower.lat,
@@ -1384,16 +1407,18 @@ async def add_tower(tower: TowerInput, key_data: Dict = Depends(verify_api_key))
         height_m=tower.height_m,
         operator=tower.operator,
         bands=tower.bands,
-        power_dbm=tower.power_dbm
+        power_dbm=tower.power_dbm,
+        owner=owner,
     )
     platform.add_tower(new_tower)
     _towers_created_per_key[api_key] = created + 1
     return {"message": f"Tower {tower.id} added"}
 
 @app.get("/towers/nearest")
-async def nearest_towers(lat: float, lon: float, operator: Optional[str] = None, limit: int = 5, key_data: Dict = Depends(verify_api_key)):
+async def nearest_towers(request: Request, lat: float, lon: float, operator: Optional[str] = None, limit: int = 5, key_data: Dict = Depends(verify_api_key)):
     """Find nearest towers to a given location."""
-    nearest = platform.find_nearest_towers(lat, lon, operator, limit)
+    owner = _caller_owner(request, key_data)
+    nearest = platform.find_nearest_towers(lat, lon, operator, limit, owner=owner)
     results = []
     for t in nearest:
         d = asdict(t)
@@ -1402,44 +1427,65 @@ async def nearest_towers(lat: float, lon: float, operator: Optional[str] = None,
     return {"nearest_towers": results}
 
 @app.get("/towers/{tower_id}")
-async def get_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
+async def get_tower(request: Request, tower_id: str, key_data: Dict = Depends(verify_api_key)):
     """Get a single tower by ID."""
     tower = platform.get_tower(tower_id)
     if not tower:
+        raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
+    # OWASP A01: deny cross-tenant reads. System-owned rows (Anatel,
+    # OpenCellID imports …) remain readable by any authenticated caller.
+    owner = _caller_owner(request, key_data)
+    if tower.owner not in (owner, "system"):
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     return asdict(tower)
 
 @app.get("/towers")
 async def list_towers(
+    request: Request,
     operator: Optional[str] = None,
     limit: int = Query(default=1000, ge=1, le=50000),
     offset: int = Query(default=0, ge=0),
     key_data: Dict = Depends(verify_api_key),
 ):
-    """List towers with pagination. Use *offset* and *limit* to page through results."""
-    towers_list = platform.list_towers(operator=operator, limit=limit, offset=offset)
+    """List towers with pagination. Use *offset* and *limit* to page through results.
+
+    Tenants see system-owned (public dataset) rows plus their own creations.
+    Cross-tenant rows are filtered out at the SQL layer.
+    """
+    owner = _caller_owner(request, key_data)
+    towers_list = platform.list_towers(operator=operator, limit=limit, offset=offset, owner=owner)
     total = platform.tower_count()
     return {"towers": [asdict(t) for t in towers_list], "total": total, "offset": offset, "limit": limit}
 
 @app.put("/towers/{tower_id}")
-async def update_tower(tower_id: str, tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
+async def update_tower(request: Request, tower_id: str, tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
     """Update an existing tower.  The tower ID in the path must match the body."""
     if tower.id != tower_id:
         raise HTTPException(status_code=400, detail="Tower ID in path and body must match")
-    if platform.get_tower(tower_id) is None:
+    existing = platform.get_tower(tower_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
+    # OWASP A01: only the owner may mutate. System-owned rows are read-only
+    # to tenants (return 404 to avoid disclosing existence to non-owners).
+    owner = _caller_owner(request, key_data)
+    if existing.owner != owner:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     updated = Tower(
         id=tower.id, lat=tower.lat, lon=tower.lon,
         height_m=tower.height_m, operator=tower.operator,
         bands=tower.bands, power_dbm=tower.power_dbm,
+        owner=owner,
     )
     platform.update_tower(updated)
     return {"message": f"Tower {tower_id} updated"}
 
 @app.delete("/towers/{tower_id}")
-async def delete_tower(tower_id: str, key_data: Dict = Depends(verify_api_key)):
+async def delete_tower(request: Request, tower_id: str, key_data: Dict = Depends(verify_api_key)):
     """Delete a tower from the database."""
-    if not platform.remove_tower(tower_id):
+    # OWASP A01: scope DELETE by owner so tenants can never remove
+    # system-owned or other tenants' rows.
+    owner = _caller_owner(request, key_data)
+    if not platform.remove_tower(tower_id, owner=owner):
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     return {"message": f"Tower {tower_id} deleted"}
 
