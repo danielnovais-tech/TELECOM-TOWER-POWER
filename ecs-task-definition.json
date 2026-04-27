@@ -78,11 +78,11 @@
         },
         {
           "name": "COGNITO_USER_POOL_ID",
-          "value": ""
+          "value": "sa-east-1_15uR6sR9o"
         },
         {
           "name": "COGNITO_APP_CLIENT_ID",
-          "value": ""
+          "value": "5ll5ssh12aravgnck59438apjc"
         }
       ],
       "secrets": [
