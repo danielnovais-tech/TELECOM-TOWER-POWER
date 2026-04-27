@@ -41,6 +41,7 @@ import stripe_billing
 from tower_db import TowerStore
 from job_store import JobStore, JOB_RESULTS_DIR
 import audit_log as _audit
+import sso_auth as _sso
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from pythonjsonlogger import jsonlogger
 
@@ -861,7 +862,7 @@ if os.getenv("ENABLE_DEMO_KEYS", "true").lower() in ("1", "true", "yes"):
 # public scraping abuse. Overridable via DEMO_RATE_LIMIT env (rpm).
 _DEMO_RATE_LIMIT_RPM = int(os.getenv("DEMO_RATE_LIMIT", "6"))
 
-api_key_header = APIKeyHeader(name="X-API-Key")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 # ---- Per-key tower creation counter ----
 _towers_created_per_key: Dict[str, int] = {}
@@ -952,6 +953,35 @@ def _caller_owner(request: Request, key_data: Dict) -> str:
 
 async def verify_api_key(request: Request, api_key: str = Security(api_key_header)) -> Dict:
     """Validate the API key, enforce rate limit, and return key metadata."""
+    # ── SSO Bearer fallback ─────────────────────────────────────────────
+    # If no X-API-Key was supplied, try Authorization: Bearer <id_token>.
+    # Successful verification is mapped to the api_key row stamped with
+    # the IdP's (provider, sub) pair via key_store_db.lookup_by_oauth.
+    if not api_key:
+        auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header.split(None, 1)[1].strip()
+            try:
+                claims = _sso.verify_id_token(token, provider="cognito")
+            except _sso.SsoTokenError as exc:
+                logger.info("sso bearer rejected: %s", exc)
+                raise HTTPException(status_code=401, detail="Invalid SSO token")
+            try:
+                import key_store_db as _ksd
+                mapped = _ksd.lookup_by_oauth("cognito", str(claims["sub"]))
+            except Exception:  # noqa: BLE001
+                logger.exception("sso lookup_by_oauth failed")
+                mapped = None
+            if not mapped or not mapped.get("api_key"):
+                # Token is valid but never exchanged via /auth/sso.
+                raise HTTPException(
+                    status_code=401,
+                    detail="SSO identity not provisioned. Call POST /auth/sso first.",
+                )
+            api_key = mapped["api_key"]
+        else:
+            raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
     key_data = API_KEYS.get(api_key)
     if key_data is None:
         # Check dynamically-registered keys from Stripe billing
@@ -2723,6 +2753,92 @@ async def signup_free(body: SignupRequest, request: Request):
         "tier": result["tier"],
         "email": result["email"],
         "message": "Free account created. Include your API key in the X-API-Key header.",
+    }
+
+
+# ─── SSO / OIDC ─────────────────────────────────────────────────────────
+
+class SsoExchangeRequest(BaseModel):
+    """Body of POST /auth/sso. ``id_token`` is the Cognito-issued JWT."""
+    id_token: str = Field(..., min_length=20, max_length=8192,
+                          description="OIDC ID token (Cognito 'id_token').")
+    provider: str = Field("cognito", min_length=2, max_length=20,
+                          description="IdP identifier; only 'cognito' is supported today.")
+
+
+@app.get("/auth/sso/config")
+async def sso_config():
+    """Public discovery hint for the frontend (which IdP, which client)."""
+    cfg = _sso.get_idp("cognito")
+    if not cfg:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "provider": cfg.name,
+        "issuer": cfg.issuer,
+        "audience": cfg.audience,
+    }
+
+
+@app.post("/auth/sso")
+async def sso_exchange(body: SsoExchangeRequest, request: Request):
+    """Exchange an IdP-issued ID token for a long-lived TTP API key.
+
+    The token is fully verified (signature, issuer, audience, expiry,
+    token_use) before any DB write. On first login a fresh free-tier key
+    is minted; subsequent logins return the same key. The api_key row is
+    stamped with (oauth_provider, oauth_subject) so future requests can
+    use ``Authorization: Bearer <id_token>`` directly.
+    """
+    if not _sso.is_sso_configured():
+        raise HTTPException(status_code=503, detail="SSO is not configured on this server")
+    try:
+        claims = _sso.verify_id_token(body.id_token, provider=body.provider)
+    except _sso.SsoTokenError as exc:
+        logger.info("sso /auth/sso rejected: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid SSO token")
+
+    sub = str(claims.get("sub") or "")
+    email = str(claims.get("email") or "").strip().lower()
+    if not email:
+        # Cognito User Pool may emit "cognito:username" but no email when
+        # the pool was configured without that attribute. Surface a clear
+        # 400 rather than minting a key with a synthetic email.
+        raise HTTPException(status_code=400, detail="ID token has no 'email' claim")
+
+    try:
+        result = stripe_billing.register_or_get_sso_user(
+            email=email,
+            provider=body.provider,
+            subject=sub,
+            default_tier="free",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("register_or_get_sso_user failed")
+        raise HTTPException(status_code=500, detail="Could not provision SSO key")
+
+    api_key = result["api_key"]
+    created = bool(result.get("_created"))
+    await _audit.log(
+        api_key,
+        "auth.sso.exchange" if not created else "key.issue.sso",
+        actor_email=email,
+        tier=result.get("tier"),
+        target=f"key:{api_key[:12]}",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "provider": body.provider,
+            "sub": sub,
+            "created": created,
+        },
+    )
+    return {
+        "api_key": api_key,
+        "tier": result.get("tier"),
+        "email": email,
+        "sso_enabled": True,
+        "created": created,
     }
 
 @app.post("/signup/checkout")

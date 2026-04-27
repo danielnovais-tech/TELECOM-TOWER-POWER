@@ -160,6 +160,51 @@ def register_free_user(email: str) -> Dict:
     return {"api_key": key, **record}
 
 
+def register_or_get_sso_user(
+    email: str,
+    provider: str,
+    subject: str,
+    *,
+    default_tier: str = "free",
+) -> Dict:
+    """Resolve an SSO-authenticated identity to an api_key record.
+
+    Lookup order (first match wins):
+      1. (provider, subject) → existing SSO-mapped key.
+      2. email → existing key (stamp it with the SSO mapping; honours
+         tenant tier already set by Stripe).
+      3. Mint a fresh ``default_tier`` key and stamp it.
+
+    Returns ``{"api_key": ..., **record, "_created": bool}`` so callers
+    can audit-log new issuances differently from re-logins.
+    """
+    existing = key_store_db.lookup_by_oauth(provider, subject)
+    if existing:
+        return {**existing, "_created": False}
+
+    by_email = key_store_db.get_record_by_email(email)
+    if by_email:
+        api_key = by_email["api_key"]
+        key_store_db.set_sso_mapping(api_key, provider, subject)
+        # Re-fetch so caller sees the freshly stamped fields.
+        refreshed = key_store_db.lookup_key(api_key) or {}
+        return {"api_key": api_key, **refreshed, "_created": False}
+
+    api_key = _generate_api_key()
+    record = {
+        "tier": default_tier,
+        "owner": email,
+        "email": email,
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
+        "created": time.time(),
+    }
+    key_store_db.upsert_key(api_key, record)
+    key_store_db.set_sso_mapping(api_key, provider, subject)
+    logger.info("Registered SSO user %s via %s", email, provider)
+    return {"api_key": api_key, **record, "_created": True}
+
+
 # ---------------------------------------------------------------------------
 # Stripe Checkout
 # ---------------------------------------------------------------------------

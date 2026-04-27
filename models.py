@@ -5,7 +5,7 @@ These mirror the tables already created by tower_db.py and job_store.py
 so that Alembic can manage schema versioning going forward.
 """
 
-from sqlalchemy import Column, Float, Integer, PrimaryKeyConstraint, Text
+from sqlalchemy import Boolean, Column, Float, Integer, PrimaryKeyConstraint, String, Text
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -60,6 +60,13 @@ class ApiKey(Base):
     # JSON blob: white-label/tenant branding (Enterprise). Stored as Text
     # (SQLite-compatible) and decoded by key_store_db.
     branding = Column(Text)
+    # SSO / OIDC mapping. ``oauth_provider`` is "cognito" / "auth0" / etc.;
+    # ``oauth_subject`` is the IdP's stable user identifier (Cognito ``sub``
+    # claim). The composite (provider, subject) is the lookup key from a
+    # Bearer token to an api_key row.
+    sso_enabled = Column(Boolean, nullable=False, server_default="false")
+    oauth_provider = Column(String(20))
+    oauth_subject = Column(String(255))
 
 
 class PdfUsageMonthly(Base):

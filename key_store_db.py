@@ -86,6 +86,13 @@ class _PgBackend:
         }
         if row.get("billing_cycle"):
             rec["billing_cycle"] = row["billing_cycle"]
+        # SSO mapping (columns may be absent on older schemas — guard with .get).
+        if row.get("sso_enabled"):
+            rec["sso_enabled"] = bool(row.get("sso_enabled"))
+        if row.get("oauth_provider"):
+            rec["oauth_provider"] = row.get("oauth_provider")
+        if row.get("oauth_subject"):
+            rec["oauth_subject"] = row.get("oauth_subject")
         raw_branding = row.get("branding")
         if raw_branding:
             try:
@@ -180,6 +187,51 @@ class _PgBackend:
         rec = self._row_to_record(row)
         rec["api_key"] = row["api_key"]
         return rec
+
+    def lookup_by_oauth(self, provider: str, subject: str) -> Optional[Dict]:
+        """Return ``{api_key, ...record}`` for an IdP-provided (provider, sub) pair.
+
+        Returns ``None`` if no row matches or the columns are absent (very
+        old schema). Never raises on missing columns — falls back silently
+        so callers can branch on ``None``.
+        """
+        try:
+            with self._conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM api_keys WHERE oauth_provider = %s AND oauth_subject = %s LIMIT 1",
+                    (provider, subject),
+                )
+                row = cur.fetchone()
+        except psycopg2.errors.UndefinedColumn:  # type: ignore[attr-defined]
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("lookup_by_oauth failed: %s", exc)
+            return None
+        if not row:
+            return None
+        rec = self._row_to_record(row)
+        rec["api_key"] = row["api_key"]
+        return rec
+
+    def set_sso_mapping(self, api_key: str, provider: str, subject: str) -> None:
+        """Stamp an existing api_key row with its SSO identity. Idempotent."""
+        now = time.time()
+        try:
+            with self._conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE api_keys
+                       SET oauth_provider = %s,
+                           oauth_subject = %s,
+                           sso_enabled = TRUE,
+                           updated_at = %s
+                     WHERE api_key = %s
+                    """,
+                    (provider, subject, now, api_key),
+                )
+                conn.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("set_sso_mapping failed for %s: %s", api_key, exc)
 
     def consume_pdf_quota(self, api_key: str, period: str, limit: int) -> int:
         """Atomically increment-or-create the (api_key, period) PDF counter.
@@ -307,6 +359,25 @@ class _JsonBackend:
                     return {"api_key": k, **dict(v)}
         return None
 
+    def lookup_by_oauth(self, provider: str, subject: str) -> Optional[Dict]:
+        self._ensure()
+        with self._lock:
+            for k, v in self._mem.items():
+                if v.get("oauth_provider") == provider and v.get("oauth_subject") == subject:
+                    return {"api_key": k, **dict(v)}
+        return None
+
+    def set_sso_mapping(self, api_key: str, provider: str, subject: str) -> None:
+        self._ensure()
+        with self._lock:
+            rec = self._mem.get(api_key)
+            if rec is None:
+                return
+            rec["oauth_provider"] = provider
+            rec["oauth_subject"] = subject
+            rec["sso_enabled"] = True
+            self._save()
+
     def consume_pdf_quota(self, api_key: str, period: str, limit: int) -> int:
         with self._lock:
             entry = self._pdf.get(api_key)
@@ -372,3 +443,11 @@ def get_record_by_email(email: str) -> Optional[Dict]:
 
 def consume_pdf_quota(api_key: str, period: str, limit: int) -> int:
     return get_backend().consume_pdf_quota(api_key, period, limit)
+
+
+def lookup_by_oauth(provider: str, subject: str) -> Optional[Dict]:
+    return get_backend().lookup_by_oauth(provider, subject)
+
+
+def set_sso_mapping(api_key: str, provider: str, subject: str) -> None:
+    get_backend().set_sso_mapping(api_key, provider, subject)

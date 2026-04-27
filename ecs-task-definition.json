@@ -71,6 +71,18 @@
         {
           "name": "SQS_QUEUE_URL_PRIORITY",
           "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-priority-prod"
+        },
+        {
+          "name": "COGNITO_REGION",
+          "value": "sa-east-1"
+        },
+        {
+          "name": "COGNITO_USER_POOL_ID",
+          "value": ""
+        },
+        {
+          "name": "COGNITO_APP_CLIENT_ID",
+          "value": ""
         }
       ],
       "secrets": [
