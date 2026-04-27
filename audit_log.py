@@ -1,0 +1,224 @@
+"""Append-only tenant audit log.
+
+Design constraints:
+
+* **Never raise into the request path.** A failing audit insert MUST NOT
+  500 the user's API call. All write paths swallow exceptions and log a
+  warning. (Compliance auditors prefer "missing rows are visible in
+  monitoring" over "the app crashed and we lost the request".)
+* **Async-first**, with a sync helper for the few code paths that are
+  still sync (``plan_repeater_chain``).
+* **Best-effort durability**: writes go to PostgreSQL when ``DATABASE_URL``
+  is set, otherwise to an in-memory deque (CI / local dev). The deque
+  is also queryable via :func:`recent_for_key` so unit tests pass without
+  a database.
+* **Tenant scoping at read time**: :func:`recent_for_key` only ever
+  returns rows owned by the calling api_key. Admin (``owner='system'``)
+  is the only path that can read across tenants and is intentionally
+  not exposed via the public HTTP surface.
+
+Schema is created by Alembic migration ``a8e7f4d521b6_add_audit_log``.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import threading
+import time
+from collections import deque
+from typing import Any, Deque, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+# Cap the in-memory buffer so a misconfigured CI run doesn't OOM.
+_MEM_MAX = int(os.getenv("AUDIT_MEM_MAX", "5000"))
+# Cap metadata JSON size so a malicious caller can't blow up the table.
+_META_MAX_BYTES = 4096
+
+# In-memory ring (used when DB is unavailable).
+_mem: Deque[Dict[str, Any]] = deque(maxlen=_MEM_MAX)
+_mem_lock = threading.Lock()
+_next_id = 1
+_next_id_lock = threading.Lock()
+
+
+def _truncate_meta(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not meta:
+        return None
+    try:
+        s = json.dumps(meta, separators=(",", ":"), default=str)
+    except Exception:  # noqa: BLE001
+        return None
+    if len(s) > _META_MAX_BYTES:
+        # Truncate but stay valid JSON: replace with a stub object.
+        return json.dumps(
+            {"_truncated": True, "_orig_size": len(s)},
+            separators=(",", ":"),
+        )
+    return s
+
+
+def _row(
+    api_key: str,
+    action: str,
+    *,
+    actor_email: Optional[str] = None,
+    tier: Optional[str] = None,
+    target: Optional[str] = None,
+    ip: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    ts: Optional[float] = None,
+) -> Dict[str, Any]:
+    global _next_id
+    with _next_id_lock:
+        rid = _next_id
+        _next_id += 1
+    return {
+        "id": rid,
+        "ts": ts if ts is not None else time.time(),
+        "api_key": api_key or "",
+        "actor_email": actor_email,
+        "tier": tier,
+        "action": action,
+        "target": target,
+        "ip": ip,
+        "user_agent": (user_agent or "")[:512] or None,
+        "metadata_json": _truncate_meta(metadata),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Database layer
+# ---------------------------------------------------------------------------
+
+_DB_URL = os.getenv("DATABASE_URL", "")
+_db_disabled = not _DB_URL
+
+
+def _pg_insert(row: Dict[str, Any]) -> None:
+    """Synchronous PG insert via psycopg2. Used from sync code paths.
+
+    Must not raise — caller relies on best-effort semantics.
+    """
+    try:
+        import psycopg2  # type: ignore
+    except Exception:
+        return
+    try:
+        with psycopg2.connect(_DB_URL) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO audit_log
+                  (ts, api_key, actor_email, tier, action, target, ip,
+                   user_agent, metadata_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    row["ts"], row["api_key"], row["actor_email"], row["tier"],
+                    row["action"], row["target"], row["ip"], row["user_agent"],
+                    row["metadata_json"],
+                ),
+            )
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("audit_log insert failed (%s): %s", row.get("action"), exc)
+
+
+def _pg_recent(api_key: str, limit: int) -> List[Dict[str, Any]]:
+    try:
+        import psycopg2  # type: ignore
+        import psycopg2.extras  # type: ignore
+    except Exception:
+        return []
+    try:
+        with psycopg2.connect(_DB_URL) as conn, conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) as cur:
+            cur.execute(
+                """
+                SELECT id, ts, api_key, actor_email, tier, action, target,
+                       ip, user_agent, metadata_json
+                  FROM audit_log
+                 WHERE api_key = %s
+                 ORDER BY ts DESC
+                 LIMIT %s
+                """,
+                (api_key, int(limit)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("audit_log read failed: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def log_sync(
+    api_key: str,
+    action: str,
+    **kwargs: Any,
+) -> None:
+    """Append one row synchronously. Safe to call from sync code.
+
+    Returns immediately (does not block on the network for more than the
+    single PG INSERT — typically < 5 ms on a warm pool).
+    """
+    row = _row(api_key, action, **kwargs)
+    with _mem_lock:
+        _mem.append(row)
+    if not _db_disabled:
+        _pg_insert(row)
+
+
+async def log(
+    api_key: str,
+    action: str,
+    **kwargs: Any,
+) -> None:
+    """Append one row from an async context.
+
+    Pushes the PG INSERT to a worker thread so the request handler
+    isn't blocked on IO. The in-memory ring is updated synchronously
+    so unit tests see the row immediately even without a DB.
+    """
+    row = _row(api_key, action, **kwargs)
+    with _mem_lock:
+        _mem.append(row)
+    if _db_disabled:
+        return
+    try:
+        await asyncio.to_thread(_pg_insert, row)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("audit_log async insert failed: %s", exc)
+
+
+def recent_for_key(api_key: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """Return the most recent audit rows for a single tenant.
+
+    Reads from PostgreSQL when configured, falls back to the in-memory
+    ring otherwise. Result is ordered newest-first.
+    """
+    limit = max(1, min(int(limit), 1000))
+    if not _db_disabled:
+        rows = _pg_recent(api_key, limit)
+        if rows:
+            return rows
+    # Fallback: scan in-memory ring.
+    with _mem_lock:
+        snapshot = [dict(r) for r in _mem if r["api_key"] == api_key]
+    snapshot.sort(key=lambda r: r["ts"], reverse=True)
+    return snapshot[:limit]
+
+
+def reset_for_tests() -> None:
+    """Clear the in-memory ring. Test helper only."""
+    global _next_id
+    with _mem_lock:
+        _mem.clear()
+    with _next_id_lock:
+        _next_id = 1

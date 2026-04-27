@@ -40,6 +40,7 @@ from srtm_elevation import SRTMReader
 import stripe_billing
 from tower_db import TowerStore
 from job_store import JobStore, JOB_RESULTS_DIR
+import audit_log as _audit
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from pythonjsonlogger import jsonlogger
 
@@ -2018,6 +2019,28 @@ def _validate_https_url(value: Optional[str], field: str) -> Optional[str]:
     return v
 
 
+def _client_ip(request: Request) -> Optional[str]:
+    """Extract the caller IP, honouring trusted proxy headers.
+
+    The ALB and Caddy in front of the API both add ``X-Forwarded-For``
+    and ``X-Real-IP``. We take the first IP in XFF (the original client)
+    and fall back to ``request.client.host`` for direct connections.
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        # Take the first non-empty token.
+        for part in xff.split(","):
+            ip = part.strip()
+            if ip:
+                return ip[:64]
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()[:64]
+    if request.client and request.client.host:
+        return request.client.host[:64]
+    return None
+
+
 @app.get("/tenant/branding")
 async def get_tenant_branding(key_data: Dict = Depends(verify_api_key)):
     """Return the calling tenant's branding overrides (or empty dict)."""
@@ -2033,6 +2056,7 @@ async def get_tenant_branding(key_data: Dict = Depends(verify_api_key)):
 @app.put("/tenant/branding")
 async def set_tenant_branding(
     branding: TenantBranding,
+    request: Request,
     key_data: Dict = Depends(require_tier(Tier.ENTERPRISE)),
 ):
     """Update the calling Enterprise tenant's branding (white-label).
@@ -2061,6 +2085,17 @@ async def set_tenant_branding(
     # Bust the CORS cache so the new frontend_url takes effect immediately.
     _tenant_origins_cache.clear()
 
+    await _audit.log(
+        api_key,
+        "tenant.branding.update",
+        actor_email=key_data.get("email") or key_data.get("owner"),
+        tier=key_data["tier"].value,
+        target="tenant.branding",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={"fields": sorted(payload.keys())},
+    )
+
     return {
         "status": "ok",
         "branding": payload,
@@ -2069,6 +2104,7 @@ async def set_tenant_branding(
 
 @app.delete("/tenant/branding")
 async def delete_tenant_branding(
+    request: Request,
     key_data: Dict = Depends(require_tier(Tier.ENTERPRISE)),
 ):
     """Clear all branding overrides for the calling tenant."""
@@ -2077,7 +2113,51 @@ async def delete_tenant_branding(
         raise HTTPException(status_code=500, detail="api_key not in key_data")
     _key_store_db.set_branding(api_key, None)
     _tenant_origins_cache.clear()
+    await _audit.log(
+        api_key,
+        "tenant.branding.delete",
+        actor_email=key_data.get("email") or key_data.get("owner"),
+        tier=key_data["tier"].value,
+        target="tenant.branding",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
     return {"status": "ok"}
+
+
+@app.get("/tenant/audit")
+async def get_tenant_audit(
+    limit: int = Query(default=100, ge=1, le=1000),
+    key_data: Dict = Depends(verify_api_key),
+):
+    """Return the calling tenant's recent audit log entries (newest first).
+
+    Tenants only see their own rows; cross-tenant reads are not exposed
+    via the public API. The endpoint is available to all tiers — every
+    paying customer can audit their own activity for compliance.
+    """
+    api_key = key_data.get("api_key") or ""
+    rows = _audit.recent_for_key(api_key, limit=limit)
+    # Decode metadata_json so the response is one consistent shape.
+    out = []
+    for r in rows:
+        meta_raw = r.get("metadata_json")
+        try:
+            meta = json.loads(meta_raw) if meta_raw else None
+        except Exception:  # noqa: BLE001
+            meta = None
+        out.append({
+            "id": r.get("id"),
+            "ts": r.get("ts"),
+            "action": r.get("action"),
+            "target": r.get("target"),
+            "actor_email": r.get("actor_email"),
+            "tier": r.get("tier"),
+            "ip": r.get("ip"),
+            "user_agent": r.get("user_agent"),
+            "metadata": meta,
+        })
+    return {"count": len(out), "entries": out}
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -2418,6 +2498,23 @@ async def batch_reports(
                 }),
             )
 
+        await _audit.log(
+            _caller_key,
+            "batch.create",
+            actor_email=key_data.get("email") or key_data.get("owner"),
+            tier=_tier_value,
+            target=f"job:{job_id}",
+            ip=_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            metadata={
+                "tower_id": tower_id,
+                "rows": len(receivers),
+                "queue": "priority" if _queue_url == SQS_QUEUE_URL_PRIORITY and _queue_url else (
+                    "default" if _queue_url else "db-only"
+                ),
+            },
+        )
+
         return {
             "job_id": job_id,
             "status": "queued",
@@ -2606,12 +2703,21 @@ class CheckoutRequest(BaseModel):
     )
 
 @app.post("/signup/free", status_code=201)
-async def signup_free(body: SignupRequest):
+async def signup_free(body: SignupRequest, request: Request):
     """Register a free-tier account and receive an API key instantly."""
     try:
         result = stripe_billing.register_free_user(body.email)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    await _audit.log(
+        result["api_key"],
+        "key.issue.free",
+        actor_email=result["email"],
+        tier=result["tier"],
+        target=f"key:{result['api_key'][:12]}",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
     return {
         "api_key": result["api_key"],
         "tier": result["tier"],

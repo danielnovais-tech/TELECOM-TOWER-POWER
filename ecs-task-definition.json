@@ -63,6 +63,14 @@
         {
           "name": "COVERAGE_MODEL_S3_URI",
           "value": "s3://telecom-tower-power-results/models/coverage_model.npz"
+        },
+        {
+          "name": "SQS_QUEUE_URL",
+          "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-prod"
+        },
+        {
+          "name": "SQS_QUEUE_URL_PRIORITY",
+          "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-priority-prod"
         }
       ],
       "secrets": [

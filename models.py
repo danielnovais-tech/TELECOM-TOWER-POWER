@@ -74,3 +74,31 @@ class PdfUsageMonthly(Base):
     __table_args__ = (
         PrimaryKeyConstraint("api_key", "period", name="pk_pdf_usage_monthly"),
     )
+
+
+class AuditLog(Base):
+    """Append-only audit trail of tenant-scoped privileged actions.
+
+    SOC 2 / Enterprise procurement requirement. Every mutation that
+    touches tenant-owned state (branding changes, batch jobs, key
+    issuance, tier changes) appends one row here. Reads are scoped to
+    the calling tenant via ``api_key``; admins (``owner='system'``) can
+    read across tenants.
+
+    Stored as Text + JSON to stay portable across SQLite (CI) and
+    PostgreSQL (prod). ``ts`` is a Float (epoch seconds) — same shape as
+    the rest of the schema.
+    """
+
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ts = Column(Float, nullable=False, index=True)
+    api_key = Column(Text, nullable=False, index=True)
+    actor_email = Column(Text)
+    tier = Column(Text)
+    action = Column(Text, nullable=False, index=True)
+    target = Column(Text)
+    ip = Column(Text)
+    user_agent = Column(Text)
+    metadata_json = Column(Text)  # arbitrary JSON blob, ≤ 4 KB after dump
