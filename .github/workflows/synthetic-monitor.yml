@@ -1,0 +1,97 @@
+name: Synthetic Monitor
+
+# Cron-based external uptime check for the public surface.
+# Catches drift between deploys (e.g. Lambda 503, Caddy reload broke a vhost,
+# ALB target deregistered, cert expiry).
+#
+# Failure → workflow run goes red → GitHub email + (optional) SNS notify.
+
+on:
+  schedule:
+    # Every 5 minutes. GitHub may delay scheduled runs under load; that's fine
+    # for our SLO (we only care about >1 consecutive failure).
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: synthetic-monitor
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe public endpoints
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # name, url, expected_status, max_latency_ms
+          - { name: "ALB-direct",       url: "https://telecom-tower-power-alb-581610578.sa-east-1.elb.amazonaws.com/health", expect: "200", slo_ms: "3000" }
+          - { name: "Caddy-api",        url: "https://api.telecomtowerpower.com.br/health",         expect: "200", slo_ms: "3000" }
+          - { name: "Caddy-app",        url: "https://app.telecomtowerpower.com.br/health",         expect: "200", slo_ms: "3000" }
+          - { name: "Caddy-www",        url: "https://www.telecomtowerpower.com.br/health",         expect: "200", slo_ms: "3000" }
+          - { name: "Caddy-docs",       url: "https://docs.telecomtowerpower.com.br/",              expect: "200", slo_ms: "3000" }
+          - { name: "Lambda-prod",      url: "https://0ol2ek9fyl.execute-api.sa-east-1.amazonaws.com/prod/health", expect: "200", slo_ms: "5000" }
+          - { name: "Prometheus",       url: "https://prometheus.telecomtowerpower.com.br/-/healthy", expect: "200", slo_ms: "3000" }
+          - { name: "Grafana-api",      url: "https://monitoring.telecomtowerpower.com.br/api/health", expect: "200", slo_ms: "3000" }
+    steps:
+      - name: Probe ${{ matrix.target.name }}
+        env:
+          NAME:    ${{ matrix.target.name }}
+          URL:     ${{ matrix.target.url }}
+          EXPECT:  ${{ matrix.target.expect }}
+          SLO_MS:  ${{ matrix.target.slo_ms }}
+        run: |
+          set -uo pipefail
+          # Two attempts to filter transient blips (cold path / DNS retry).
+          for attempt in 1 2; do
+            OUT=$(curl -sS -o /dev/null \
+              --connect-timeout 5 --max-time 15 \
+              -w "HTTP=%{http_code} TOTAL_MS=%{time_total} CONNECT_MS=%{time_connect} TLS_MS=%{time_appconnect}" \
+              -k -L "$URL" 2>&1) || OUT="HTTP=000 TOTAL_MS=0 CONNECT_MS=0 TLS_MS=0"
+            echo "[$NAME attempt=$attempt] $OUT"
+            STATUS=$(echo "$OUT" | sed -n 's/.*HTTP=\([0-9]*\).*/\1/p')
+            TOTAL=$(echo "$OUT" | sed -n 's/.*TOTAL_MS=\([0-9.]*\).*/\1/p')
+            # bash float→int (truncate to ms)
+            TOTAL_MS=$(awk -v t="${TOTAL:-0}" 'BEGIN { printf "%d", t * 1000 }')
+            if [ "$STATUS" = "$EXPECT" ]; then
+              if [ "$TOTAL_MS" -gt "$SLO_MS" ]; then
+                echo "::warning title=$NAME slow::$TOTAL_MS ms > SLO $SLO_MS ms"
+              fi
+              echo "::notice title=$NAME ok::HTTP $STATUS in ${TOTAL_MS}ms"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error title=$NAME DOWN::expected HTTP $EXPECT, got $STATUS for $URL"
+          exit 1
+
+  notify:
+    name: Notify on failure
+    needs: probe
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Publish to SNS (optional)
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION:    sa-east-1
+          TOPIC_ARN:             ${{ secrets.SYNTHETIC_ALERT_TOPIC_ARN }}
+          RUN_URL:               ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "${TOPIC_ARN:-}" ]; then
+            echo "SYNTHETIC_ALERT_TOPIC_ARN not set; skipping SNS publish."
+            exit 0
+          fi
+          aws sns publish \
+            --region "$AWS_DEFAULT_REGION" \
+            --topic-arn "$TOPIC_ARN" \
+            --subject "Synthetic monitor FAILED" \
+            --message "One or more probes failed.
+See: $RUN_URL"
