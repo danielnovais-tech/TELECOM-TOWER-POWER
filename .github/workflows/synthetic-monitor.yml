@@ -93,5 +93,4 @@ jobs:
             --region "$AWS_DEFAULT_REGION" \
             --topic-arn "$TOPIC_ARN" \
             --subject "Synthetic monitor FAILED" \
-            --message "One or more probes failed.
-See: $RUN_URL"
+            --message "One or more probes failed. See: $RUN_URL"
