@@ -20,3 +20,6 @@ asyncpg
 aiosqlite
 aiofiles
 geopy
+# Geo-format exports (KML / Shapefile)
+simplekml>=1.3.6
+pyshp>=2.3.1

@@ -57,6 +57,9 @@ class ApiKey(Base):
     billing_cycle = Column(Text)
     created_at = Column(Float, nullable=False)
     updated_at = Column(Float, nullable=False)
+    # JSON blob: white-label/tenant branding (Enterprise). Stored as Text
+    # (SQLite-compatible) and decoded by key_store_db.
+    branding = Column(Text)
 
 
 class PdfUsageMonthly(Base):

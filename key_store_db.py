@@ -86,6 +86,12 @@ class _PgBackend:
         }
         if row.get("billing_cycle"):
             rec["billing_cycle"] = row["billing_cycle"]
+        raw_branding = row.get("branding")
+        if raw_branding:
+            try:
+                rec["branding"] = json.loads(raw_branding) if isinstance(raw_branding, str) else raw_branding
+            except (TypeError, ValueError):
+                logger.warning("could not decode branding JSON for api_key=%s", row.get("api_key"))
         return rec
 
     def get_all_keys(self) -> Dict[str, Dict]:
@@ -140,6 +146,17 @@ class _PgBackend:
     def delete_key(self, api_key: str) -> None:
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM api_keys WHERE api_key = %s", (api_key,))
+            conn.commit()
+
+    def set_branding(self, api_key: str, branding: Optional[Dict]) -> None:
+        """Replace the branding JSON for ``api_key``. ``None`` clears it."""
+        payload = json.dumps(branding) if branding is not None else None
+        now = time.time()
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE api_keys SET branding = %s, updated_at = %s WHERE api_key = %s",
+                (payload, now, api_key),
+            )
             conn.commit()
 
     def get_key_for_email(self, email: str) -> Optional[str]:
@@ -238,6 +255,7 @@ class _JsonBackend:
     def upsert_key(self, api_key: str, record: Dict) -> None:
         self._ensure()
         with self._lock:
+            existing_branding = (self._mem.get(api_key) or {}).get("branding")
             self._mem[api_key] = {
                 "tier": record["tier"],
                 "owner": record.get("owner") or record.get("email"),
@@ -248,12 +266,29 @@ class _JsonBackend:
             }
             if record.get("billing_cycle"):
                 self._mem[api_key]["billing_cycle"] = record["billing_cycle"]
+            # Preserve branding across upserts unless the caller explicitly
+            # supplies one (Stripe tier-change webhooks must not wipe it).
+            new_branding = record.get("branding", existing_branding)
+            if new_branding is not None:
+                self._mem[api_key]["branding"] = new_branding
             self._save()
 
     def delete_key(self, api_key: str) -> None:
         self._ensure()
         with self._lock:
             self._mem.pop(api_key, None)
+            self._save()
+
+    def set_branding(self, api_key: str, branding: Optional[Dict]) -> None:
+        self._ensure()
+        with self._lock:
+            rec = self._mem.get(api_key)
+            if rec is None:
+                return
+            if branding is None:
+                rec.pop("branding", None)
+            else:
+                rec["branding"] = branding
             self._save()
 
     def get_key_for_email(self, email: str) -> Optional[str]:
@@ -321,6 +356,10 @@ def upsert_key(api_key: str, record: Dict) -> None:
 
 def delete_key(api_key: str) -> None:
     get_backend().delete_key(api_key)
+
+
+def set_branding(api_key: str, branding: Optional[Dict]) -> None:
+    get_backend().set_branding(api_key, branding)
 
 
 def get_key_for_email(email: str) -> Optional[str]:

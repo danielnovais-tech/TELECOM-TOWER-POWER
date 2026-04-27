@@ -745,8 +745,8 @@ async def predict_coverage_grid(
     satisfies this).  When ``None`` we fall back to a flat profile,
     which still exercises the FSPL portion of the model.
     """
-    if grid_size < 2 or grid_size > 100:
-        raise ValueError("grid_size must be in [2, 100]")
+    if grid_size < 2 or grid_size > 200:
+        raise ValueError("grid_size must be in [2, 200]")
 
     min_lat, min_lon, max_lat, max_lon = bbox
     if not (-90 <= min_lat < max_lat <= 90 and -180 <= min_lon < max_lon <= 180):
@@ -789,6 +789,111 @@ async def predict_coverage_grid(
             lat=la, lon=lo, signal_dbm=result.signal_dbm, feasible=result.feasible
         ))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Streaming coverage grid (SSE / async generator)
+# ---------------------------------------------------------------------------
+
+def grid_size_for_cell_size(
+    bbox: Tuple[float, float, float, float],
+    cell_size_m: float,
+    *,
+    max_cells_per_side: int = 200,
+) -> int:
+    """Return a grid_size (cells per side) producing ~``cell_size_m`` resolution.
+
+    Uses the longer side of the bbox so each cell is at most ``cell_size_m``.
+    Capped at ``max_cells_per_side`` so a sloppy bbox cannot produce a 10k-side
+    grid that would DoS the elevation backend.
+    """
+    if cell_size_m <= 0:
+        raise ValueError("cell_size_m must be positive")
+    min_lat, min_lon, max_lat, max_lon = bbox
+    if not (-90 <= min_lat < max_lat <= 90 and -180 <= min_lon < max_lon <= 180):
+        raise ValueError("bbox must be (min_lat, min_lon, max_lat, max_lon)")
+    mid_lat = 0.5 * (min_lat + max_lat)
+    side_lat_m = (max_lat - min_lat) * 111_320.0
+    side_lon_m = (max_lon - min_lon) * 111_320.0 * math.cos(math.radians(mid_lat))
+    side_m = max(side_lat_m, side_lon_m)
+    n = int(math.ceil(side_m / cell_size_m)) + 1
+    return max(2, min(max_cells_per_side, n))
+
+
+async def predict_coverage_grid_stream(
+    *,
+    tx_lat: float,
+    tx_lon: float,
+    tx_h_m: float,
+    f_hz: float,
+    bbox: Tuple[float, float, float, float],
+    grid_size: int = 25,
+    rx_h_m: float = 10.0,
+    tx_power_dbm: float = 43.0,
+    tx_gain_dbi: float = 17.0,
+    rx_gain_dbi: float = 12.0,
+    elevation_service: Optional[Any] = None,
+    feasibility_threshold_dbm: float = -95.0,
+    concurrency: int = 16,
+):
+    """Async generator yielding ``GridPoint`` rows as they're predicted.
+
+    Same parameters as :func:`predict_coverage_grid` but streams results so
+    a UI can render a heatmap progressively. Uses a bounded semaphore to
+    keep elevation-service fan-out under control even for 200x200 grids
+    (40k cells).
+    """
+    if grid_size < 2 or grid_size > 200:
+        raise ValueError("grid_size must be in [2, 200]")
+    min_lat, min_lon, max_lat, max_lon = bbox
+    if not (-90 <= min_lat < max_lat <= 90 and -180 <= min_lon < max_lon <= 180):
+        raise ValueError("bbox must be (min_lat, min_lon, max_lat, max_lon)")
+
+    import asyncio
+    lats = np.linspace(min_lat, max_lat, grid_size)
+    lons = np.linspace(min_lon, max_lon, grid_size)
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def _one(la: float, lo: float) -> "GridPoint":
+        async with sem:
+            d_km = haversine_km(tx_lat, tx_lon, la, lo)
+            if d_km < 0.05:
+                return GridPoint(
+                    lat=la, lon=lo,
+                    signal_dbm=tx_power_dbm + tx_gain_dbi + rx_gain_dbi,
+                    feasible=True,
+                )
+            profile: List[float] = []
+            if elevation_service is not None:
+                try:
+                    profile = await elevation_service.get_profile(tx_lat, tx_lon, la, lo)
+                except Exception:
+                    logger.debug("elevation profile failed", exc_info=True)
+            tx_ground = profile[0] if profile else 0.0
+            rx_ground = profile[-1] if profile else 0.0
+            result = predict_signal(
+                d_km=d_km, f_hz=f_hz, tx_h_m=tx_h_m, rx_h_m=rx_h_m,
+                tx_power_dbm=tx_power_dbm, tx_gain_dbi=tx_gain_dbi,
+                rx_gain_dbi=rx_gain_dbi, terrain_profile=profile,
+                tx_ground_elev_m=tx_ground, rx_ground_elev_m=rx_ground,
+                feasibility_threshold_dbm=feasibility_threshold_dbm,
+            )
+            return GridPoint(
+                lat=float(la), lon=float(lo),
+                signal_dbm=result.signal_dbm, feasible=result.feasible,
+            )
+
+    tasks = [
+        asyncio.create_task(_one(float(la), float(lo)))
+        for la in lats for lo in lons
+    ]
+    try:
+        for coro in asyncio.as_completed(tasks):
+            yield await coro
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
 
 
 # ---------------------------------------------------------------------------

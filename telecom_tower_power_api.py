@@ -964,6 +964,11 @@ async def verify_api_key(request: Request, api_key: str = Security(api_key_heade
     request.state.rate_limit_remaining = remaining
     request.state.rate_limit_limit = limit
     request.state.is_demo = bool(key_data.get("demo"))
+    # Carry the api_key in the dependency payload so downstream handlers
+    # (tenant branding, usage portal) can look up per-key state without
+    # re-parsing the header.
+    key_data = dict(key_data)
+    key_data["api_key"] = api_key
     return key_data
 
 def require_tier(*allowed: Tier):
@@ -1561,7 +1566,16 @@ class CoveragePredictRequest(BaseModel):
         min_length=4,
         max_length=4,
     )
-    grid_size: int = Field(default=20, ge=2, le=100)
+    grid_size: int = Field(default=20, ge=2, le=200)
+    # Real-time AI heatmap: cell resolution in metres. When set, ``grid_size``
+    # is derived from the bbox and clamped per tier.
+    cell_size_m: Optional[float] = Field(
+        default=None,
+        gt=0,
+        le=10_000,
+        description="Cell size in metres (e.g. 50 for a 50x50 m heatmap). "
+                    "Overrides grid_size when supplied.",
+    )
 
     feasibility_threshold_dbm: float = -95.0
     explain: bool = False
@@ -1698,6 +1712,462 @@ async def coverage_predict(
     }
     if body.explain:
         response["explanation"] = _cp.explain(response)
+    return response
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Per-tier caps for the heatmap grid. Caps the *total* number of cells
+# (grid_size**2) so a 50 m grid over a 5 km bbox = 100x100 = 10k cells
+# fits within Business / Enterprise but is denied for Pro.
+# ─────────────────────────────────────────────────────────────────────
+_HEATMAP_MAX_CELLS = {
+    Tier.PRO:        2_500,    # 50 x 50
+    Tier.BUSINESS:   10_000,   # 100 x 100
+    Tier.ENTERPRISE: 40_000,   # 200 x 200
+}
+
+
+def _resolve_grid_size(body: "CoveragePredictRequest", tier: Tier) -> int:
+    """Pick a grid_size honouring ``cell_size_m`` and per-tier safety caps.
+
+    ``cell_size_m`` (when set) overrides ``body.grid_size`` so the UI can
+    request a real-world resolution (50 m, 100 m, …) instead of a cell
+    count.
+    """
+    import coverage_predict as _cp
+    if body.bbox is None:
+        return body.grid_size
+    if body.cell_size_m is not None:
+        try:
+            grid_size = _cp.grid_size_for_cell_size(tuple(body.bbox), body.cell_size_m)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    else:
+        grid_size = body.grid_size
+
+    cap = _HEATMAP_MAX_CELLS.get(tier, 2_500)
+    max_side = int(cap ** 0.5)
+    if grid_size > max_side:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Heatmap grid {grid_size}x{grid_size} ({grid_size * grid_size} cells) "
+                f"exceeds {tier.value} tier cap of {cap} cells "
+                f"({max_side}x{max_side}). Reduce cell_size_m, shrink bbox, "
+                "or upgrade your plan."
+            ),
+        )
+    return grid_size
+
+
+@app.post("/coverage/predict/stream")
+async def coverage_predict_stream(
+    body: CoveragePredictRequest,
+    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+):
+    """Server-Sent-Events real-time AI heatmap.
+
+    Streams ``GridPoint`` rows as soon as each cell is predicted so a
+    front-end map can paint the heatmap progressively (50x50 m cells over
+    a city block render in <1 s of perceived latency).
+
+    Use ``cell_size_m`` (e.g. 50) to request a physical resolution rather
+    than a fixed cell count. Caps apply per tier (Pro: 2.5k cells,
+    Business: 10k, Enterprise: 40k).
+
+    Each event is JSON: ``{"lat","lon","signal_dbm","feasible","class"}``,
+    plus a final ``event: done`` carrying summary stats.
+    """
+    if body.bbox is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Streaming heatmap requires bbox (use POST /coverage/predict for point mode).",
+        )
+
+    import coverage_predict as _cp
+    import coverage_export as _cx
+
+    # Resolve transmitter (mirrors coverage_predict)
+    if body.tower_id:
+        tower = platform.get_tower(body.tower_id)
+        if not tower:
+            raise HTTPException(status_code=404, detail=f"Tower {body.tower_id} not found")
+        tx_lat, tx_lon = tower.lat, tower.lon
+        tx_h, tx_power = tower.height_m, tower.power_dbm
+        f_hz = tower.primary_freq_hz()
+    else:
+        if (body.tx_lat is None or body.tx_lon is None
+                or body.tx_height_m is None or body.band is None):
+            raise HTTPException(
+                status_code=422,
+                detail="Provide either tower_id or tx_lat/tx_lon/tx_height_m/band",
+            )
+        tx_lat = body.tx_lat
+        tx_lon = body.tx_lon
+        tx_h = body.tx_height_m
+        tx_power = body.tx_power_dbm
+        f_hz = body.band.to_hz()
+
+    grid_size = _resolve_grid_size(body, key_data["tier"])
+
+    async def _events():
+        count = 0
+        feasible = 0
+        s_min = float("inf")
+        s_max = float("-inf")
+        s_sum = 0.0
+        # Initial header event lets the client size the canvas before
+        # the first cell arrives.
+        header = {
+            "event": "start",
+            "grid_size": grid_size,
+            "total_cells": grid_size * grid_size,
+            "bbox": body.bbox,
+            "tx": {"lat": tx_lat, "lon": tx_lon, "height_m": tx_h,
+                   "power_dbm": tx_power, "freq_hz": f_hz},
+        }
+        yield f"event: start\ndata: {json.dumps(header)}\n\n"
+        try:
+            async for p in _cp.predict_coverage_grid_stream(
+                tx_lat=tx_lat, tx_lon=tx_lon, tx_h_m=tx_h, f_hz=f_hz,
+                bbox=tuple(body.bbox), grid_size=grid_size,
+                rx_h_m=body.rx_height_m, tx_power_dbm=tx_power,
+                tx_gain_dbi=body.tx_gain_dbi, rx_gain_dbi=body.rx_gain_dbi,
+                elevation_service=platform.elevation,
+                feasibility_threshold_dbm=body.feasibility_threshold_dbm,
+            ):
+                count += 1
+                if p.feasible:
+                    feasible += 1
+                if p.signal_dbm < s_min:
+                    s_min = p.signal_dbm
+                if p.signal_dbm > s_max:
+                    s_max = p.signal_dbm
+                s_sum += p.signal_dbm
+                label, _color = _cx.classify(p.signal_dbm)
+                row = {
+                    "lat": round(p.lat, 6),
+                    "lon": round(p.lon, 6),
+                    "signal_dbm": round(p.signal_dbm, 2),
+                    "feasible": p.feasible,
+                    "class": label,
+                }
+                yield f"data: {json.dumps(row)}\n\n"
+        except ValueError as e:
+            yield f"event: error\ndata: {json.dumps({'detail': str(e)})}\n\n"
+            return
+        summary = {
+            "event": "done",
+            "count": count,
+            "feasible_pct": round(100.0 * feasible / count, 1) if count else 0.0,
+            "signal_min_dbm": round(s_min, 2) if count else None,
+            "signal_max_dbm": round(s_max, 2) if count else None,
+            "signal_mean_dbm": round(s_sum / count, 2) if count else None,
+        }
+        yield f"event: done\ndata: {json.dumps(summary)}\n\n"
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",  # disable proxy buffering for SSE
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Geo-format exports (KML / Shapefile / GeoJSON) for QGIS / AutoCAD
+# ─────────────────────────────────────────────────────────────────────
+
+class CoverageExportRequest(CoveragePredictRequest):
+    """Same body as ``CoveragePredictRequest`` (bbox required)."""
+    pass
+
+
+@app.post("/coverage/predict/export")
+async def coverage_predict_export(
+    body: CoverageExportRequest,
+    fmt: str = "kml",
+    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+):
+    """Export a coverage grid as KML / Shapefile / GeoJSON.
+
+    QGIS opens KML and Shapefile natively; AutoCAD Map 3D imports
+    Shapefiles. ``fmt`` is one of ``kml`` (default), ``shp``, ``geojson``.
+
+    Pro / Business / Enterprise only. Same per-tier cell caps as the
+    real-time heatmap.
+    """
+    if body.bbox is None:
+        raise HTTPException(status_code=422, detail="Export requires bbox.")
+
+    import coverage_predict as _cp
+    import coverage_export as _cx
+
+    fmt_lower = fmt.lower()
+    if fmt_lower not in _cx.FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported format {fmt!r}; use one of: {', '.join(_cx.FORMATS)}",
+        )
+
+    # Resolve transmitter (mirrors coverage_predict)
+    if body.tower_id:
+        tower = platform.get_tower(body.tower_id)
+        if not tower:
+            raise HTTPException(status_code=404, detail=f"Tower {body.tower_id} not found")
+        tx_lat, tx_lon = tower.lat, tower.lon
+        tx_h, tx_power = tower.height_m, tower.power_dbm
+        f_hz = tower.primary_freq_hz()
+    else:
+        if (body.tx_lat is None or body.tx_lon is None
+                or body.tx_height_m is None or body.band is None):
+            raise HTTPException(
+                status_code=422,
+                detail="Provide either tower_id or tx_lat/tx_lon/tx_height_m/band",
+            )
+        tx_lat = body.tx_lat
+        tx_lon = body.tx_lon
+        tx_h = body.tx_height_m
+        tx_power = body.tx_power_dbm
+        f_hz = body.band.to_hz()
+
+    grid_size = _resolve_grid_size(body, key_data["tier"])
+
+    try:
+        grid = await _cp.predict_coverage_grid(
+            tx_lat=tx_lat, tx_lon=tx_lon, tx_h_m=tx_h, f_hz=f_hz,
+            bbox=tuple(body.bbox), grid_size=grid_size,
+            rx_h_m=body.rx_height_m, tx_power_dbm=tx_power,
+            tx_gain_dbi=body.tx_gain_dbi, rx_gain_dbi=body.rx_gain_dbi,
+            elevation_service=platform.elevation,
+            feasibility_threshold_dbm=body.feasibility_threshold_dbm,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    meta = {
+        "tx": {"lat": tx_lat, "lon": tx_lon, "height_m": tx_h,
+               "power_dbm": tx_power, "freq_hz": f_hz},
+        "grid_size": grid_size,
+        "bbox": body.bbox,
+        "feasibility_threshold_dbm": body.feasibility_threshold_dbm,
+        "generated_at": time.time(),
+    }
+    name = f"coverage_{int(time.time())}"
+    try:
+        payload, content_type, filename = _cx.export(grid, fmt_lower, name=name, meta=meta)
+    except RuntimeError as e:
+        # Missing optional dep (simplekml / pyshp). 503 to differentiate
+        # from a request error — the caller can retry once we redeploy.
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return Response(
+        content=payload,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# White-label / tenant branding (Enterprise)
+# ─────────────────────────────────────────────────────────────────────
+
+class TenantBranding(BaseModel):
+    """Whitelisted tenant branding fields. Anything else is dropped on PUT."""
+
+    company_name: Optional[str] = Field(default=None, max_length=120)
+    logo_url: Optional[str] = Field(
+        default=None,
+        max_length=2048,
+        description="HTTPS URL of the tenant logo (PNG/SVG).",
+    )
+    primary_color: Optional[str] = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        description="Hex colour, e.g. #1F4ED8.",
+    )
+    secondary_color: Optional[str] = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    accent_color: Optional[str] = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    frontend_url: Optional[str] = Field(
+        default=None,
+        max_length=2048,
+        description="HTTPS origin where the tenant's white-label UI is hosted. "
+                    "Auto-allowed in CORS for that tenant's API key.",
+    )
+    support_email: Optional[str] = Field(default=None, max_length=200)
+    favicon_url: Optional[str] = Field(default=None, max_length=2048)
+    custom_css_url: Optional[str] = Field(default=None, max_length=2048)
+
+
+def _validate_https_url(value: Optional[str], field: str) -> Optional[str]:
+    """Reject http://, javascript:, data: and similar — only https:// is allowed."""
+    if not value:
+        return value
+    v = value.strip()
+    # OWASP A03: prevent script injection via crafted logo/frontend URLs
+    # rendered into the SPA (script src, iframe src, …). Only https is
+    # acceptable for a hosted white-label.
+    if not v.lower().startswith("https://"):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{field} must be an https:// URL",
+        )
+    return v
+
+
+@app.get("/tenant/branding")
+async def get_tenant_branding(key_data: Dict = Depends(verify_api_key)):
+    """Return the calling tenant's branding overrides (or empty dict)."""
+    rec = _key_store_db.lookup_key(key_data.get("api_key") or "") or {}
+    branding = rec.get("branding") or {}
+    return {
+        "tier": key_data["tier"].value,
+        "white_label_enabled": key_data["tier"] == Tier.ENTERPRISE,
+        "branding": branding,
+    }
+
+
+@app.put("/tenant/branding")
+async def set_tenant_branding(
+    branding: TenantBranding,
+    key_data: Dict = Depends(require_tier(Tier.ENTERPRISE)),
+):
+    """Update the calling Enterprise tenant's branding (white-label).
+
+    Replaces the stored branding blob with the supplied fields. URLs must
+    be https. The tenant's ``frontend_url`` is auto-allowed in CORS so
+    the white-label SPA can call this API from its own origin without an
+    operator changing the CORS_ORIGINS env var.
+    """
+    api_key = key_data.get("api_key")
+    if not api_key:
+        # Should never happen — verify_api_key always sets api_key.
+        raise HTTPException(status_code=500, detail="api_key not in key_data")
+
+    payload = branding.model_dump(exclude_none=True)
+    for field in ("logo_url", "frontend_url", "favicon_url", "custom_css_url"):
+        if field in payload:
+            payload[field] = _validate_https_url(payload[field], field)
+
+    try:
+        _key_store_db.set_branding(api_key, payload or None)
+    except Exception:
+        logger.exception("failed to persist tenant branding for %s", api_key[:12])
+        raise HTTPException(status_code=500, detail="branding store unavailable")
+
+    # Bust the CORS cache so the new frontend_url takes effect immediately.
+    _tenant_origins_cache.clear()
+
+    return {
+        "status": "ok",
+        "branding": payload,
+    }
+
+
+@app.delete("/tenant/branding")
+async def delete_tenant_branding(
+    key_data: Dict = Depends(require_tier(Tier.ENTERPRISE)),
+):
+    """Clear all branding overrides for the calling tenant."""
+    api_key = key_data.get("api_key")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="api_key not in key_data")
+    _key_store_db.set_branding(api_key, None)
+    _tenant_origins_cache.clear()
+    return {"status": "ok"}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Dynamic CORS reflection for tenant ``frontend_url``
+# ─────────────────────────────────────────────────────────────────────
+# CORSMiddleware uses a static allow list, so per-tenant white-label
+# domains can't be configured via env. This middleware augments it: if
+# the request carries an Origin matching some tenant's ``frontend_url``
+# (and that tenant's API key is present in the request), we add the
+# matching CORS headers so the browser accepts the response.
+
+_tenant_origins_cache: Dict[str, str] = {}      # origin -> api_key (any tenant)
+_tenant_origins_loaded_at: float = 0.0
+_TENANT_ORIGINS_TTL = 300.0  # seconds
+
+
+def _refresh_tenant_origins() -> None:
+    """Reload the (origin -> api_key) map from the key store. Best-effort."""
+    global _tenant_origins_loaded_at
+    try:
+        all_keys = _key_store_db.get_all_keys()
+    except Exception:
+        logger.debug("could not refresh tenant origins cache", exc_info=True)
+        _tenant_origins_loaded_at = time.time()
+        return
+    _tenant_origins_cache.clear()
+    for k, rec in all_keys.items():
+        b = (rec or {}).get("branding") or {}
+        origin = b.get("frontend_url")
+        if not origin:
+            continue
+        # Strip trailing slash and any path so we match the browser's
+        # ``Origin`` header byte-for-byte.
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(origin)
+            if parsed.scheme != "https" or not parsed.netloc:
+                continue
+            normalised = f"{parsed.scheme}://{parsed.netloc}"
+        except Exception:
+            continue
+        _tenant_origins_cache[normalised] = k
+    _tenant_origins_loaded_at = time.time()
+
+
+def _origin_for_tenant(origin: str, api_key: str) -> bool:
+    """Return True iff ``origin`` belongs to the tenant identified by ``api_key``."""
+    if not origin:
+        return False
+    if (time.time() - _tenant_origins_loaded_at) > _TENANT_ORIGINS_TTL:
+        _refresh_tenant_origins()
+    owner = _tenant_origins_cache.get(origin)
+    return owner == api_key
+
+
+@app.middleware("http")
+async def tenant_cors_reflection(request: Request, call_next):
+    """Reflect a tenant's white-label origin into the response CORS headers.
+
+    Only takes effect when the request carries the matching tenant's
+    ``X-API-Key`` and that tenant has stored a ``frontend_url``. Existing
+    static CORS_ORIGINS handling is unaffected.
+    """
+    origin = request.headers.get("origin", "")
+    api_key = request.headers.get("x-api-key", "")
+    is_tenant_origin = bool(origin and api_key) and _origin_for_tenant(origin, api_key)
+
+    # Short-circuit OPTIONS preflight ourselves so the static CORSMiddleware
+    # (which only knows _allowed_origins) doesn't 400 a tenant origin.
+    if is_tenant_origin and request.method == "OPTIONS":
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "X-API-Key, Content-Type, Authorization",
+                "Access-Control-Max-Age": "600",
+                "Vary": "Origin",
+            },
+        )
+
+    response = await call_next(request)
+    if is_tenant_origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        # Append, don't overwrite, the Vary header.
+        prev_vary = response.headers.get("Vary", "")
+        response.headers["Vary"] = (
+            f"{prev_vary}, Origin" if prev_vary and "Origin" not in prev_vary else (prev_vary or "Origin")
+        )
     return response
 
 
@@ -2605,6 +3075,7 @@ if FRONTEND_DIR.is_dir():
         "/jobs", "/export_report", "/bedrock", "/srtm",
         "/signup", "/stripe", "/health", "/metrics", "/openapi",
         "/docs", "/redoc", "/graphql",
+        "/coverage", "/tenant",
     )
 
     @app.middleware("http")

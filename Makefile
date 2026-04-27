@@ -16,6 +16,7 @@ LAMBDA_PY_FILES = \
 	tower_db.py \
 	bedrock_service.py \
 	coverage_predict.py \
+	coverage_export.py \
 	stripe_billing.py \
 	stripe_webhook_service.py \
 	job_store.py \
