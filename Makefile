@@ -20,7 +20,12 @@ LAMBDA_PY_FILES = \
 	stripe_billing.py \
 	stripe_webhook_service.py \
 	job_store.py \
-	batch_worker.py
+	batch_worker.py \
+	key_store_db.py \
+	repeater_jobs_store.py \
+	hop_cache.py \
+	graphql_schema.py \
+	tracing.py
 
 # Data files needed at runtime
 LAMBDA_DATA_FILES = \
@@ -53,8 +58,6 @@ define strip_package
 	rm -rf $(ARTIFACTS_DIR)/mpl_toolkits/tests 2>/dev/null || true
 	# Strip fontTools (only needed by matplotlib for font subsetting)
 	rm -rf $(ARTIFACTS_DIR)/fontTools/ttLib/tables/*_test* 2>/dev/null || true
-	# Strip psycopg2 if asyncpg is primary driver
-	rm -rf $(ARTIFACTS_DIR)/psycopg2 $(ARTIFACTS_DIR)/psycopg2_binary* 2>/dev/null || true
 endef
 
 build-TelecomTowerPowerFunction:

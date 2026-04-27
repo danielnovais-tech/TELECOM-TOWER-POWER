@@ -33,7 +33,8 @@ from fastapi.security import APIKeyHeader
 from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-import uvicorn
+# uvicorn is imported lazily inside ``__main__`` so the module loads cleanly
+# under AWS Lambda (Mangum), which does not bundle uvicorn.
 from pdf_generator import build_pdf_report
 from srtm_elevation import SRTMReader
 import stripe_billing
@@ -3118,4 +3119,5 @@ if FRONTEND_DIR.is_dir():
 
 
 if __name__ == "__main__":
+    import uvicorn  # local import: not available under Lambda runtime
     uvicorn.run(app, host="0.0.0.0", port=8000)

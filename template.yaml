@@ -138,6 +138,7 @@ Resources:
           ENABLE_DEMO_KEYS: !Ref EnableDemoKeys
           CORS_ORIGINS: !Ref CorsOrigins
           SRTM_DATA_DIR: /tmp/srtm_data
+          JOB_RESULTS_DIR: /tmp/job_results
           S3_BUCKET_NAME: !Ref ReportsBucket
           SQS_QUEUE_URL: !Ref BatchJobQueue
           SQS_QUEUE_URL_PRIORITY: !Ref BatchJobQueuePriority
@@ -155,10 +156,6 @@ Resources:
           COVERAGE_MODEL_PATH: /var/task/coverage_model.npz
       Policies:
         - AWSLambdaBasicExecutionRole
-        - !If
-          - HasVpcConfig
-          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-          - !Ref "AWS::NoValue"
         - Statement:
             - Effect: Allow
               Action:
@@ -226,6 +223,7 @@ Resources:
           S3_BUCKET_NAME: !Ref ReportsBucket
           S3_PREFIX: "batch-results/"
           SRTM_DATA_DIR: /tmp/srtm_data
+          JOB_RESULTS_DIR: /tmp/job_results
           RDS_PROXY_HOST: !If
             - CreateRdsProxy
             - !GetAtt RdsProxy.Endpoint
@@ -235,10 +233,6 @@ Resources:
           DB_USER: !Ref DbUser
       Policies:
         - AWSLambdaBasicExecutionRole
-        - !If
-          - HasVpcConfig
-          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-          - !Ref "AWS::NoValue"
         - Statement:
             - Effect: Allow
               Action:
@@ -300,6 +294,7 @@ Resources:
           S3_BUCKET_NAME: !Ref ReportsBucket
           S3_PREFIX: "batch-results/"
           SRTM_DATA_DIR: /tmp/srtm_data
+          JOB_RESULTS_DIR: /tmp/job_results
           RDS_PROXY_HOST: !If
             - CreateRdsProxy
             - !GetAtt RdsProxy.Endpoint
@@ -309,10 +304,6 @@ Resources:
           DB_USER: !Ref DbUser
       Policies:
         - AWSLambdaBasicExecutionRole
-        - !If
-          - HasVpcConfig
-          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-          - !Ref "AWS::NoValue"
         - Statement:
             - Effect: Allow
               Action:

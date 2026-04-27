@@ -17,6 +17,7 @@ python-json-logger
 alembic
 sqlalchemy
 asyncpg
+psycopg2-binary  # required by tower_db / key_store_db (sync paths)
 aiosqlite
 aiofiles
 geopy
