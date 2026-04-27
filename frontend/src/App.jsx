@@ -7,11 +7,13 @@ import BedrockPlayground from "./BedrockPlayground";
 import Portal from "./Portal";
 import Landing from "./Landing";
 import Pricing from "./Pricing";
+import AuthCallback from "./AuthCallback";
 import { fetchTowers, fetchHealth, setApiKey, onRateLimitChange } from "./api";
 import "./App.css";
 
 function getInitialPage() {
   const path = window.location.pathname;
+  if (path === "/auth/callback") return "auth-callback";
   if (path === "/signup/success") return "signup-success";
   if (path === "/signup/cancel") return "signup-cancel";
   if (path === "/app" || path === "/map") return "map";
@@ -88,7 +90,9 @@ export default function App() {
 
   return (
     <div className="app-layout">
-      {page === "landing" ? (
+      {page === "auth-callback" ? (
+        <AuthCallback />
+      ) : page === "landing" ? (
         <Landing
           onSignup={(tierId, cycle) => {
             window.history.pushState({}, "", "/signup");

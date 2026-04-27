@@ -2772,12 +2772,60 @@ async def sso_config():
     cfg = _sso.get_idp("cognito")
     if not cfg:
         return {"enabled": False}
-    return {
+    payload = {
         "enabled": True,
         "provider": cfg.name,
         "issuer": cfg.issuer,
         "audience": cfg.audience,
     }
+    # Hosted UI URLs (only emitted when the server-side code exchange
+    # endpoint is fully configured — otherwise the SPA can't use them).
+    domain = os.getenv("COGNITO_DOMAIN", "").strip().rstrip("/")
+    if domain and _sso.is_oauth_callback_configured():
+        if not domain.startswith("http"):
+            domain = f"https://{domain}"
+        payload["hosted_ui"] = {
+            "authorize_url": f"{domain}/oauth2/authorize",
+            "logout_url": f"{domain}/logout",
+            "client_id": cfg.audience,
+            "scope": "openid email profile",
+        }
+    return payload
+
+
+class SsoCallbackRequest(BaseModel):
+    """Body of POST /auth/sso/callback. SPA forwards the OAuth code here so
+    the client_secret never leaves the server."""
+    code: str = Field(..., min_length=4, max_length=2048,
+                      description="OAuth2 authorization code from Cognito redirect.")
+    redirect_uri: str = Field(..., min_length=8, max_length=512,
+                              description="Must match the redirect_uri used on /authorize.")
+    provider: str = Field("cognito", min_length=2, max_length=20)
+
+
+@app.post("/auth/sso/callback")
+async def sso_callback(body: SsoCallbackRequest, request: Request):
+    """Server-side OAuth2 code → id_token → api_key exchange.
+
+    The SPA hits ``/auth/callback`` after Cognito redirects with ``?code=``,
+    forwards the code to this endpoint, and receives an api_key. The
+    client_secret stays on the server. The id_token is verified with the
+    same code path as :func:`sso_exchange`.
+    """
+    if not _sso.is_sso_configured():
+        raise HTTPException(status_code=503, detail="SSO is not configured on this server")
+    if not _sso.is_oauth_callback_configured():
+        raise HTTPException(status_code=503, detail="SSO callback is not configured on this server")
+    try:
+        id_token = _sso.exchange_code_for_id_token(
+            body.code, body.redirect_uri, provider=body.provider,
+        )
+    except _sso.SsoTokenError as exc:
+        logger.info("sso /auth/sso/callback rejected: %s", exc)
+        raise HTTPException(status_code=401, detail="Authorization code rejected")
+    # Reuse the exchange path so the audit log + idempotency stay identical.
+    return await sso_exchange(SsoExchangeRequest(id_token=id_token,
+                                                 provider=body.provider), request)
 
 
 @app.post("/auth/sso")

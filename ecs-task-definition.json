@@ -83,6 +83,10 @@
         {
           "name": "COGNITO_APP_CLIENT_ID",
           "value": "5ll5ssh12aravgnck59438apjc"
+        },
+        {
+          "name": "COGNITO_DOMAIN",
+          "value": "sa-east-115ur6sr9o.auth.sa-east-1.amazoncognito.com"
         }
       ],
       "secrets": [
@@ -121,6 +125,10 @@
         {
           "name": "VALID_API_KEYS",
           "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/VALID_API_KEYS"
+        },
+        {
+          "name": "COGNITO_APP_CLIENT_SECRET",
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/cognito/app_client_secret"
         },
         {
           "name": "SLACK_WEBHOOK_URL",

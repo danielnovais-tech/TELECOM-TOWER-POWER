@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import LoginWithSSO from "./LoginWithSSO";
 
 const BASE = "/api";
 
@@ -72,6 +73,22 @@ export default function Signup({ onKeyReceived }) {
       <div className="signup-card">
         <h2>Get Your API Key</h2>
         <p className="signup-sub">Choose a plan and start building</p>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", marginBottom: 16 }}>
+          <LoginWithSSO
+            returnTo="/portal"
+            label="Sign in with company SSO"
+            style={{
+              padding: "10px 18px",
+              borderRadius: 8,
+              border: "1px solid #2563eb",
+              background: "#fff",
+              color: "#2563eb",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          />
+        </div>
 
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
           <div style={{ background: "#f1f5f9", padding: 4, borderRadius: 999, display: "inline-flex" }}>

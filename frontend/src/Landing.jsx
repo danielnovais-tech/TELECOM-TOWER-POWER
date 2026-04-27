@@ -1,4 +1,5 @@
 import { useState } from "react";
+import LoginWithSSO from "./LoginWithSSO";
 import Pricing from "./Pricing";
 
 const COPY = {
@@ -120,6 +121,7 @@ export default function Landing({ onSignup, onLogin }) {
               {lang === "pt" ? "EN" : "PT"}
             </button>
             <button onClick={onLogin} style={styles.linkBtn}>{t.nav.login}</button>
+            <LoginWithSSO returnTo="/portal" label="SSO" style={styles.linkBtn} />
             <button onClick={onSignup} style={styles.primaryBtn}>{t.nav.signup}</button>
           </nav>
         </div>
