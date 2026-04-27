@@ -336,6 +336,7 @@ services:
       - SMTP_HOST=${SMTP_HOST:-email-smtp.us-east-1.amazonaws.com:587}
       - SMTP_FROM=${SMTP_FROM:-alerts@telecomtowerpower.com.br}
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-daniel.novais@sempreceub.com}
+      - ALERTMANAGER_EXTERNAL_URL=${ALERTMANAGER_EXTERNAL_URL:-http://ec2.telecomtowerpower.com.br:9093}
     secrets:
       - ses_smtp_username
       - ses_smtp_password

@@ -88,6 +88,13 @@ inhibit_rules:
     equal: ["alertname"]
 ENDCFG
 
+# Public URL for links embedded in Slack/PagerDuty/email notifications.
+# Without --web.external-url, Alertmanager generates links using the
+# container hostname (e.g. http://<docker-id>:9093/) which is unreachable
+# from the public internet.
+EXTERNAL_URL="${ALERTMANAGER_EXTERNAL_URL:-http://ec2.telecomtowerpower.com.br:9093}"
+
 exec /bin/alertmanager \
   --config.file=/etc/alertmanager/alertmanager.yml \
-  --storage.path=/alertmanager
+  --storage.path=/alertmanager \
+  --web.external-url="${EXTERNAL_URL}"
