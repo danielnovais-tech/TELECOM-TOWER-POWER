@@ -8,6 +8,7 @@ import Portal from "./Portal";
 import Landing from "./Landing";
 import Pricing from "./Pricing";
 import AuthCallback from "./AuthCallback";
+import SalesDashboard from "./admin/SalesDashboard";
 import { fetchTowers, fetchHealth, setApiKey, onRateLimitChange } from "./api";
 import "./App.css";
 
@@ -20,6 +21,7 @@ function getInitialPage() {
   if (path === "/pricing") return "pricing";
   if (path === "/signup") return "signup";
   if (path === "/portal" || path === "/account") return "portal";
+  if (path === "/admin/sales" || path === "/admin") return "admin-sales";
   if (path === "/") return "landing";
   return "landing";
 }
@@ -92,6 +94,8 @@ export default function App() {
     <div className="app-layout">
       {page === "auth-callback" ? (
         <AuthCallback />
+      ) : page === "admin-sales" ? (
+        <SalesDashboard />
       ) : page === "landing" ? (
         <Landing
           onSignup={(tierId, cycle) => {

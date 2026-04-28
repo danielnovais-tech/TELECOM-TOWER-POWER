@@ -811,6 +811,7 @@ class Tier(str, Enum):
     PRO = "pro"
     BUSINESS = "business"
     ENTERPRISE = "enterprise"
+    ULTRA = "ultra"
 
 TIER_LIMITS = {
     Tier.FREE: {"requests_per_min": int(os.getenv("RATE_LIMIT_FREE", "10")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_FREE", "5")), "max_towers": 20, "max_batch_rows": 0},
@@ -818,6 +819,7 @@ TIER_LIMITS = {
     Tier.PRO: {"requests_per_min": int(os.getenv("RATE_LIMIT_PRO", "100")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_PRO", "500")), "max_towers": 500, "max_batch_rows": 2000},
     Tier.BUSINESS: {"requests_per_min": int(os.getenv("RATE_LIMIT_BUSINESS", "300")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_BUSINESS", "5000")), "max_towers": 2000, "max_batch_rows": 5000},
     Tier.ENTERPRISE: {"requests_per_min": int(os.getenv("RATE_LIMIT_ENTERPRISE", "1000")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_ENTERPRISE", "100000")), "max_towers": 10000, "max_batch_rows": 10000},
+    Tier.ULTRA: {"requests_per_min": int(os.getenv("RATE_LIMIT_ULTRA", "5000")), "pdf_export": True, "pdf_per_month": int(os.getenv("PDF_QUOTA_ULTRA", "1000000")), "max_towers": 50000, "max_batch_rows": 50000},
 }
 
 # In-memory API key store: key -> {"tier": Tier, "owner": str, "demo": bool}
@@ -1179,8 +1181,8 @@ def _get_sqs():
 
 
 def _queue_for_tier(tier_value: str) -> str:
-    """Pick the SQS queue URL for a given tier. Enterprise → priority queue."""
-    if tier_value == "enterprise" and SQS_QUEUE_URL_PRIORITY:
+    """Pick the SQS queue URL for a given tier. Enterprise/Ultra → priority queue."""
+    if tier_value in ("enterprise", "ultra") and SQS_QUEUE_URL_PRIORITY:
         return SQS_QUEUE_URL_PRIORITY
     return SQS_QUEUE_URL
 
@@ -1616,7 +1618,7 @@ class CoveragePredictRequest(BaseModel):
 @app.post("/coverage/predict")
 async def coverage_predict(
     body: CoveragePredictRequest,
-    _key: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """ML-based signal coverage prediction.
 
@@ -1756,6 +1758,7 @@ _HEATMAP_MAX_CELLS = {
     Tier.PRO:        2_500,    # 50 x 50
     Tier.BUSINESS:   10_000,   # 100 x 100
     Tier.ENTERPRISE: 40_000,   # 200 x 200
+    Tier.ULTRA:     160_000,   # 400 x 400
 }
 
 
@@ -1795,7 +1798,7 @@ def _resolve_grid_size(body: "CoveragePredictRequest", tier: Tier) -> int:
 @app.post("/coverage/predict/stream")
 async def coverage_predict_stream(
     body: CoveragePredictRequest,
-    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """Server-Sent-Events real-time AI heatmap.
 
@@ -1921,7 +1924,7 @@ class CoverageExportRequest(CoveragePredictRequest):
 async def coverage_predict_export(
     body: CoverageExportRequest,
     fmt: str = "kml",
-    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """Export a coverage grid as KML / Shapefile / GeoJSON.
 
@@ -2078,7 +2081,7 @@ async def get_tenant_branding(key_data: Dict = Depends(verify_api_key)):
     branding = rec.get("branding") or {}
     return {
         "tier": key_data["tier"].value,
-        "white_label_enabled": key_data["tier"] == Tier.ENTERPRISE,
+        "white_label_enabled": key_data["tier"] in (Tier.ENTERPRISE, Tier.ULTRA),
         "branding": branding,
     }
 
@@ -2087,7 +2090,7 @@ async def get_tenant_branding(key_data: Dict = Depends(verify_api_key)):
 async def set_tenant_branding(
     branding: TenantBranding,
     request: Request,
-    key_data: Dict = Depends(require_tier(Tier.ENTERPRISE)),
+    key_data: Dict = Depends(require_tier(Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """Update the calling Enterprise tenant's branding (white-label).
 
@@ -2135,7 +2138,7 @@ async def set_tenant_branding(
 @app.delete("/tenant/branding")
 async def delete_tenant_branding(
     request: Request,
-    key_data: Dict = Depends(require_tier(Tier.ENTERPRISE)),
+    key_data: Dict = Depends(require_tier(Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """Clear all branding overrides for the calling tenant."""
     api_key = key_data.get("api_key")
@@ -2188,6 +2191,175 @@ async def get_tenant_audit(
             "metadata": meta,
         })
     return {"count": len(out), "entries": out}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Admin / sales-facing endpoints
+# ─────────────────────────────────────────────────────────────────────
+# Read-only aggregated views used by the sales dashboard at /admin/sales
+# in the React frontend, and by the Grafana "Sales Overview" dashboard.
+# Gated by an admin API key (env ``ADMIN_API_KEYS`` — comma-separated
+# list of keys with full cross-tenant read access). No mutating ops.
+
+_ADMIN_API_KEYS: set[str] = {
+    k.strip() for k in os.getenv("ADMIN_API_KEYS", "").split(",") if k.strip()
+}
+
+# Approximate per-tier monthly revenue in BRL for MRR calculation.
+# Mirrors frontend/src/Pricing.jsx; intentionally simple — the source of
+# truth for billing remains Stripe.
+_TIER_MRR_BRL = {
+    "free": 0,
+    "starter": 79,
+    "pro": 349,
+    "business": 1299,
+    "enterprise": 1890,
+    "ultra": 2900,
+}
+
+
+async def require_admin(request: Request, api_key: str = Security(api_key_header)) -> str:
+    """Dependency: admin-only endpoints. Verifies the key is in ``ADMIN_API_KEYS``.
+
+    Falls back to 403 (not 401) when a regular tenant key is presented so
+    callers can distinguish "not authenticated" from "not authorized".
+    """
+    if not api_key:
+        raise HTTPException(status_code=401, detail="X-API-Key required")
+    if not _ADMIN_API_KEYS or api_key not in _ADMIN_API_KEYS:
+        raise HTTPException(status_code=403, detail="admin scope required")
+    return api_key
+
+
+@app.get("/admin/sales/overview")
+async def admin_sales_overview(_: str = Depends(require_admin)) -> Dict:
+    """Sales-facing aggregated view: tenants by tier, MRR estimate, signups.
+
+    Returns a single JSON document with everything the sales dashboard
+    needs in one round-trip, so the React UI doesn't fan out across many
+    requests. All numbers are derived from the production key store and
+    audit log; no PII beyond company / billing email.
+    """
+    try:
+        all_keys = _key_store_db.get_all_keys() or {}
+    except Exception:
+        logger.exception("admin_sales_overview: could not list keys")
+        all_keys = {}
+
+    # Per-tier counts and MRR (excluding demo + system keys).
+    tier_counts: Dict[str, int] = {}
+    mrr_brl = 0
+    sso_enabled = 0
+    white_label_enabled = 0
+    for rec in all_keys.values():
+        if not rec:
+            continue
+        if (rec.get("owner") or "").lower() == "system":
+            continue
+        if rec.get("demo"):
+            continue
+        tier = (rec.get("tier") or "free").lower()
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+        mrr_brl += _TIER_MRR_BRL.get(tier, 0)
+        if rec.get("sso_enabled"):
+            sso_enabled += 1
+        if (rec.get("branding") or {}).get("frontend_url"):
+            white_label_enabled += 1
+
+    # Recent signups (last 30 days) — sorted newest first.
+    cutoff = time.time() - 30 * 86400
+    recent: list[dict] = []
+    for k, rec in all_keys.items():
+        if not rec or not rec.get("created_at") or rec.get("created_at") < cutoff:
+            continue
+        recent.append({
+            "api_key_prefix": (k or "")[:8],
+            "tier": rec.get("tier"),
+            "owner": rec.get("owner"),
+            "email": rec.get("email"),
+            "billing_cycle": rec.get("billing_cycle"),
+            "created_at": rec.get("created_at"),
+            "sso_enabled": bool(rec.get("sso_enabled")),
+        })
+    recent.sort(key=lambda r: r["created_at"] or 0, reverse=True)
+
+    # Top tenants by audit-log activity (last 30 days).
+    top_active: list[dict] = []
+    try:
+        rows = await asyncio.to_thread(_audit.top_actors, cutoff, 20)
+        # Resolve api_key -> owner/tier/email.
+        for row in rows:
+            api_key = row.get("api_key")
+            rec = all_keys.get(api_key) or {}
+            top_active.append({
+                "api_key_prefix": (api_key or "")[:8],
+                "tier": rec.get("tier"),
+                "owner": rec.get("owner"),
+                "email": rec.get("email"),
+                "events_30d": row.get("count", 0),
+            })
+    except Exception:
+        logger.exception("admin_sales_overview: top_actors failed")
+
+    return {
+        "generated_at": time.time(),
+        "totals": {
+            "tenants": sum(tier_counts.values()),
+            "mrr_brl": mrr_brl,
+            "arr_brl": mrr_brl * 12,
+            "sso_enabled": sso_enabled,
+            "white_label_enabled": white_label_enabled,
+        },
+        "by_tier": [
+            {"tier": t, "count": c, "mrr_brl": _TIER_MRR_BRL.get(t, 0) * c}
+            for t, c in sorted(tier_counts.items(), key=lambda x: -x[1])
+        ],
+        "recent_signups": recent[:50],
+        "top_active": top_active,
+    }
+
+
+@app.get("/admin/sales/tenants/{api_key_prefix}")
+async def admin_sales_tenant_detail(
+    api_key_prefix: str,
+    _: str = Depends(require_admin),
+) -> Dict:
+    """Per-tenant sales detail — usage, billing cycle, SSO/white-label state."""
+    if len(api_key_prefix) < 6:
+        raise HTTPException(status_code=400, detail="api_key_prefix must be ≥6 chars")
+    try:
+        all_keys = _key_store_db.get_all_keys() or {}
+    except Exception:
+        logger.exception("admin_sales_tenant_detail: list_keys failed")
+        all_keys = {}
+    matches = [(k, rec) for k, rec in all_keys.items() if (k or "").startswith(api_key_prefix)]
+    if not matches:
+        raise HTTPException(status_code=404, detail="no tenant matches that prefix")
+    if len(matches) > 1:
+        raise HTTPException(status_code=409, detail="prefix is ambiguous; use more characters")
+    api_key, rec = matches[0]
+    rec = rec or {}
+    # Last 100 audit entries for this tenant.
+    try:
+        recent_audit = await asyncio.to_thread(_audit.recent_for_key, api_key, 100)
+    except Exception:
+        logger.exception("admin_sales_tenant_detail: audit lookup failed")
+        recent_audit = []
+    return {
+        "api_key_prefix": api_key[:8],
+        "tier": rec.get("tier"),
+        "owner": rec.get("owner"),
+        "email": rec.get("email"),
+        "stripe_customer_id": rec.get("stripe_customer_id"),
+        "stripe_subscription_id": rec.get("stripe_subscription_id"),
+        "billing_cycle": rec.get("billing_cycle"),
+        "created_at": rec.get("created_at"),
+        "sso_enabled": bool(rec.get("sso_enabled")),
+        "oauth_provider": rec.get("oauth_provider"),
+        "branding": rec.get("branding"),
+        "white_label_enabled": bool((rec.get("branding") or {}).get("frontend_url")),
+        "recent_audit": recent_audit,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -2386,7 +2558,7 @@ async def plan_repeater_job_status(
     return job
 
 @app.get("/export_report")
-async def export_report(request: Request, tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.FREE, Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE))):
+async def export_report(request: Request, tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.FREE, Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA))):
     """Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo)."""
     raw_key = request.headers.get("x-api-key", "")
     _enforce_pdf_quota(raw_key, key_data["tier"])
@@ -2412,7 +2584,7 @@ async def export_report(request: Request, tower_id: str, lat: float, lon: float,
     )
 
 @app.get("/export_report/pdf")
-async def export_report_pdf(request: Request, tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.FREE, Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE))):
+async def export_report_pdf(request: Request, tower_id: str, lat: float, lon: float, height_m: float = 10.0, antenna_gain: float = 12.0, key_data: Dict = Depends(require_tier(Tier.FREE, Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA))):
     """Generate a professional PDF engineering report. Monthly quota per tier (Free: 5/mo)."""
     raw_key = request.headers.get("x-api-key", "")
     _enforce_pdf_quota(raw_key, key_data["tier"])
@@ -2443,7 +2615,7 @@ async def batch_reports(
     csv_file: UploadFile = File(...),
     receiver_height_m: float = 10.0,
     antenna_gain_dbi: float = 12.0,
-    key_data: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+    key_data: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """Upload a CSV of receiver points (columns: lat,lon  and optionally
     height, gain) and download a ZIP of PDF reports – one per receiver.
@@ -2581,7 +2753,7 @@ async def batch_reports(
 # ------------------------------------------------------------
 
 @app.get("/jobs/{job_id}")
-async def get_job_status(job_id: str, _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE))):
+async def get_job_status(job_id: str, _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA))):
     """Poll the status of a background batch job (Pro/Enterprise only)."""
     job = job_store.get_job(job_id)
     if job is None:
@@ -2659,7 +2831,7 @@ async def job_progress_ws(websocket: WebSocket, job_id: str, token: str = Query(
 
 
 @app.get("/jobs/{job_id}/download")
-async def download_job_result(job_id: str, _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE))):
+async def download_job_result(job_id: str, _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA))):
     """Download the ZIP file produced by a completed batch job (Pro/Enterprise only).
 
     If the result is stored in S3, returns a redirect to a presigned URL.
@@ -3120,7 +3292,7 @@ class PrefetchRequest(BaseModel):
 @app.get("/srtm/status/{country}")
 async def srtm_tile_status(
     country: str,
-    _key: Dict = Depends(require_tier(Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """Report SRTM tile availability for a country (enterprise only)."""
     from srtm_prefetch import tile_status, COUNTRY_BOUNDS
@@ -3135,7 +3307,7 @@ async def srtm_tile_status(
 @app.post("/srtm/prefetch")
 async def srtm_prefetch(
     body: PrefetchRequest,
-    _key: Dict = Depends(require_tier(Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """
     Start background download of SRTM tiles for a country (enterprise only).
@@ -3166,7 +3338,7 @@ class BedrockChatRequest(BaseModel):
 @app.post("/bedrock/chat")
 async def bedrock_chat(
     body: BedrockChatRequest,
-    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """
     Send a prompt to an Amazon Bedrock base foundation model and return
@@ -3190,7 +3362,7 @@ async def bedrock_chat(
 
 @app.get("/bedrock/models")
 async def bedrock_models(
-    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """List available Bedrock foundation models for the AI playground."""
     from bedrock_service import list_available_models
@@ -3213,7 +3385,7 @@ class BedrockScenarioRequest(BaseModel):
 @app.post("/bedrock/compare")
 async def bedrock_compare_scenarios(
     body: BedrockScenarioRequest,
-    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """
     Compare multiple RF scenarios using AI analysis.
@@ -3247,7 +3419,7 @@ class BedrockBatchAnalysisRequest(BaseModel):
 @app.post("/bedrock/batch-analyze")
 async def bedrock_batch_analyze(
     body: BedrockBatchAnalysisRequest,
-    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """
     Analyze a batch of link analysis results with AI.
@@ -3281,7 +3453,7 @@ class BedrockAntennaRequest(BaseModel):
 @app.post("/bedrock/suggest-height")
 async def bedrock_suggest_height(
     body: BedrockAntennaRequest,
-    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE)),
+    _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """
     AI-powered antenna height recommendation based on link analysis

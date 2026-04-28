@@ -15,7 +15,8 @@ const PRICING = {
       { id: "starter", name: "Starter", price: "R$ 79", priceAnnual: "R$ 65", bullets: ["3.000 chamadas/mês", "Até 100 torres por consulta", "50 PDFs/mês", "Lote até 100 receptores", "Suporte 48h"], highlight: false },
       { id: "pro", name: "Pro", price: "R$ 349", priceAnnual: "R$ 289", bullets: ["25.000 chamadas/mês", "Até 500 torres por consulta", "500 PDFs/mês + IA", "Lote até 2.000 receptores", "Suporte 24h"], highlight: true, badge: "Mais popular" },
       { id: "business", name: "Business", price: "R$ 1.299", priceAnnual: "R$ 1.079", bullets: ["150.000 chamadas/mês", "Lote até 5.000 receptores", "5.000 PDFs/mês", "Fila prioritária + IA ilimitada", "Suporte em até 4h"], highlight: false },
-      { id: "enterprise", name: "Enterprise", price: "sob consulta", priceAnnual: "sob consulta", bullets: ["Volume customizado", "SLA 99.95%", "Redis dedicado", "SSO SAML + IP allowlist", "Suporte 24/7 + slack compartilhado"], highlight: false, custom: true }
+      { id: "enterprise", name: "Enterprise", price: "R$ 1.890", priceAnnual: "R$ 1.569", bullets: ["500.000 chamadas/mês", "Lote até 10.000 receptores", "Fila prioritária + IA ilimitada", "Auditoria + SLA 99.9%", "Suporte 24/7"], highlight: false },
+      { id: "ultra", name: "Ultra", price: "R$ 2.900", priceAnnual: "R$ 2.407", bullets: ["★ SSO SAML/OIDC + white-label", "★ Fila prioritária dedicada", "Volume ilimitado (sob fair-use)", "Lote até 50.000 receptores", "SLA 99.95% + Redis dedicado", "CSM dedicado + Slack compartilhado", "IP allowlist + audit export"], highlight: false, badge: "Premium" }
     ]
   },
   en: {
@@ -34,7 +35,8 @@ const PRICING = {
       { id: "starter", name: "Starter", price: "R$ 79", priceAnnual: "R$ 65", bullets: ["3,000 calls/mo", "Up to 100 towers/query", "50 PDFs/month", "Batch up to 100 receivers", "48h support"], highlight: false },
       { id: "pro", name: "Pro", price: "R$ 349", priceAnnual: "R$ 289", bullets: ["25,000 calls/mo", "Up to 500 towers/query", "500 PDFs/mo + AI", "Batch up to 2,000 receivers", "24h support"], highlight: true, badge: "Most popular" },
       { id: "business", name: "Business", price: "R$ 1,299", priceAnnual: "R$ 1,079", bullets: ["150,000 calls/mo", "Batch up to 5,000 receivers", "5,000 PDFs/mo", "Priority queue + unlimited AI", "4h response support"], highlight: false },
-      { id: "enterprise", name: "Enterprise", price: "custom", priceAnnual: "custom", bullets: ["Custom volume", "99.95% SLA", "Dedicated Redis", "SAML SSO + IP allowlist", "24/7 support + shared Slack"], highlight: false, custom: true }
+      { id: "enterprise", name: "Enterprise", price: "R$ 1,890", priceAnnual: "R$ 1,569", bullets: ["500,000 calls/mo", "Batch up to 10,000 receivers", "Priority queue + unlimited AI", "Audit log + 99.9% SLA", "24/7 support"], highlight: false },
+      { id: "ultra", name: "Ultra", price: "R$ 2,900", priceAnnual: "R$ 2,407", bullets: ["★ SSO SAML/OIDC + white-label", "★ Dedicated priority queue", "Unlimited volume (fair use)", "Batch up to 50,000 receivers", "99.95% SLA + dedicated Redis", "Dedicated CSM + shared Slack", "IP allowlist + audit export"], highlight: false, badge: "Premium" }
     ]
   }
 };

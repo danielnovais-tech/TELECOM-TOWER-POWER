@@ -53,6 +53,29 @@ plugins:
             Status de produção: Production status
             Runbook: Runbook
             O que está em produção: What's shipped
+            Casos de uso: Case studies
+            ISP regional brasileiro: Brazilian regional ISP
+            Compliance: Compliance
+            SOC 2 — Visão geral: SOC 2 — Overview
+            SOC 2 — Matriz de controles: SOC 2 — Control matrix
+            SOC 2 — Índice de evidências: SOC 2 — Evidence index
+            SOC 2 — Análise de gaps: SOC 2 — Gap analysis
+            SOC 2 — Descrição do sistema: SOC 2 — System description
+            SOC 2 — Políticas: SOC 2 — Policies
+            01 Segurança da informação: 01 Information security
+            02 Controle de acesso: 02 Access control
+            03 Gestão de mudanças: 03 Change management
+            04 Resposta a incidentes: 04 Incident response
+            05 Gestão de fornecedores: 05 Vendor management
+            06 Continuidade & DR: 06 Business continuity & DR
+            07 Classificação de dados: 07 Data classification
+            08 Criptografia: 08 Encryption
+            09 Logging & monitoramento: 09 Logging & monitoring
+            10 SDLC seguro: 10 Secure SDLC
+            11 RH & segurança: 11 HR security
+            12 Segurança física: 12 Physical security
+            13 Gestão de risco: 13 Risk management
+            14 Gestão de ativos: 14 Asset management
 
 markdown_extensions:
   - admonition
@@ -75,5 +98,28 @@ nav:
       - Status de produção: operations/production-status.md
       - Runbook: operations/runbook.md
       - O que está em produção: operations/whats-shipped.md
+  - Casos de uso:
+      - ISP regional brasileiro: case-studies/regional-isp-brazil.md
+  - Compliance:
+      - SOC 2 — Visão geral: compliance/soc2/README.md
+      - SOC 2 — Matriz de controles: compliance/soc2/control-matrix.md
+      - SOC 2 — Índice de evidências: compliance/soc2/evidence-index.md
+      - SOC 2 — Análise de gaps: compliance/soc2/gap-analysis.md
+      - SOC 2 — Descrição do sistema: compliance/soc2/system-description.md
+      - SOC 2 — Políticas:
+          - 01 Segurança da informação: compliance/soc2/policies/01-information-security.md
+          - 02 Controle de acesso: compliance/soc2/policies/02-access-control.md
+          - 03 Gestão de mudanças: compliance/soc2/policies/03-change-management.md
+          - 04 Resposta a incidentes: compliance/soc2/policies/04-incident-response.md
+          - 05 Gestão de fornecedores: compliance/soc2/policies/05-vendor-management.md
+          - 06 Continuidade & DR: compliance/soc2/policies/06-business-continuity.md
+          - 07 Classificação de dados: compliance/soc2/policies/07-data-classification.md
+          - 08 Criptografia: compliance/soc2/policies/08-encryption.md
+          - 09 Logging & monitoramento: compliance/soc2/policies/09-logging-monitoring.md
+          - 10 SDLC seguro: compliance/soc2/policies/10-secure-sdlc.md
+          - 11 RH & segurança: compliance/soc2/policies/11-hr-security.md
+          - 12 Segurança física: compliance/soc2/policies/12-physical-security.md
+          - 13 Gestão de risco: compliance/soc2/policies/13-risk-management.md
+          - 14 Gestão de ativos: compliance/soc2/policies/14-asset-management.md
   - Referência da API:
       - api/overview.md

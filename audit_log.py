@@ -215,6 +215,47 @@ def recent_for_key(api_key: str, limit: int = 100) -> List[Dict[str, Any]]:
     return snapshot[:limit]
 
 
+def top_actors(since_ts: float, limit: int = 20) -> List[Dict[str, Any]]:
+    """Return the top API keys by audit-event count since ``since_ts``.
+
+    Used by the admin sales overview endpoint to surface the most
+    active tenants. Reads from PostgreSQL when configured, falls back
+    to the in-memory ring otherwise.
+    """
+    limit = max(1, min(int(limit), 200))
+    # Try PG first.
+    if not _db_disabled:
+        try:
+            import psycopg2  # type: ignore
+            import psycopg2.extras  # type: ignore
+            with psycopg2.connect(_DB_URL) as conn, conn.cursor(
+                cursor_factory=psycopg2.extras.RealDictCursor
+            ) as cur:
+                cur.execute(
+                    """
+                    SELECT api_key, COUNT(*) AS count
+                      FROM audit_log
+                     WHERE ts >= %s
+                     GROUP BY api_key
+                     ORDER BY count DESC
+                     LIMIT %s
+                    """,
+                    (float(since_ts), int(limit)),
+                )
+                return [dict(r) for r in cur.fetchall()]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("audit_log top_actors failed: %s", exc)
+    # Fallback: scan in-memory ring.
+    with _mem_lock:
+        snapshot = [dict(r) for r in _mem if r["ts"] >= since_ts]
+    counts: Dict[str, int] = {}
+    for r in snapshot:
+        k = r["api_key"]
+        counts[k] = counts.get(k, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])[:limit]
+    return [{"api_key": k, "count": c} for k, c in ranked]
+
+
 def reset_for_tests() -> None:
     """Clear the in-memory ring. Test helper only."""
     global _next_id
