@@ -119,6 +119,7 @@ services:
       - stripe_price_enterprise
       - valid_api_keys
       - slack_webhook_url
+      - admin_api_keys
     volumes:
       - ./srtm_data:/app/srtm_data:ro
       - ./key_store.json:/app/key_store.json
@@ -427,3 +428,5 @@ secrets:
     file: ./secrets/grafana_admin_password
   pagerduty_routing_key:
     file: ./secrets/pagerduty_routing_key
+  admin_api_keys:
+    file: ./secrets/admin_api_keys
