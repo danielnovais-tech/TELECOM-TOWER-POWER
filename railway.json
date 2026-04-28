@@ -1,0 +1,108 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "services": {
+    "web": {
+      "name": "web",
+      "source": {
+        "repo": "danielnovais-tech/TELECOM-TOWER-POWER",
+        "branch": "main"
+      },
+      "build": {
+        "dockerfilePath": "Dockerfile"
+      },
+      "deploy": {
+        "startCommand": null,
+        "healthcheckPath": "/health",
+        "port": 8000
+      },
+      "variables": {
+        "PORT": "8000",
+        "DATABASE_URL": "${{ Postgres.DATABASE_URL }}",
+        "REDIS_URL": "${{ Redis.REDIS_URL }}",
+        "S3_BUCKET_NAME": "${{ Bucket.BUCKET }}",
+        "S3_REGION": "${{ Bucket.REGION }}",
+        "AWS_ACCESS_KEY_ID": "${{ Bucket.ACCESS_KEY_ID }}",
+        "AWS_SECRET_ACCESS_KEY": "${{ Bucket.SECRET_ACCESS_KEY }}",
+        "MINIO_PRIVATE_ENDPOINT": "${{ Bucket.MINIO_PRIVATE_ENDPOINT }}"
+      }
+    },
+    "frontend": {
+      "name": "frontend",
+      "source": {
+        "repo": "danielnovais-tech/TELECOM-TOWER-POWER",
+        "branch": "main"
+      },
+      "build": {
+        "buildCommand": "npm run build",
+        "dockerfilePath": "Dockerfile"
+      },
+      "deploy": {
+        "startCommand": null,
+        "port": 3000
+      },
+      "variables": {
+        "VITE_API_URL": "${{ web.RAILWAY_PUBLIC_DOMAIN }}",
+        "BACKEND_URL": "${{ web.RAILWAY_PUBLIC_DOMAIN }}"
+      }
+    },
+    "worker": {
+      "name": "worker",
+      "source": {
+        "repo": "danielnovais-tech/TELECOM-TOWER-POWER",
+        "branch": "main"
+      },
+      "build": {
+        "dockerfilePath": "Dockerfile"
+      },
+      "deploy": {
+        "startCommand": "rq worker batch_pdfs --url ${REDIS_URL}"
+      },
+      "variables": {
+        "DATABASE_URL": "${{ Postgres.DATABASE_URL }}",
+        "REDIS_URL": "${{ Redis.REDIS_URL }}",
+        "S3_BUCKET_NAME": "${{ Bucket.BUCKET }}",
+        "AWS_ACCESS_KEY_ID": "${{ Bucket.ACCESS_KEY_ID }}",
+        "AWS_SECRET_ACCESS_KEY": "${{ Bucket.SECRET_ACCESS_KEY }}"
+      }
+    },
+    "stripe-webhook": {
+      "name": "stripe-webhook",
+      "source": {
+        "repo": "danielnovais-tech/TELECOM-TOWER-POWER",
+        "branch": "main"
+      },
+      "build": {
+        "dockerfilePath": "Dockerfile"
+      },
+      "deploy": {
+        "startCommand": null,
+        "healthcheckPath": "/health",
+        "port": 8080
+      },
+      "variables": {
+        "SERVICE_TYPE": "webhook",
+        "PORT": "8080",
+        "DATABASE_URL": "${{ Postgres.DATABASE_URL }}",
+        "STRIPE_SECRET_KEY": "{{ user-provided }}",
+        "STRIPE_WEBHOOK_SECRET": "{{ user-provided }}"
+      }
+    }
+  },
+  "infrastructure": {
+    "postgres": {
+      "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+      "volume": "postgres-volume:500MB",
+      "port": 5432
+    },
+    "redis": {
+      "image": "redis:8.2.1",
+      "volume": "redis-volume:500MB",
+      "port": 6379
+    },
+    "minio": {
+      "name": "Bucket",
+      "volume": "bucket-volume:5GB",
+      "port": 9000
+    }
+  }
+}
