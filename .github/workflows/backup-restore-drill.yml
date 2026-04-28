@@ -1,0 +1,177 @@
+name: Weekly Backup Restore Drill
+
+# Pulls the most recent Railway Postgres dump from S3 and restores it into
+# an ephemeral Postgres container to prove the backup is actually usable.
+# Verifies row counts on critical tables. Fails loudly if the dump is
+# corrupt, truncated, or missing expected schema.
+
+on:
+  schedule:
+    - cron: '15 7 * * 1'  # Mon 07:15 UTC (04:15 BRT) — after Mon nightly backup
+  workflow_dispatch:
+
+concurrency:
+  group: restore-drill
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: drill
+          POSTGRES_DB: drill
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Install PostgreSQL 18 client
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -yqq postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/18/bin/psql --version
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Locate latest dump in S3
+        id: locate
+        run: |
+          set -euo pipefail
+          PREFIX="backups/railway-postgres/"
+          LATEST=$(aws s3 ls "s3://telecom-tower-power-results/${PREFIX}" \
+            | grep -E 'railway_towers_.*\.sql\.gz$' \
+            | sort -k1,2 \
+            | tail -1 \
+            | awk '{print $4}')
+          if [ -z "$LATEST" ]; then
+            echo "::error::No dump found under s3://telecom-tower-power-results/${PREFIX}"
+            exit 1
+          fi
+          echo "Latest dump: $LATEST"
+          echo "key=${PREFIX}${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "filename=${LATEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify dump age (must be ≤ 36 h old)
+        env:
+          DUMP_KEY: ${{ steps.locate.outputs.key }}
+        run: |
+          set -euo pipefail
+          MTIME=$(aws s3api head-object \
+            --bucket telecom-tower-power-results \
+            --key "$DUMP_KEY" \
+            --query 'LastModified' --output text)
+          MTIME_EPOCH=$(date -d "$MTIME" +%s)
+          NOW_EPOCH=$(date +%s)
+          AGE_H=$(( (NOW_EPOCH - MTIME_EPOCH) / 3600 ))
+          echo "Latest dump LastModified: $MTIME (${AGE_H} h ago)"
+          if [ "$AGE_H" -gt 36 ]; then
+            echo "::error::Latest dump is ${AGE_H} h old (>36 h). Nightly backup is broken."
+            exit 1
+          fi
+
+      - name: Download dump
+        env:
+          DUMP_KEY: ${{ steps.locate.outputs.key }}
+          DUMP_FILE: ${{ steps.locate.outputs.filename }}
+        run: |
+          set -euo pipefail
+          aws s3 cp "s3://telecom-tower-power-results/${DUMP_KEY}" "/tmp/${DUMP_FILE}"
+          BYTES=$(stat -c%s "/tmp/${DUMP_FILE}")
+          echo "Downloaded ${BYTES} bytes"
+          if [ "$BYTES" -lt 1024 ]; then
+            echo "::error::Dump is suspiciously small (${BYTES} B)."
+            exit 1
+          fi
+          # Smoke-test: gunzip -t catches corrupt/truncated archives early.
+          gunzip -t "/tmp/${DUMP_FILE}"
+          echo "DUMP_PATH=/tmp/${DUMP_FILE}" >> "$GITHUB_ENV"
+
+      - name: Restore into ephemeral Postgres
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: drill
+          PGDATABASE: drill
+        run: |
+          set -euo pipefail
+          echo "Restoring $DUMP_PATH ..."
+          # gunzip -c | psql preserves the original file; pipefail ensures a
+          # failing gunzip doesn't get masked by psql's "0 rows affected".
+          gunzip -c "$DUMP_PATH" | psql -v ON_ERROR_STOP=1 --quiet >/tmp/restore.log 2>&1 || {
+            echo "::error::psql restore failed"
+            tail -100 /tmp/restore.log
+            exit 1
+          }
+          echo "Restore completed."
+          echo "--- restore tail ---"
+          tail -20 /tmp/restore.log || true
+
+      - name: Verify schema & row counts
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: drill
+          PGDATABASE: drill
+        run: |
+          set -euo pipefail
+          # Required tables and minimum expected row counts. Tune thresholds
+          # as the dataset grows; the goal is "non-zero, not catastrophically
+          # small" rather than pinning exact numbers.
+          declare -A MIN_ROWS=(
+            [towers]=100000
+            [api_keys]=1
+            [alembic_version]=1
+          )
+          for tbl in "${!MIN_ROWS[@]}"; do
+            COUNT=$(psql -tAc "SELECT COUNT(*) FROM ${tbl};" 2>/dev/null || echo "MISSING")
+            if [ "$COUNT" = "MISSING" ]; then
+              echo "::error::Table '${tbl}' missing from restored dump."
+              exit 1
+            fi
+            MIN=${MIN_ROWS[$tbl]}
+            echo "  ${tbl}: ${COUNT} rows (min ${MIN})"
+            if [ "$COUNT" -lt "$MIN" ]; then
+              echo "::error::Table '${tbl}' has ${COUNT} rows, expected >= ${MIN}."
+              exit 1
+            fi
+          done
+          echo "::notice::Restore drill PASSED — all critical tables present with healthy row counts."
+
+      - name: Notify on failure (SNS, optional)
+        if: failure() && env.SYNTHETIC_ALERT_TOPIC_ARN != ''
+        env:
+          SYNTHETIC_ALERT_TOPIC_ARN: ${{ secrets.SYNTHETIC_ALERT_TOPIC_ARN }}
+          DUMP_KEY: ${{ steps.locate.outputs.key }}
+        run: |
+          aws sns publish \
+            --region sa-east-1 \
+            --topic-arn "$SYNTHETIC_ALERT_TOPIC_ARN" \
+            --subject "[telecom-tower-power] Backup restore drill FAILED" \
+            --message "Restore drill failed for s3://telecom-tower-power-results/${DUMP_KEY}. See run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
