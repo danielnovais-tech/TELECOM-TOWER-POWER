@@ -32,7 +32,7 @@
         }
 
         # ── www / app frontend: selective API routing + React SPA ──
-        @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup* /login* /profile* /portal* /analyze* /plan_repeater* /export_report* /bedrock* /coverage* /srtm* /tenant* /admin/sales/overview* /admin/sales/tenants/*
+        @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup/free /signup/checkout /signup/status /login* /profile* /portal* /analyze* /plan_repeater* /export_report* /bedrock* /coverage* /srtm* /tenant* /admin/sales/overview* /admin/sales/tenants/*
 
         handle @api_routes {
                 reverse_proxy https://web-production-90b1f.up.railway.app {
