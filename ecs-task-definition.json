@@ -115,8 +115,16 @@
           "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_WEBHOOK_SECRET"
         },
         {
+          "name": "STRIPE_PRICE_STARTER",
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_PRICE_STARTER"
+        },
+        {
           "name": "STRIPE_PRICE_PRO",
           "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_PRICE_PRO"
+        },
+        {
+          "name": "STRIPE_PRICE_BUSINESS",
+          "valueFrom": "arn:aws:ssm:AWS_REGION:ACCOUNT_ID:parameter/telecom-tower-power/STRIPE_PRICE_BUSINESS"
         },
         {
           "name": "STRIPE_PRICE_ENTERPRISE",
