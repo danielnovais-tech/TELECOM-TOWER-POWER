@@ -909,7 +909,13 @@ def _check_rate_limit(api_key: str, tier: Tier, is_demo: bool = False) -> Tuple[
     """Raise 429 if the caller exceeds their tier's requests_per_min.
     Demo keys are additionally capped at `DEMO_RATE_LIMIT` rpm regardless
     of nominal tier, to prevent public scraping abuse.
+    Admin keys (members of ``ADMIN_API_KEYS``) bypass the limiter.
     Returns (remaining, limit) for response headers."""
+    # Admin keys are unmetered: support / impersonation calls must not
+    # 429 the operator. Returning a large sentinel keeps response headers
+    # well-formed without leaking that the caller is privileged.
+    if api_key in _ADMIN_API_KEYS:
+        return 999_999, 999_999
     limit = TIER_LIMITS[tier]["requests_per_min"]
     if is_demo:
         limit = min(limit, _DEMO_RATE_LIMIT_RPM)
@@ -1003,11 +1009,20 @@ async def verify_api_key(request: Request, api_key: str = Security(api_key_heade
     # re-parsing the header.
     key_data = dict(key_data)
     key_data["api_key"] = api_key
+    # Admin keys (members of ``ADMIN_API_KEYS``) get a flag that downstream
+    # tier-gates honor. Their actions are still audited like any other tenant.
+    if api_key in _ADMIN_API_KEYS:
+        key_data["is_admin"] = True
+        request.state.is_admin = True
     return key_data
 
 def require_tier(*allowed: Tier):
     """Dependency that checks the caller's tier against allowed tiers."""
     async def _check(key_data: Dict = Depends(verify_api_key)):
+        # Admin keys bypass tier gates so support / impersonation calls
+        # work against any endpoint regardless of the admin's nominal tier.
+        if key_data.get("is_admin"):
+            return key_data
         if key_data["tier"] not in allowed:
             raise HTTPException(
                 status_code=403,
@@ -2205,6 +2220,19 @@ _ADMIN_API_KEYS: set[str] = {
     k.strip() for k in os.getenv("ADMIN_API_KEYS", "").split(",") if k.strip()
 }
 
+
+def _admin_email_for(api_key: str) -> str:
+    """Resolve a human-readable email for an admin api_key for audit logs.
+
+    Falls back to the key prefix if the admin key isn't also a tenant
+    (e.g. the bootstrap key set only via ``ADMIN_API_KEYS``).
+    """
+    try:
+        rec = _key_store_db.lookup_key(api_key) or {}
+    except Exception:
+        rec = {}
+    return rec.get("email") or rec.get("owner") or f"admin:{api_key[:12]}"
+
 # Approximate per-tier monthly revenue in BRL for MRR calculation.
 # Mirrors frontend/src/Pricing.jsx; intentionally simple — the source of
 # truth for billing remains Stripe.
@@ -2232,7 +2260,10 @@ async def require_admin(request: Request, api_key: str = Security(api_key_header
 
 
 @app.get("/admin/sales/overview")
-async def admin_sales_overview(_: str = Depends(require_admin)) -> Dict:
+async def admin_sales_overview(
+    request: Request,
+    admin_key: str = Depends(require_admin),
+) -> Dict:
     """Sales-facing aggregated view: tenants by tier, MRR estimate, signups.
 
     Returns a single JSON document with everything the sales dashboard
@@ -2240,6 +2271,15 @@ async def admin_sales_overview(_: str = Depends(require_admin)) -> Dict:
     requests. All numbers are derived from the production key store and
     audit log; no PII beyond company / billing email.
     """
+    await _audit.log(
+        admin_key,
+        "admin.sales.overview.read",
+        actor_email=_admin_email_for(admin_key),
+        tier="admin",
+        target="admin.sales.overview",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
     try:
         all_keys = _key_store_db.get_all_keys() or {}
     except Exception:
@@ -2322,7 +2362,8 @@ async def admin_sales_overview(_: str = Depends(require_admin)) -> Dict:
 @app.get("/admin/sales/tenants/{api_key_prefix}")
 async def admin_sales_tenant_detail(
     api_key_prefix: str,
-    _: str = Depends(require_admin),
+    request: Request,
+    admin_key: str = Depends(require_admin),
 ) -> Dict:
     """Per-tenant sales detail — usage, billing cycle, SSO/white-label state."""
     if len(api_key_prefix) < 6:
@@ -2339,12 +2380,27 @@ async def admin_sales_tenant_detail(
         raise HTTPException(status_code=409, detail="prefix is ambiguous; use more characters")
     api_key, rec = matches[0]
     rec = rec or {}
+    await _audit.log(
+        admin_key,
+        "admin.sales.tenant.read",
+        actor_email=_admin_email_for(admin_key),
+        tier="admin",
+        target=f"tenant:{api_key[:12]}",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
     # Last 100 audit entries for this tenant.
     try:
         recent_audit = await asyncio.to_thread(_audit.recent_for_key, api_key, 100)
     except Exception:
         logger.exception("admin_sales_tenant_detail: audit lookup failed")
         recent_audit = []
+    # Redact the raw api_key from each audit row — admins should use the
+    # explicit POST /admin/impersonate endpoint to retrieve it (audited).
+    for row in recent_audit:
+        if "api_key" in row:
+            row["api_key_prefix"] = (row.get("api_key") or "")[:12]
+            row.pop("api_key", None)
     return {
         "api_key_prefix": api_key[:8],
         "tier": rec.get("tier"),
@@ -2359,6 +2415,77 @@ async def admin_sales_tenant_detail(
         "branding": rec.get("branding"),
         "white_label_enabled": bool((rec.get("branding") or {}).get("frontend_url")),
         "recent_audit": recent_audit,
+    }
+
+
+@app.post("/admin/impersonate/{api_key_prefix}")
+async def admin_impersonate(
+    api_key_prefix: str,
+    request: Request,
+    admin_key: str = Depends(require_admin),
+) -> Dict:
+    """Return the full API key for a tenant (support / impersonation).
+
+    Intentionally a POST so it doesn't show up in browser-history GETs.
+    Every call writes an audit row keyed to the impersonated tenant
+    *and* a separate row keyed to the admin, so both sides of the
+    impersonation are traceable.
+
+    The returned ``api_key`` lets the operator make requests on the
+    tenant's behalf for support purposes (e.g. paste it into a CLI to
+    reproduce a user-reported bug). It does NOT change anything about
+    the tenant's account.
+    """
+    if len(api_key_prefix) < 6:
+        raise HTTPException(status_code=400, detail="api_key_prefix must be ≥6 chars")
+    try:
+        all_keys = _key_store_db.get_all_keys() or {}
+    except Exception:
+        logger.exception("admin_impersonate: list_keys failed")
+        all_keys = {}
+    matches = [(k, rec) for k, rec in all_keys.items() if (k or "").startswith(api_key_prefix)]
+    if not matches:
+        raise HTTPException(status_code=404, detail="no tenant matches that prefix")
+    if len(matches) > 1:
+        raise HTTPException(status_code=409, detail="prefix is ambiguous; use more characters")
+    target_key, rec = matches[0]
+    rec = rec or {}
+    actor_email = _admin_email_for(admin_key)
+    ip = _client_ip(request)
+    ua = request.headers.get("user-agent")
+    # Audit row #1: appears in the *target tenant's* timeline so the
+    # tenant can see (via support tooling) that an admin impersonated them.
+    await _audit.log(
+        target_key,
+        "admin.impersonate.issued",
+        actor_email=actor_email,
+        tier=(rec.get("tier") or "unknown"),
+        target=f"tenant:{target_key[:12]}",
+        ip=ip,
+        user_agent=ua,
+        metadata={"admin_key_prefix": admin_key[:12]},
+    )
+    # Audit row #2: appears in the *admin's* own timeline.
+    await _audit.log(
+        admin_key,
+        "admin.impersonate.read",
+        actor_email=actor_email,
+        tier="admin",
+        target=f"tenant:{target_key[:12]}",
+        ip=ip,
+        user_agent=ua,
+    )
+    return {
+        "api_key": target_key,
+        "tier": rec.get("tier"),
+        "owner": rec.get("owner"),
+        "email": rec.get("email"),
+        "issued_at": time.time(),
+        "expires_at": None,  # permanent — revoke by rotating the tenant's key
+        "warning": (
+            "This is the tenant's live API key. All actions taken with it "
+            "are recorded in BOTH the tenant's audit log and yours."
+        ),
     }
 
 
