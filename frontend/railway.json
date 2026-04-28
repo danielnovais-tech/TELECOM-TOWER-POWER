@@ -12,7 +12,11 @@
         "restartPolicyMaxRetries": 3,
         "envVars": {
             "BACKEND_URL": {
-                "description": "Internal URL of the backend API service (e.g. http://TELECOM-TOWER-POWER.railway.internal:8000)",
+                "description": "Server-side URL the nginx container proxies to. Use Railway's private network: http://${{ web.RAILWAY_PRIVATE_DOMAIN }}:8000",
+                "required": true
+            },
+            "VITE_API_URL": {
+                "description": "Public HTTPS URL of the API, baked into the JS bundle at build time: https://${{ web.RAILWAY_PUBLIC_DOMAIN }} (or the custom domain).",
                 "required": true
             }
         }
