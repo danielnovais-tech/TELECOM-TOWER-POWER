@@ -13,13 +13,34 @@ Tower database management, point-to-point link analysis, terrain-aware multi-hop
 
 ## Production Status
 
-- **Infrastructure** — EC2 + Docker Compose stable; Caddy on `:80` (ALB terminates TLS) routes frontend + API; Stripe webhook (`:8001`) and Grafana (`:3001`) respond correctly.
-- **CI/CD** — Three hardened GitHub workflows (`deploy-ec2-docker.yml`, `update-ec2-stripe-secrets.yml`, `update-ec2-alerting-secrets.yml`) with BuildKit cache mount and `concurrency:` control. All **11** workflows under [.github/workflows](.github/workflows) migrated to Node 24.
-- **Observability** — Grafana provisioned (email + Slack contact points, fan‑out notification policies, `continue: true` on critical); `high-5xx-rate` alert active (`sum(rate(http_requests_total{status=~"5.."}[1m])) * 60 > 10`).
-- **Secrets** — Never committed; synced via GitHub Actions → SSM → `/home/ubuntu/TELECOM-TOWER-POWER/secrets/`. See [secrets/README.md](secrets/README.md).
-- **Deployment** — Zero‑downtime via SSM `send-command` + `docker compose up -d`; Railway/Railpack compatibility preserved (`railway.json`, `Procfile`, `Dockerfile`).
+- **Infrastructure** — ECS Fargate primary (`api.*`), EC2 + Docker Compose for frontend/Grafana/Prometheus/Alertmanager (`app.*`, `www.*`, `monitoring.*`, `prometheus.*`), Railway as warm failover, Lambda for bursty batch jobs (priority queue for Enterprise).
+- **CI/CD** — **16** hardened GitHub Actions workflows under [.github/workflows](.github/workflows): deploys (ECS, EC2 Docker, Lambda, Caddy, docs), secret-sync (Stripe + PagerDuty via SSM), nightly Postgres + Grafana backups, **weekly restore drill** (`backup-restore-drill.yml`), failover rotate/drift, synthetic monitoring, and EC2 diagnostics. All Node 24, with `concurrency:` control, retries, and BuildKit cache.
+- **Observability** — Prometheus + Grafana + Alertmanager + OpenTelemetry traces; **12** Prometheus alert rules; Slack + PagerDuty (critical-only, `send_resolved=true`); synthetic monitoring probes all three entrypoints; Alertmanager external URL `https://alerts.telecomtowerpower.com.br`.
+- **Backups** — Grafana volume + PostgreSQL nightly to S3 (14-day retention); **verified restore** every Monday 07:15 UTC via ephemeral Postgres 18 container + row-count assertions on `towers`, `api_keys`, `alembic_version`.
+- **Security** — API keys + SSO/OIDC (Cognito, Bearer fallback in `verify_api_key`), audit log on every tenant action, OWASP-Top-10 mitigations (IDOR, injection, crypto), TLS at ALB + Caddy.
+- **Secrets** — Never committed; synced via GitHub Actions → SSM Parameter Store → `/home/ubuntu/TELECOM-TOWER-POWER/secrets/` and ECS task-def secret refs. See [secrets/README.md](secrets/README.md).
 
-See [docs-site/docs/operations/production-status.md](docs-site/docs/operations/production-status.md) and [docs-site/docs/operations/runbook.md](docs-site/docs/operations/runbook.md).
+See [docs-site/docs/operations/production-status.md](docs-site/docs/operations/production-status.md), [docs-site/docs/operations/runbook.md](docs-site/docs/operations/runbook.md), and [docs-site/docs/operations/whats-shipped.md](docs-site/docs/operations/whats-shipped.md).
+
+---
+
+## What's Shipped (Cumulative)
+
+All features and security items shipped to production are live, tested, and documented:
+
+- **140,906 Brazilian towers** (ANATEL + OpenCelliD, geocoded with real GPS snapping)
+- **Tiered pricing & billing** — 5 tiers + annual; Stripe webhook auto-provisions API keys
+- **White-label tenant mode** — branding + dynamic CORS
+- **Audit log** — every tenant action recorded, queryable via `/tenant/audit`
+- **SSO / OIDC** — Cognito Hosted UI + server-side OAuth code exchange; Bearer token fallback in `verify_api_key`
+- **Priority batch queue** — Enterprise SQS + dedicated Lambda consumer
+- **Hop-viability Redis cache** — drops `/plan_repeater` latency to <100 ms
+- **Real-time AI coverage heatmap** — SSE, per-tier grid caps
+- **KML / Shapefile / GeoJSON export**
+- **Synthetic monitoring** — GitHub Actions cron probes all three entrypoints
+- **12 Prometheus alert rules** + Slack + PagerDuty (critical only)
+- **Backups** — Grafana volume + PostgreSQL nightly to S3 with **verified restore** drill
+- **16 hardened GitHub Actions workflows** — concurrency, retries, SSM secrets sync
 
 ---
 
