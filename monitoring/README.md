@@ -17,7 +17,7 @@ monitoring/
 │   ├── prometheus.yml        # scrapes *.railway.internal targets
 │   └── alert_rules.yml       # same rules as EC2
 └── grafana/
-    ├── Dockerfile            # grafana/grafana:12.2.0
+    ├── Dockerfile            # grafana/grafana:13.0.1
     ├── provisioning/
     │   ├── datasources/      # Prometheus datasource (internal DNS)
     │   ├── dashboards/       # dashboard provider
@@ -89,14 +89,14 @@ monitoring/
 - **Dashboards volume mask.** The provisioning path is
   `/etc/grafana/dashboards/` (not `/var/lib/grafana/dashboards/`) so the
   named volume on `/var/lib/grafana` doesn't mask the baked-in dashboard
-  JSON. Same fix as the EC2 setup (see repo notes on grafana 12.0.2).
+  JSON. Same fix as the EC2 setup (see repo notes on grafana 13.x).
 
 ## Post-deploy validation
 
 ```bash
 # From your laptop, against the public Grafana domain:
 curl https://<grafana>.up.railway.app/api/health
-# Expect: {"database":"ok","version":"12.2.0"}
+# Expect: {"database":"ok","version":"13.0.1"}
 
 # Inside Grafana UI:
 # - Configuration → Data sources → Prometheus → Save & test → green check
