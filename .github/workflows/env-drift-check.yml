@@ -1,0 +1,42 @@
+name: Env Drift Check
+
+# Fails any PR that introduces a code reference to an environment variable
+# that is not documented in `.env.example`. Keeps deployment docs / Railway
+# / EC2 onboarding in sync with the source tree.
+
+on:
+  pull_request:
+    paths:
+      - "**/*.py"
+      - "**/*.js"
+      - "**/*.jsx"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "docker-compose*.yml"
+      - "Caddyfile"
+      - ".env.example"
+      - "scripts/check_env_example.py"
+      - ".github/workflows/env-drift-check.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: .env.example vs code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify scanner exists
+        run: test -x scripts/check_env_example.py || chmod +x scripts/check_env_example.py
+
+      - name: Run env drift check
+        run: python3 scripts/check_env_example.py --github-summary
