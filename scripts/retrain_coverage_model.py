@@ -147,6 +147,13 @@ def main() -> int:
 
         if args.dry_run:
             logger.info("dry-run; not uploading")
+            gh_out = os.getenv("GITHUB_OUTPUT")
+            if gh_out:
+                with open(gh_out, "a") as f:
+                    f.write(
+                        f"retrained=false\nobservations={current}\ndelta={delta}\n"
+                        f"rmse_db={model.rmse_db:.4f}\nn_train={model.n_train}\n"
+                    )
             return 0
 
         s3.upload_file(out_path, bucket, model_key,
