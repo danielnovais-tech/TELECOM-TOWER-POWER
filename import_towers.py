@@ -155,6 +155,26 @@ def _stream_towers(
             yield rows
 
 
+def _stream_source_ids(
+    conn: psycopg2.extensions.connection,
+    batch_size: int = BATCH_SIZE,
+) -> Generator[List[str], None, None]:
+    """Yield batches of tower IDs (TEXT) from the source database.
+
+    Used by --delete-missing to build a snapshot of authoritative IDs on the
+    target so we can DELETE rows that no longer exist upstream.
+    """
+    cursor_name = f"import_towers_id_cursor_{int(time.time())}"
+    with conn.cursor(name=cursor_name) as cur:
+        cur.itersize = batch_size
+        cur.execute("SELECT id FROM towers")
+        while True:
+            rows = cur.fetchmany(batch_size)
+            if not rows:
+                break
+            yield [str(r[0]) for r in rows]
+
+
 # ── Target: ensure table exists ──────────────────────────────────────────────
 
 def _ensure_table(conn: psycopg2.extensions.connection, verbose: bool = False) -> None:
@@ -318,6 +338,47 @@ def _upsert_batch_with_retry(
     )
 
 
+# ── Prune: delete target rows missing from source ────────────────────────────
+
+def _prune_missing(
+    src_conn: psycopg2.extensions.connection,
+    tgt_conn: psycopg2.extensions.connection,
+    batch_size: int = BATCH_SIZE,
+    verbose: bool = False,
+) -> int:
+    """Delete rows from target that no longer exist in source.
+
+    Streams every source ID into a TEMP TABLE on the target connection, then
+    runs a single set-based DELETE against `towers`. Returns the number of
+    rows deleted.
+    """
+    print("\nPruning target rows that no longer exist in source...")
+    deleted = 0
+    with _transaction(tgt_conn):
+        with tgt_conn.cursor() as cur:
+            cur.execute(
+                "CREATE TEMP TABLE _src_ids (id TEXT PRIMARY KEY) ON COMMIT DROP"
+            )
+            staged = 0
+            for id_batch in _stream_source_ids(src_conn, batch_size=batch_size):
+                psycopg2.extras.execute_values(
+                    cur,
+                    "INSERT INTO _src_ids (id) VALUES %s ON CONFLICT (id) DO NOTHING",
+                    [(i,) for i in id_batch],
+                    page_size=batch_size,
+                )
+                staged += len(id_batch)
+                if verbose:
+                    print(f"  staged {staged:,} source IDs")
+            cur.execute(
+                "DELETE FROM towers t "
+                "WHERE NOT EXISTS (SELECT 1 FROM _src_ids s WHERE s.id = t.id)"
+            )
+            deleted = cur.rowcount or 0
+    print(f"  Pruned {deleted:,} stale tower(s) from target.")
+    return deleted
+
+
 # ── Validation: spot-check ───────────────────────────────────────────────────
 
 def _spot_check(
@@ -361,6 +422,7 @@ def run_import(
     dry_run: bool = False,
     verbose: bool = False,
     batch_size: int = BATCH_SIZE,
+    delete_missing: bool = False,
 ) -> int:
     """Stream all towers from source → target.
 
@@ -391,11 +453,17 @@ def run_import(
             return 0
 
         if dry_run:
+            stale = max(0, total_target_before - total_source)
             print(
                 f"\n[DRY RUN] Would import up to {total_source:,} towers "
                 f"({total_source - total_target_before:+,} net change). "
                 f"No data written."
             )
+            if delete_missing:
+                print(
+                    f"[DRY RUN] Would also prune ~{stale:,} target row(s) "
+                    f"missing from source."
+                )
             return 0
 
         # ── Ensure target schema ──────────────────────────────────
@@ -460,6 +528,13 @@ def run_import(
         print(f"\n{'─' * 60}")
         print(f"Import complete in {total_elapsed:.1f}s  ({overall_rate:,.0f} towers/sec)")
 
+        # ── Optional prune: delete target rows missing from source ─
+        pruned = 0
+        if delete_missing:
+            pruned = _prune_missing(
+                src_conn, tgt_conn, batch_size=batch_size, verbose=verbose
+            )
+
         # ── Post-import counts ────────────────────────────────────
         total_target_after = _count_target(tgt_conn)
         net_new = total_target_after - total_target_before
@@ -470,6 +545,8 @@ def run_import(
         print(f"  Target after   : {total_target_after:>10,}")
         print(f"  Net new        : {net_new:>+10,}")
         print(f"  Rows written   : {imported:>10,}")
+        if delete_missing:
+            print(f"  Rows pruned    : {pruned:>10,}")
 
         if all_errors:
             print(
@@ -498,8 +575,17 @@ def run_import(
 
         # ── Summary verdict ───────────────────────────────────────
         print()
-        if total_target_after >= total_source and (not all_errors or len(all_errors) < 10):
-            print("✓ Import successful. Target is in sync with source.")
+        if delete_missing and total_target_after == total_source:
+            print("✓ Import + prune successful. Target is exactly in sync with source.")
+        elif total_target_after >= total_source and (not all_errors or len(all_errors) < 10):
+            extra = total_target_after - total_source
+            if extra > 0:
+                print(
+                    f"✓ Import successful. Target has {extra:,} extra row(s) not in "
+                    f"source (re-run with --delete-missing to prune)."
+                )
+            else:
+                print("✓ Import successful. Target is in sync with source.")
         elif total_target_after > total_target_before:
             print(
                 f"⚠ Partial import: {total_target_after:,} / {total_source:,} towers "
@@ -597,6 +683,15 @@ Environment variable presets (--source-env / --target-env):
         metavar="N",
         help=f"Rows per SELECT/INSERT batch (default: {BATCH_SIZE:,})",
     )
+    parser.add_argument(
+        "--delete-missing",
+        action="store_true",
+        help=(
+            "After UPSERT, DELETE target rows whose IDs no longer exist in "
+            "source. Required to keep PRIMARY and SECONDARY in exact sync "
+            "when towers are deactivated upstream (e.g. ANATEL removals)."
+        ),
+    )
 
     return parser
 
@@ -638,6 +733,7 @@ def main() -> None:
     print(f"  Target : {_redact(target_dsn)}")
     print(f"  Mode   : {'DRY RUN (no writes)' if args.dry_run else 'LIVE IMPORT'}")
     print(f"  Batch  : {args.batch_size:,} rows")
+    print(f"  Prune  : {'YES (--delete-missing)' if args.delete_missing else 'no'}")
     print()
 
     try:
@@ -647,6 +743,7 @@ def main() -> None:
             dry_run=args.dry_run,
             verbose=args.verbose,
             batch_size=args.batch_size,
+            delete_missing=args.delete_missing,
         )
     except KeyboardInterrupt:
         print("\n\nInterrupted by user. Import may be partial.", file=sys.stderr)

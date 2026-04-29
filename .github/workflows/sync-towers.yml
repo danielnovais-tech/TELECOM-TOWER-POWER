@@ -100,7 +100,7 @@ jobs:
           # URL-encode password to handle special chars like !
           PW=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['RDS_PASSWORD'], safe=''))")
           export AWS_DATABASE_URL="postgresql://${RDS_USER}:${PW}@127.0.0.1:15432/${RDS_DBNAME}?sslmode=require"
-          python3 import_towers.py --source-env AWS --target-env RAILWAY --verbose
+          python3 import_towers.py --source-env AWS --target-env RAILWAY --delete-missing --verbose
 
       - name: Teardown SSM tunnel
         if: always()
