@@ -166,6 +166,27 @@ groups:
             End-to-end probe of the public API has been failing for 5m.
             This is what customers see regardless of PRIMARY/SECONDARY state.
 
+      # ── PRIMARY (ALB) leg down ─ silent-failover detector ──────
+      # ApiCustomerUrlDown does NOT fire when failover is doing its job:
+      # Route 53 diverts to Railway and customers see green. This alert
+      # catches that case so we still know the PRIMARY is broken and
+      # someone has to fix ECS/ALB before Railway also has a bad day.
+      # Bypasses Route 53 by probing the ALB DNS name directly.
+      - alert: AlbPrimaryDown
+        expr: probe_success{probe_leg="alb_direct"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PRIMARY (ALB) leg of api.* is unhealthy"
+          description: >
+            ALB direct probe has been failing for 10m. Route 53 has likely
+            already failed over to Railway (customer URL may still be green).
+            Investigate ECS service `telecom-tower-power` (target group health,
+            task logs in /ecs/telecom-tower-power, RDS SG ingress for the task SG).
+            Without this alert, a PRIMARY outage is invisible until Railway
+            ALSO fails.
+
       # ── Cert expiring soon (either leg) ──────────────────────
       - alert: ApiTlsCertExpiringSoon
         expr: (probe_ssl_earliest_cert_expiry - time()) < 14 * 24 * 3600

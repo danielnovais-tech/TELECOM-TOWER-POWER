@@ -70,3 +70,25 @@ scrape_configs:
         replacement: blackbox-exporter:9115
       - target_label: probe_leg
         replacement: railway_edge
+
+  # ── Blackbox: ALB direct PRIMARY-leg probe ────────────────────
+  # Hits the ALB DNS name directly with Host = api.telecomtowerpower.com.br,
+  # bypassing Route 53 entirely. This is the only signal that catches a
+  # PRIMARY outage when failover is silently masking it (Route 53 already
+  # diverted to Railway, customer URL still 200 → no other alert fires).
+  - job_name: "blackbox_alb_direct"
+    metrics_path: /probe
+    params:
+      module: [alb_direct_health]
+    static_configs:
+      - targets:
+          - https://telecom-tower-power-alb-581610578.sa-east-1.elb.amazonaws.com/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: probe_leg
+        replacement: alb_direct

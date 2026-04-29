@@ -38,3 +38,24 @@ modules:
         # verification against api.telecomtowerpower.com.br SNI to detect
         # a cert-domain mismatch on the Railway edge.
         insecure_skip_verify: false
+
+  # Probes the ALB directly with Host header set to the custom domain,
+  # bypassing Route 53. Detects PRIMARY-leg outages even when failover
+  # is masking them (e.g. ECS task DB-connectivity flap on 2026-04-28
+  # left customers fine via Railway but PRIMARY silently dead for hours).
+  # The ALB cert is *.sa-east-1.elb.amazonaws.com (default) so we skip
+  # SNI verification — the goal is "is the API behind the ALB healthy".
+  alb_direct_health:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: "ip4"
+      method: GET
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      fail_if_body_not_matches_regexp:
+        - "healthy"
+      headers:
+        Host: api.telecomtowerpower.com.br
+      tls_config:
+        insecure_skip_verify: true
