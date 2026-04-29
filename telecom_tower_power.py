@@ -499,7 +499,9 @@ class TelecomTowerPower:
             )
             los_ok = fresnel_clear > 0.6   # rule of thumb: 60% clearance needed for reliable link
             if fresnel_clear < 0.6:
-                rssi -= (0.6 - fresnel_clear) * 10  # empirical extra loss due to obstruction
+                # Knife-edge diffraction loss saturates ~40 dB (ITU-R P.526);
+                # cap so deep negative clearance can't yield unphysical RSSI.
+                rssi -= min((0.6 - fresnel_clear) * 10, 40.0)  # empirical extra loss due to obstruction
 
         feasible = los_ok and (rssi > -95)   # -95 dBm threshold for 4G/5G reliable
 

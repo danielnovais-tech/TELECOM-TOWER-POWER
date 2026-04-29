@@ -560,7 +560,9 @@ class TelecomTowerPower:
             )
             los_ok = fresnel_clear > 0.6   # 60% clearance needed for reliable link
             if fresnel_clear < 0.6:
-                rssi -= (0.6 - fresnel_clear) * 10
+                # Knife-edge diffraction loss saturates ~40 dB (ITU-R P.526);
+                # cap so deep negative clearance can't yield unphysical RSSI.
+                rssi -= min((0.6 - fresnel_clear) * 10, 40.0)
 
         feasible = los_ok and (rssi > -95)
 
@@ -1933,6 +1935,78 @@ async def coverage_predict_stream(
 class CoverageExportRequest(CoveragePredictRequest):
     """Same body as ``CoveragePredictRequest`` (bbox required)."""
     pass
+
+
+# ─────────────────────────────────────────────────────────────────────
+# /coverage/observations – ingest real RSSI measurements for retraining
+# ─────────────────────────────────────────────────────────────────────
+
+class CoverageObservationInput(BaseModel):
+    """One ground-truth RSSI measurement.
+
+    All fields are required so the row is self-contained for offline
+    re-training without needing to look up tower metadata. Submit
+    ``tower_id`` when the measurement is associated with a known tower
+    (used for auditing).
+    """
+    tower_id: Optional[str] = None
+    tx_lat: float = Field(..., ge=-90, le=90)
+    tx_lon: float = Field(..., ge=-180, le=180)
+    tx_height_m: float = Field(..., gt=0, le=500)
+    tx_power_dbm: float = Field(..., ge=0, le=80)
+    tx_gain_dbi: float = 17.0
+    rx_lat: float = Field(..., ge=-90, le=90)
+    rx_lon: float = Field(..., ge=-180, le=180)
+    rx_height_m: float = Field(default=1.5, ge=0, le=500)
+    rx_gain_dbi: float = 0.0
+    freq_hz: float = Field(..., gt=1e6, le=100e9)
+    observed_dbm: float = Field(..., ge=-150, le=30)
+    source: str = Field(default="api", max_length=32)
+    ts: Optional[float] = None  # epoch seconds; default to ingest time
+
+
+class CoverageObservationsBatch(BaseModel):
+    observations: List[CoverageObservationInput] = Field(..., min_length=1, max_length=10_000)
+
+
+@app.post("/coverage/observations")
+async def submit_coverage_observation(
+    request: Request,
+    body: CoverageObservationInput,
+    key_data: Dict = Depends(verify_api_key),
+):
+    """Submit a single ground-truth RSSI measurement.
+
+    Stored in ``link_observations`` and incorporated into the model on the
+    next ``python -m coverage_predict train --with-observations`` run.
+    """
+    from observation_store import ObservationStore
+    store = ObservationStore()
+    submitter = _caller_owner(request, key_data)
+    obs_id = store.insert_observation({**body.dict(), "submitted_by": submitter})
+    return {"id": obs_id, "status": "stored"}
+
+
+@app.post("/coverage/observations/batch")
+async def submit_coverage_observations_batch(
+    request: Request,
+    body: CoverageObservationsBatch,
+    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
+):
+    """Bulk-ingest measurements (drive-test CSV uploads, etc.)."""
+    from observation_store import ObservationStore
+    store = ObservationStore()
+    submitter = _caller_owner(request, key_data)
+    rows = [{**o.dict(), "submitted_by": submitter} for o in body.observations]
+    n = store.insert_observations_many(rows)
+    return {"ingested": n, "status": "stored"}
+
+
+@app.get("/coverage/observations/stats")
+async def coverage_observations_stats(_key: Dict = Depends(verify_api_key)):
+    """Return current row counts for the training stores (for ops dashboards)."""
+    from observation_store import ObservationStore
+    return ObservationStore().counts()
 
 
 @app.post("/coverage/predict/export")

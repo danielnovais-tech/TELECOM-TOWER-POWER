@@ -264,6 +264,109 @@ def parse_opencellid_csv(
     return towers
 
 
+# ── Frequency mapping for signal samples ─────────────────────────
+# Use the first band of each radio type as the representative carrier
+# frequency for the averageSignal label.
+_RADIO_FREQ_HZ = {
+    "GSM":   900e6,
+    "UMTS":  2.1e9,
+    "LTE":   1.8e9,
+    "CDMA":  850e6,
+    "NR":    3.5e9,
+    "NBIOT": 700e6,
+}
+
+
+def parse_opencellid_signal_samples(
+    csv_path: str,
+    *,
+    limit: int = 0,
+    min_samples: int = 5,
+) -> List[Dict[str, Any]]:
+    """Extract aggregated ``averageSignal`` rows for training.
+
+    OpenCelliD reports a per-cell ``averageSignal`` (dBm) crowdsourced from
+    handset measurements. Rows where the field is empty or zero are skipped.
+    Returns dicts compatible with ``ObservationStore.upsert_cell_samples_many``.
+    """
+    with open(csv_path, "rb") as fcheck:
+        magic = fcheck.read(2)
+    is_gzip = magic == b"\x1f\x8b"
+    open_fn = gzip.open if is_gzip else open
+
+    out: List[Dict[str, Any]] = []
+    skipped = 0
+
+    _FIELDNAMES = [
+        "radio", "mcc", "net", "area", "cell", "unit",
+        "lon", "lat", "range", "samples", "changeable",
+        "created", "updated", "averageSignal",
+    ]
+
+    with open_fn(csv_path, "rt", encoding="utf-8", errors="replace") as f:
+        reader = csv.DictReader(f, fieldnames=_FIELDNAMES)
+        for row in reader:
+            if row.get("mcc", "") != BRAZIL_MCC:
+                continue
+            try:
+                samples = int(row.get("samples", "0"))
+                avg_sig = float(row.get("averageSignal", "0") or "0")
+                rng = float(row.get("range", "0") or "0")
+                lat = float(row.get("lat", "") or "nan")
+                lon = float(row.get("lon", "") or "nan")
+            except ValueError:
+                skipped += 1
+                continue
+            # OpenCelliD uses 0 for "no signal data". Negative dBm only.
+            if samples < min_samples or avg_sig >= 0 or avg_sig < -150:
+                skipped += 1
+                continue
+            if not (-34.0 <= lat <= 6.0 and -74.0 <= lon <= -28.0):
+                skipped += 1
+                continue
+            radio = row.get("radio", "LTE").upper()
+            freq_hz = _RADIO_FREQ_HZ.get(radio)
+            if freq_hz is None:
+                skipped += 1
+                continue
+            mnc = row.get("net", "")
+            area = row.get("area", "")
+            cell = row.get("cell", "")
+            tower_id = f"OCID_{BRAZIL_MCC}_{mnc}_{area}_{cell}"
+            out.append({
+                "tower_id": tower_id,
+                "centroid_lat": lat,
+                "centroid_lon": lon,
+                "range_m": max(rng, 100.0),  # floor to avoid 0
+                "samples": samples,
+                "freq_hz": freq_hz,
+                "avg_signal_dbm": avg_sig,
+            })
+            if limit and len(out) >= limit:
+                break
+
+    print(f"  parsed {len(out)} signal samples ({skipped} skipped)")
+    return out
+
+
+def load_opencellid_signal_samples(
+    *,
+    file_path: str,
+    limit: int = 0,
+    min_samples: int = 5,
+) -> int:
+    """Persist OpenCelliD averageSignal data into ``cell_signal_samples``."""
+    from observation_store import ObservationStore
+    rows = parse_opencellid_signal_samples(
+        file_path, limit=limit, min_samples=min_samples,
+    )
+    if not rows:
+        return 0
+    store = ObservationStore()
+    return store.upsert_cell_samples_many(rows)
+
+
+
 def load_opencellid(
     *,
     token: str | None = None,
@@ -357,6 +460,11 @@ def main():
         "--use-copy", action="store_true",
         help="Use PostgreSQL COPY for faster bulk import (PG only)",
     )
+    parser.add_argument(
+        "--load-signal-samples", action="store_true",
+        help="Also persist averageSignal rows into cell_signal_samples for "
+             "ML retraining (uses --file or downloaded CSV).",
+    )
     args = parser.parse_args()
 
     if not args.token and not args.file_path:
@@ -371,6 +479,21 @@ def main():
         dry_run=args.dry_run,
         use_copy=args.use_copy,
     )
+
+    if args.load_signal_samples and not args.dry_run:
+        # Resolve the CSV path used by load_opencellid (file or cache).
+        csv_path = args.file_path
+        if not csv_path:
+            csv_path = os.path.join(_CACHE_DIR, f"{BRAZIL_MCC}.csv.gz")
+        if not os.path.exists(csv_path):
+            print(f"WARN: cannot find CSV at {csv_path} for signal-sample import")
+        else:
+            print(f"\nLoading averageSignal samples from {csv_path} ...")
+            n = load_opencellid_signal_samples(
+                file_path=csv_path, limit=args.limit,
+                min_samples=max(args.min_samples, 5),
+            )
+            print(f"  upserted {n} signal samples")
 
 
 if __name__ == "__main__":

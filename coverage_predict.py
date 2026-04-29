@@ -389,6 +389,71 @@ def _generate_synthetic_dataset(n: int) -> Tuple[np.ndarray, np.ndarray]:
     return np.asarray(X), np.asarray(y)
 
 
+def load_historical_from_stores(
+    *,
+    include_observations: bool = True,
+    include_opencellid: bool = False,
+    max_observations: Optional[int] = None,
+    max_opencellid: Optional[int] = None,
+) -> List[Tuple[np.ndarray, float]]:
+    """Build training tuples from the two persisted label stores.
+
+    - ``link_observations`` rows are real point-to-point measurements; the
+      receiver position, antenna params, and ``observed_dbm`` are all known.
+      No terrain profile is fetched here (avoid round-trips at train time);
+      ``build_features`` falls back to zero terrain features when none is
+      provided. The local model already includes ``log_d_km`` and frequency
+      terms, so it can still learn a useful correction.
+
+    - ``cell_signal_samples`` rows are OpenCelliD ``averageSignal`` values
+      aggregated per cell. The exact receiver location is unknown, so we
+      treat the cell centroid as ``rx`` and ``range_m / 2`` as the link
+      distance. These are SOFT labels — by convention the caller should
+      down-weight them or ingest a smaller ``max_opencellid`` cap.
+    """
+    from observation_store import ObservationStore  # local import to avoid cycles
+    store = ObservationStore()
+    out: List[Tuple[np.ndarray, float]] = []
+
+    if include_observations:
+        for i, row in enumerate(store.iter_observations()):
+            if max_observations is not None and i >= max_observations:
+                break
+            d_km = haversine_km(
+                row["tx_lat"], row["tx_lon"], row["rx_lat"], row["rx_lon"],
+            )
+            feats = build_features(
+                d_km=max(d_km, 1e-3),
+                f_hz=float(row["freq_hz"]),
+                tx_h_m=float(row["tx_height_m"]),
+                rx_h_m=float(row["rx_height_m"]),
+                tx_power_dbm=float(row["tx_power_dbm"]),
+                tx_gain_dbi=float(row["tx_gain_dbi"]),
+                rx_gain_dbi=float(row["rx_gain_dbi"]),
+                terrain_profile=None,
+            )
+            out.append((feats, float(row["observed_dbm"])))
+
+    if include_opencellid:
+        for i, row in enumerate(store.iter_cell_samples()):
+            if max_opencellid is not None and i >= max_opencellid:
+                break
+            d_km = max(float(row["range_m"]) / 2_000.0, 0.05)  # half-range in km
+            feats = build_features(
+                d_km=d_km,
+                f_hz=float(row["freq_hz"]),
+                tx_h_m=35.0,        # OpenCelliD default tower height
+                rx_h_m=1.5,         # handset
+                tx_power_dbm=43.0,
+                tx_gain_dbi=17.0,
+                rx_gain_dbi=0.0,
+                terrain_profile=None,
+            )
+            out.append((feats, float(row["avg_signal_dbm"])))
+
+    return out
+
+
 def train_model(
     n_synthetic: int = 5000,
     historical: Optional[Sequence[Tuple[np.ndarray, float]]] = None,
@@ -409,7 +474,6 @@ def train_model(
         y = np.concatenate([y_syn, y_hist, y_hist, y_hist])
     else:
         X, y = X_syn, y_syn
-
     mean = X.mean(axis=0)
     std = X.std(axis=0)
     std_safe = np.where(std == 0, 1.0, std)
@@ -911,6 +975,19 @@ if __name__ == "__main__":   # pragma: no cover
     p_train.add_argument("--out", default=MODEL_PATH)
     p_train.add_argument("--l2", type=float, default=1.0)
     p_train.add_argument("--seed", type=int, default=42)
+    p_train.add_argument(
+        "--with-observations", action="store_true",
+        help="Include rows from the link_observations table as training labels.",
+    )
+    p_train.add_argument(
+        "--with-opencellid", action="store_true",
+        help="Include OpenCelliD averageSignal rows from cell_signal_samples "
+             "as soft labels (cell centroid = rx, range/2 = distance).",
+    )
+    p_train.add_argument(
+        "--max-opencellid", type=int, default=20_000,
+        help="Cap on OpenCelliD soft-label rows used (default: 20000).",
+    )
 
     p_show = sub.add_parser("info", help="Show metadata for the persisted model")
 
@@ -918,7 +995,20 @@ if __name__ == "__main__":   # pragma: no cover
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     if args.cmd == "train":
-        m = train_model(n_synthetic=args.n, l2=args.l2, seed=args.seed, save_to=args.out)
+        historical = None
+        if args.with_observations or args.with_opencellid:
+            historical = load_historical_from_stores(
+                include_observations=args.with_observations,
+                include_opencellid=args.with_opencellid,
+                max_opencellid=args.max_opencellid,
+            )
+            print(f"Loaded {len(historical)} historical samples "
+                  f"(observations={args.with_observations}, "
+                  f"opencellid={args.with_opencellid})")
+        m = train_model(
+            n_synthetic=args.n, l2=args.l2, seed=args.seed,
+            save_to=args.out, historical=historical,
+        )
         print(f"Trained model: rmse={m.rmse_db:.2f} dB, n_train={m.n_train}, saved to {args.out}")
     elif args.cmd == "info":
         m = get_model(refresh=True)
