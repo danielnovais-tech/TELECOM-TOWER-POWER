@@ -125,10 +125,15 @@ jobs:
           docker compose up -d --no-deps frontend-react  2>/dev/null || true
 
           echo "==> Rebuilding and restarting monitoring stack..."
-          docker compose build grafana 2>/dev/null || true
-          docker compose up -d --no-deps grafana         2>/dev/null || true
-          docker compose up -d --no-deps prometheus      2>/dev/null || true
-          docker compose up -d --no-deps alertmanager    2>/dev/null || true
+          # Prometheus image bakes alert_rules.yml + prometheus.yml.tpl in
+          # via COPY, so a rebuild is required when those files change.
+          # Without --force-recreate, `up -d` is a no-op when the image tag
+          # name is unchanged, so config edits silently never reach prod.
+          docker compose build grafana prometheus 2>/dev/null || true
+          docker compose up -d --no-deps --force-recreate grafana          2>/dev/null || true
+          docker compose up -d --no-deps --force-recreate prometheus       2>/dev/null || true
+          docker compose up -d --no-deps                 alertmanager      2>/dev/null || true
+          docker compose up -d --no-deps                 blackbox-exporter 2>/dev/null || true
 
           echo "==> Pruning unused Docker images and build cache..."
           # Aggressive prune: remove dangling + unreferenced images and all
