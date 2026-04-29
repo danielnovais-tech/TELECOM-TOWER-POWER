@@ -28,21 +28,66 @@ jobs:
       - name: Install dependencies
         run: pip install psycopg2-binary
 
-      - name: Set up SSH tunnel to RDS via EC2 bastion
-        env:
-          EC2_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Install AWS Session Manager plugin
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$EC2_KEY" > ~/.ssh/ec2.pem
-          chmod 600 ~/.ssh/ec2.pem
-          ssh-keygen -y -f ~/.ssh/ec2.pem > /dev/null  # validate key format
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/ec2.pem -f -N \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=no \
-            -L 15432:${{ secrets.RDS_HOST }}:5432 \
-            ubuntu@${{ secrets.EC2_HOST }}
-          echo "SSH tunnel established on localhost:15432"
+          set -euo pipefail
+          curl -fsSL "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" \
+            -o /tmp/session-manager-plugin.deb
+          sudo dpkg -i /tmp/session-manager-plugin.deb
+          session-manager-plugin --version
+
+      - name: Verify EC2 bastion is online in SSM
+        env:
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          PING=$(aws ssm describe-instance-information \
+            --region sa-east-1 \
+            --filters "Key=InstanceIds,Values=${EC2_INSTANCE_ID}" \
+            --query 'InstanceInformationList[0].PingStatus' \
+            --output text)
+          echo "SSM PingStatus: ${PING}"
+          if [ "$PING" != "Online" ]; then
+            echo "::error::EC2 ${EC2_INSTANCE_ID} not Online in SSM (got: ${PING})"
+            exit 1
+          fi
+
+      - name: Open SSM port-forward tunnel to RDS
+        env:
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          RDS_HOST: ${{ secrets.RDS_HOST }}
+        run: |
+          set -euo pipefail
+          # Start the port-forwarding session in the background.
+          # AWS-StartPortForwardingSessionToRemoteHost lets the bastion forward
+          # the local 15432 -> RDS:5432 without opening any SG ingress.
+          nohup aws ssm start-session \
+            --region sa-east-1 \
+            --target "${EC2_INSTANCE_ID}" \
+            --document-name AWS-StartPortForwardingSessionToRemoteHost \
+            --parameters "host=${RDS_HOST},portNumber=5432,localPortNumber=15432" \
+            > /tmp/ssm-session.log 2>&1 &
+          echo $! > /tmp/ssm-session.pid
+          # Wait for the local listener to come up (max ~30s).
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/15432) 2>/dev/null; then
+              exec 3<&- 3>&-
+              echo "SSM tunnel ready on 127.0.0.1:15432 after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::SSM tunnel did not become ready within 30s"
+          echo "--- ssm-session.log ---"
+          cat /tmp/ssm-session.log || true
+          exit 1
 
       - name: Run tower import
         env:
@@ -51,13 +96,22 @@ jobs:
           RDS_DBNAME: ${{ secrets.RDS_DBNAME }}
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: |
+          set -euo pipefail
           # URL-encode password to handle special chars like !
           PW=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['RDS_PASSWORD'], safe=''))")
           export AWS_DATABASE_URL="postgresql://${RDS_USER}:${PW}@127.0.0.1:15432/${RDS_DBNAME}?sslmode=require"
           python3 import_towers.py --source-env AWS --target-env RAILWAY --verbose
 
-      - name: Teardown SSH tunnel
+      - name: Teardown SSM tunnel
         if: always()
         run: |
-          pkill -f "ssh.*15432" || true
-          rm -f ~/.ssh/ec2.pem
+          if [ -f /tmp/ssm-session.pid ]; then
+            kill "$(cat /tmp/ssm-session.pid)" 2>/dev/null || true
+          fi
+          # Best-effort cleanup of any stray session-manager-plugin / aws-cli children.
+          pkill -f "session-manager-plugin" 2>/dev/null || true
+          pkill -f "ssm start-session" 2>/dev/null || true
+          if [ -f /tmp/ssm-session.log ]; then
+            echo "--- ssm-session.log (last 40 lines) ---"
+            tail -40 /tmp/ssm-session.log || true
+          fi
