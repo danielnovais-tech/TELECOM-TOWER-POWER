@@ -2006,7 +2006,11 @@ async def submit_coverage_observations_batch(
 async def coverage_observations_stats(_key: Dict = Depends(verify_api_key)):
     """Return current row counts for the training stores (for ops dashboards)."""
     from observation_store import ObservationStore
-    return ObservationStore().counts()
+    try:
+        return ObservationStore().counts()
+    except Exception as e:
+        logger.exception("coverage_observations_stats failed")
+        raise HTTPException(status_code=500, detail=f"observation_store error: {type(e).__name__}: {e}")
 
 
 @app.post("/coverage/predict/export")
