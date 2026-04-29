@@ -13,7 +13,7 @@ Operational procedures for the production EC2 environment.
 | Secrets path on host | `/home/ubuntu/TELECOM-TOWER-POWER/secrets/` |
 | Caddy entry point | `:80` (ALB terminates TLS) |
 | Railway API (custom domain) | `https://api.telecomtowerpower.com.br` |
-| Railway edge target | `i1fuknjg.up.railway.app` (pode ser rotacionado — re-confirmar no painel da Railway antes de mexer no DNS) |
+| Railway edge target | `web-production-90b1f.up.railway.app` (pode ser rotacionado — re-confirmar no painel da Railway antes de mexer no DNS) |
 
 !!! danger "NÃO remova o registro TXT de verificação da Railway"
     O Route 53 contém um TXT `_railway-verify.api.telecomtowerpower.com.br`.

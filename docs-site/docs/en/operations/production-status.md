@@ -10,7 +10,7 @@ Snapshot of the production environment. Last verified: **April 2026**.
     - Memory: `1.9 GB total`, `~800 MB available` with `~200 MB swap in use` — stable but tight.
     - Disk: `15 GB / 19 GB used (82 %)` — monitored by the `disk-space-low` alert.
 - **Caddy** listens on `:80` behind the ALB (which terminates TLS). Routing rules:
-    - `api.telecomtowerpower.com.br` → Railway edge (`i1fuknjg.up.railway.app`).
+    - `api.telecomtowerpower.com.br` → Railway edge (`web-production-90b1f.up.railway.app`).
       **TLS termination depends on Route 53 failover state** — see below.
     - `www.*` / `app.*` API paths (`/api/*`, `/health*`, `/calculate*`, `/towers*`, `/batch*`, `/jobs*`, `/docs*`, `/openapi.json`, `/stripe*`, `/usage*`, `/api-key*`, `/signup*`, `/login*`, `/profile*`, `/portal*`, `/analyze*`, `/plan_repeater*`, `/export_report*`, `/bedrock*`, `/coverage*`, `/srtm*`) → Railway.
     - `/webhook*` → local Stripe handler on `localhost:8001`.

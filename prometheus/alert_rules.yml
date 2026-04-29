@@ -122,7 +122,7 @@ groups:
             Check worker logs and SQS dead-letter queue.
 
       # ── Failover SECONDARY leg (Railway) down ────────────────
-      # Probes https://i1fuknjg.up.railway.app/health with Host+SNI set
+      # Probes https://web-production-90b1f.up.railway.app/health with Host+SNI set
       # to the custom domain. A failure here means failover would itself
       # fail (stale edge, missing TXT, cert mismatch, Railway outage).
       - alert: RailwaySecondaryDown

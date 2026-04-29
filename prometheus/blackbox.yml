@@ -22,14 +22,21 @@ modules:
   #   - Railway rotated the edge hostname (stale RAILWAY_DNS)
   #   - Railway cert for the custom domain lapsed / was not issued
   #   - _railway-verify.api TXT was removed and Railway stopped serving the cert
+  #   - The Railway app was deleted / renamed (edge serves 404 "Application not found")
   railway_edge_customdomain:
     prober: http
     timeout: 10s
     http:
       preferred_ip_protocol: "ip4"
       method: GET
-      valid_status_codes: [200, 204, 301, 302, 401, 403, 404]
+      # 404 intentionally excluded: Railway's edge returns 404 with body
+      # "Application not found" when the project is gone, which previously
+      # passed silently as a green probe. 401/403 stay because some app
+      # routes are auth-protected; reaching them still proves the app is up.
+      valid_status_codes: [200, 204, 301, 302, 401, 403]
       fail_if_not_ssl: true
+      fail_if_body_matches_regexp:
+        - "Application not found"
       headers:
         Host: api.telecomtowerpower.com.br
       tls_config:

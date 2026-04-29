@@ -12,7 +12,7 @@
 # honour RAILWAY_DNS, so this change unifies the source of truth.
 set -eu
 
-: "${RAILWAY_DNS:=i1fuknjg.up.railway.app}"
+: "${RAILWAY_DNS:=web-production-90b1f.up.railway.app}"
 
 # Basic sanity: reject shell metacharacters / whitespace that would be
 # meaningless in a DNS name and could break the sed substitution.

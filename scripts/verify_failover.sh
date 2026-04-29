@@ -33,7 +33,7 @@ set -uo pipefail
 
 ROOT_DOMAIN="telecomtowerpower.com.br"
 DOMAIN="api.telecomtowerpower.com.br"
-RAILWAY_DNS="${RAILWAY_DNS:-i1fuknjg.up.railway.app}"
+RAILWAY_DNS="${RAILWAY_DNS:-web-production-90b1f.up.railway.app}"
 RAILWAY_TXT_NAME="_railway-verify.api.${ROOT_DOMAIN}"
 
 JSON=0

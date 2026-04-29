@@ -455,11 +455,11 @@ Automatic DNS failover is **deployed and active**:
 1. **Health check** (`f32babca-ad29-4d2c-9593-a455d11e5ab7`) — HTTPS string-match on ALB `/health`, checks for `"healthy"`, all 10 AWS regions reporting healthy
 2. **Failover CNAME records** for `api.telecomtowerpower.com.br`:
    - **PRIMARY** → ALB (health-checked, TTL 60 s)
-   - **SECONDARY** → Railway edge (`i1fuknjg.up.railway.app`, TTL 60 s) — unique per custom domain; Railway issues a Let's Encrypt cert for `api.telecomtowerpower.com.br` and also requires a TXT `_railway-verify.api` record for ownership validation.
+   - **SECONDARY** → Railway edge (`web-production-90b1f.up.railway.app`, TTL 60 s) — unique per custom domain; Railway issues a Let's Encrypt cert for `api.telecomtowerpower.com.br` and also requires a TXT `_railway-verify.api` record for ownership validation.
 
 > **⚠ Operational notes for this failover path**
 > - The Route 53 health check only measures the **ALB**. When the ALB fails the check, Route 53 will flip to the Railway secondary even if Railway itself is unhealthy or TLS validation is broken. Treat `scripts/verify_failover.sh` as the secondary-viability check (edge resolves, serves a cert covering `api.*`, TXT ownership record present).
-> - `i1fuknjg.up.railway.app` is an **internal implementation detail**. Do not point monitors, tests, SDKs, or integrations at it directly — always use `https://api.telecomtowerpower.com.br`. Railway may rotate the edge per custom domain at any time; rediscover it via the Railway UI and re-run `RAILWAY_DNS=<new>.up.railway.app scripts/setup_failover.sh`.
+> - `web-production-90b1f.up.railway.app` is an **internal implementation detail**. Do not point monitors, tests, SDKs, or integrations at it directly — always use `https://api.telecomtowerpower.com.br`. Railway may rotate the edge per custom domain at any time; rediscover it via the Railway UI and re-run `RAILWAY_DNS=<new>.up.railway.app scripts/setup_failover.sh`.
 > - The `_railway-verify.api.telecomtowerpower.com.br` TXT record is a single point of failure for the SECONDARY leg. Any DNS automation that prunes "unknown" records must allowlist it.
 
 If the ALB health check fails, Route 53 automatically routes traffic to Railway within ~60 s.
@@ -479,7 +479,7 @@ The ALB terminates TLS and forwards HTTP to EC2. Two monitoring subdomains bypas
 
 | Host header | Routing | Target |
 |---|---|---|
-| `api.telecomtowerpower.com.br` | **All paths** → Railway | `https://i1fuknjg.up.railway.app` |
+| `api.telecomtowerpower.com.br` | **All paths** → Railway | `https://web-production-90b1f.up.railway.app` |
 | `www.*` / `app.*` | API paths (`/api/*`, `/analyze`, `/health`, etc.) → Railway | `https://web-production-90b1f.up.railway.app` |
 | `www.*` / `app.*` | `/webhook*` → local Stripe handler | `localhost:8001` |
 | `www.*` / `app.*` | `/grafana*` → Grafana | `localhost:3001` |

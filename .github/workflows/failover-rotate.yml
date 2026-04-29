@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       railway_dns:
-        description: "New Railway edge hostname (e.g. i1fuknjg.up.railway.app). Copy from Railway UI — do NOT guess."
+        description: "New Railway edge hostname (e.g. web-production-90b1f.up.railway.app). Copy from Railway UI — do NOT guess."
         required: true
       reason:
         description: "Why are you rotating? (audit log — e.g. 'Railway rotated edge 2026-04-24, ticket #42')"

@@ -14,7 +14,7 @@ Operational procedures for the production EC2 environment.
 | Secrets path on host | `/home/ubuntu/TELECOM-TOWER-POWER/secrets/` |
 | Caddy entry point | `:80` (ALB terminates TLS) |
 | Railway API (custom domain) | `https://api.telecomtowerpower.com.br` |
-| Railway edge target | `i1fuknjg.up.railway.app` (may rotate — re-check in Railway UI before editing DNS) |
+| Railway edge target | `web-production-90b1f.up.railway.app` (may rotate — re-check in Railway UI before editing DNS) |
 
 !!! danger "Do NOT remove the Railway ownership TXT record"
     Route 53 holds a `_railway-verify.api.telecomtowerpower.com.br` TXT record.

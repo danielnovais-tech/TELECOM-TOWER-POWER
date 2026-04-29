@@ -34,7 +34,7 @@ ALB_HOSTED_ZONE="Z2P70J7HTTTPLU"  # sa-east-1 ALB hosted zone (AWS-managed)
 # Railway may rotate this value — always re-verify in the Railway UI
 # (service web → Settings → Networking → Show DNS records) before running this
 # script. Override at runtime:  RAILWAY_DNS=xxxx.up.railway.app ./setup_failover.sh
-RAILWAY_DNS="${RAILWAY_DNS:-i1fuknjg.up.railway.app}"
+RAILWAY_DNS="${RAILWAY_DNS:-web-production-90b1f.up.railway.app}"
 # Companion TXT record Railway uses to validate ownership of the custom domain.
 # If this record is removed, Railway will stop serving a valid TLS cert for
 # $DOMAIN and the SECONDARY leg of the failover will break with TLS errors.
