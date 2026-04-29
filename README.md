@@ -436,6 +436,9 @@ Generated with ReportLab + Matplotlib:
 - Rate-limit hit rate by tier
 - Active batch jobs gauge
 - Batch job duration percentiles
+- Coverage model: predicted vs measured RSSI (p50 / p90) per observation source
+- Coverage model residual (predicted − measured) distribution
+- Coverage observations ingested (per source)
 
 ### Alerting
 
