@@ -416,6 +416,161 @@
         "alertName": "",
         "dashboardAlerts": false
       }
+    },
+    {
+      "title": "Coverage Model: Predicted vs Measured RSSI (p50 / p90)",
+      "type": "timeseries",
+      "description": "Per-observation comparison of model-predicted vs ground-truth measured RSSI submitted to /coverage/observations. p50 and p90 of each are overlaid so divergence indicates model drift.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "spanNulls": true
+          },
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byRegexp", "options": "/measured.*/"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"fill": "solid"}},
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}
+            ]
+          },
+          {
+            "matcher": {"id": "byRegexp", "options": "/predicted.*/"},
+            "properties": [
+              {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10, 10]}},
+              {"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(coverage_observation_predicted_dbm_bucket[15m])) by (le))",
+          "legendFormat": "predicted p50 (dBm)",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum(rate(coverage_observation_predicted_dbm_bucket[15m])) by (le))",
+          "legendFormat": "predicted p90 (dBm)",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(coverage_observation_measured_dbm_bucket[15m])) by (le))",
+          "legendFormat": "measured p50 (dBm)",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum(rate(coverage_observation_measured_dbm_bucket[15m])) by (le))",
+          "legendFormat": "measured p90 (dBm)",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "title": "Coverage Model: Residual (predicted − measured)",
+      "type": "timeseries",
+      "description": "Prediction error in dB. A persistent positive value means the model is optimistic vs reality; negative means pessimistic. Quantile spread shows error variance.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "spanNulls": true
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 6},
+              {"color": "red", "value": 12}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean"]},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(coverage_observation_residual_db_bucket[15m])) by (le))",
+          "legendFormat": "residual p50 (dB)",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum(rate(coverage_observation_residual_db_bucket[15m])) by (le))",
+          "legendFormat": "residual p90 (dB)",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.10, sum(rate(coverage_observation_residual_db_bucket[15m])) by (le))",
+          "legendFormat": "residual p10 (dB)",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "title": "Coverage Observations Ingested (per source)",
+      "type": "timeseries",
+      "description": "Rate of /coverage/observations ingestion broken down by which model produced the corresponding prediction.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {"drawStyle": "bars", "fillOpacity": 60, "stacking": {"mode": "normal"}}
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(coverage_observations_total[5m])) by (source)",
+          "legendFormat": "{{source}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "schemaVersion": 39,

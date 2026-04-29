@@ -154,6 +154,39 @@ RATE_LIMIT_HIT_RATE = Gauge(
     labelnames=["tier"],
 )
 
+# Coverage-model accuracy: predicted vs measured RSSI for ground-truth
+# observations submitted via /coverage/observations. The three histograms
+# share the same dBm-domain bucket layout so quantile lines from
+# `predicted` and `measured` can be plotted on the same Grafana panel.
+# Residual = predicted - measured (positive = optimistic prediction).
+_DBM_BUCKETS = (-130, -120, -110, -100, -95, -90, -85, -80, -75, -70,
+                -60, -50, -40, -30, -20, -10, 0, 10, 30)
+_RESIDUAL_BUCKETS = (-40, -30, -20, -15, -10, -6, -3, -1, 0, 1, 3, 6,
+                     10, 15, 20, 30, 40)
+COVERAGE_PREDICTED_DBM = Histogram(
+    "coverage_observation_predicted_dbm",
+    "Model-predicted RSSI (dBm) at the time a ground-truth observation was logged",
+    labelnames=["source"],
+    buckets=_DBM_BUCKETS,
+)
+COVERAGE_MEASURED_DBM = Histogram(
+    "coverage_observation_measured_dbm",
+    "Measured RSSI (dBm) submitted via /coverage/observations",
+    labelnames=["source"],
+    buckets=_DBM_BUCKETS,
+)
+COVERAGE_RESIDUAL_DB = Histogram(
+    "coverage_observation_residual_db",
+    "Prediction error (predicted - measured) in dB; >0 = model optimistic",
+    labelnames=["source"],
+    buckets=_RESIDUAL_BUCKETS,
+)
+COVERAGE_OBSERVATIONS_TOTAL = Counter(
+    "coverage_observations_total",
+    "Total ground-truth coverage observations ingested",
+    labelnames=["source"],
+)
+
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
 # ------------------------------------------------------------
@@ -1969,6 +2002,37 @@ class CoverageObservationsBatch(BaseModel):
     observations: List[CoverageObservationInput] = Field(..., min_length=1, max_length=10_000)
 
 
+def _record_coverage_accuracy_metrics(obs: "CoverageObservationInput") -> None:
+    """Compute the model prediction for an observation and feed three
+    Prometheus histograms (predicted_dbm, measured_dbm, residual_db) so a
+    Grafana panel can overlay predicted vs measured RSSI quantiles.
+
+    Failures here MUST NOT propagate — observation ingestion is the
+    primary contract and metrics are best-effort instrumentation.
+    """
+    try:
+        from coverage_predict import predict_signal, haversine_km
+        d_km = haversine_km(obs.tx_lat, obs.tx_lon, obs.rx_lat, obs.rx_lon)
+        pred = predict_signal(
+            d_km=d_km,
+            f_hz=obs.freq_hz,
+            tx_h_m=obs.tx_height_m,
+            rx_h_m=obs.rx_height_m,
+            tx_power_dbm=obs.tx_power_dbm,
+            tx_gain_dbi=obs.tx_gain_dbi,
+            rx_gain_dbi=obs.rx_gain_dbi,
+        )
+        src = pred.source  # "sagemaker" | "local-model" | "physics-fallback"
+        COVERAGE_PREDICTED_DBM.labels(source=src).observe(pred.signal_dbm)
+        COVERAGE_MEASURED_DBM.labels(source=src).observe(obs.observed_dbm)
+        COVERAGE_RESIDUAL_DB.labels(source=src).observe(
+            pred.signal_dbm - obs.observed_dbm
+        )
+        COVERAGE_OBSERVATIONS_TOTAL.labels(source=src).inc()
+    except Exception:
+        logger.exception("coverage accuracy metrics failed (non-fatal)")
+
+
 @app.post("/coverage/observations")
 async def submit_coverage_observation(
     request: Request,
@@ -1984,6 +2048,7 @@ async def submit_coverage_observation(
     store = ObservationStore()
     submitter = _caller_owner(request, key_data)
     obs_id = store.insert_observation({**body.dict(), "submitted_by": submitter})
+    _record_coverage_accuracy_metrics(body)
     return {"id": obs_id, "status": "stored"}
 
 
@@ -1999,6 +2064,8 @@ async def submit_coverage_observations_batch(
     submitter = _caller_owner(request, key_data)
     rows = [{**o.dict(), "submitted_by": submitter} for o in body.observations]
     n = store.insert_observations_many(rows)
+    for o in body.observations:
+        _record_coverage_accuracy_metrics(o)
     return {"ingested": n, "status": "stored"}
 
 
