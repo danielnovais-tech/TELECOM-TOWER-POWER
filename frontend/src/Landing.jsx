@@ -56,13 +56,13 @@ const COPY = {
     hero: {
       eyebrow: "Radio planning API for Brazil",
       title: "Link planning in seconds, backed by live ANATEL data",
-      sub: "140,906 geolocated towers, real SRTM terrain and AI-powered link analysis — all from a REST API. Replace spreadsheets and perpetual licenses with a monthly subscription.",
+      sub: "140,498 geolocated towers, real SRTM terrain and AI-powered link analysis — all from a REST API. Replace spreadsheets and perpetual licenses with a monthly subscription.",
       cta1: "Try the API",
       cta2: "See pricing",
       badge: "Data synced from the ANATEL SMP/SME registry"
     },
     stats: [
-      { n: "140,906", l: "towers indexed" },
+      { n: "140,498", l: "towers indexed" },
       { n: "5,570", l: "municipalities" },
       { n: "12", l: "operators tracked" },
       { n: "< 400 ms", l: "cached p50" }

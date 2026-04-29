@@ -24,7 +24,7 @@
 
 | # | Control | Resolution | Closed |
 |---|---|---|---|
-| ✅ | A1.2.2 | Weekly verified restore drill workflow shipped (`backup-restore-drill.yml`) — first run confirmed 140,906 towers + 23 api_keys + 1 alembic_version | 2026-04-27 |
+| ✅ | A1.2.2 | Weekly verified restore drill workflow shipped (`backup-restore-drill.yml`) — first run confirmed 140,498 towers + 23 api_keys + 1 alembic_version | 2026-04-27 |
 | ✅ | CC4.1.2 | Synthetic monitor probes all three entrypoints | 2026 (in production) |
 | ✅ | CC7.3.1 | PagerDuty (critical) + Slack (warning) live with `send_resolved=true` | 2026-04 |
 | ✅ | CC6.1.1 | Cognito SSO + MFA enforced for admin Cognito group | 2026-04 |

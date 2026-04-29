@@ -3,7 +3,7 @@
 **Production-ready B2B SaaS platform for telecom RF engineering.**
 Tower database management, point-to-point link analysis, terrain-aware multi-hop repeater planning, PDF reporting, and self-service billing — all behind a tiered API with Prometheus monitoring.
 
-> **140,906 towers** across Brazil — 105,240 from ANATEL (12 operators, 5,570 municipalities) + OpenCelliD crowd-sourced data. Default tower parameters: 35 m height, 43 dBm power, 700/1800 MHz bands.
+> **140,498 towers** across Brazil — 105,240 from ANATEL (12 operators, 5,570 municipalities) + OpenCelliD crowd-sourced data. Default tower parameters: 35 m height, 43 dBm power, 700/1800 MHz bands.
 
 ![Python 3.10](https://img.shields.io/badge/python-3.10-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.135-009688)
@@ -28,7 +28,7 @@ See [docs-site/docs/operations/production-status.md](docs-site/docs/operations/p
 
 All features and security items shipped to production are live, tested, and documented:
 
-- **140,906 Brazilian towers** (ANATEL + OpenCelliD, geocoded with real GPS snapping)
+- **140,498 Brazilian towers** (ANATEL + OpenCelliD, geocoded with real GPS snapping)
 - **Tiered pricing & billing** — 5 tiers + annual; Stripe webhook auto-provisions API keys
 - **White-label tenant mode** — branding + dynamic CORS
 - **Audit log** — every tenant action recorded, queryable via `/tenant/audit`

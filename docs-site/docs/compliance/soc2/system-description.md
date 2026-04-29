@@ -4,7 +4,7 @@
 
 ## 1. Services provided
 
-TELECOM TOWER POWER is a B2B SaaS platform providing radio-frequency (RF) link planning APIs for the Brazilian telecommunications market. The platform aggregates 140,906 cell-tower records (ANATEL + OpenCelliD), 90-meter SRTM terrain data, and proprietary multi-hop repeater algorithms behind a tiered REST API. Customers — primarily ISPs, RF consultants, and tower operators — query the API to qualify new connections, plan point-to-point links, generate technical PDFs, and visualize coverage heatmaps.
+TELECOM TOWER POWER is a B2B SaaS platform providing radio-frequency (RF) link planning APIs for the Brazilian telecommunications market. The platform aggregates 140,498 cell-tower records (ANATEL + OpenCelliD), 90-meter SRTM terrain data, and proprietary multi-hop repeater algorithms behind a tiered REST API. Customers — primarily ISPs, RF consultants, and tower operators — query the API to qualify new connections, plan point-to-point links, generate technical PDFs, and visualize coverage heatmaps.
 
 ## 2. Principal service commitments and system requirements
 

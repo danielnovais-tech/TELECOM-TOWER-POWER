@@ -137,7 +137,7 @@ def _stream_towers(
     """Yield batches of raw tower tuples from the source database.
 
     Uses a server-side cursor (named cursor) so the full result set is
-    never materialised in memory — safe for 140,906+ rows.
+    never materialised in memory — safe for 140,000+ rows.
 
     Each tuple: (id, lat, lon, height_m, operator, bands, power_dbm)
     """

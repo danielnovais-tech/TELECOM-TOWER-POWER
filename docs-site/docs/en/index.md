@@ -10,7 +10,7 @@ A REST API that answers the question every ISP, RF consultant and carrier asks e
 
 > *"Is there a tower that can serve this address, with line of sight and enough link margin?"*
 
-We return the answer in milliseconds by querying 140,906 geolocated towers (ANATEL + OpenCelliD), cross-referencing SRTM 90m terrain, and — optionally — producing a natural-language technical statement via AI.
+We return the answer in milliseconds by querying 140,498 geolocated towers (ANATEL + OpenCelliD), cross-referencing SRTM 90m terrain, and — optionally — producing a natural-language technical statement via AI.
 
 ## In 30 seconds
 

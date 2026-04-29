@@ -14,7 +14,7 @@
 
 ## Features
 
-- **140,906 Brazilian towers** — ANATEL (105,240 across 12 operators and 5,570 municipalities) + OpenCelliD crowd-sourced data, geocoded with real GPS snapping.
+- **140,498 Brazilian towers** — ANATEL (105,240 across 12 operators and 5,570 municipalities) + OpenCelliD crowd-sourced data, geocoded with real GPS snapping.
 - **Tiered pricing & billing** — 5 tiers (Free, Pro, Business, Enterprise, Ultra) + annual plans. Stripe webhook auto-provisions API keys on checkout success.
 - **White-label tenant mode** — per-tenant branding, dynamic CORS, custom logo/favicon.
 - **Audit log** — every tenant action recorded with actor, route, params, IP, and timestamp; queryable via `GET /tenant/audit`.
