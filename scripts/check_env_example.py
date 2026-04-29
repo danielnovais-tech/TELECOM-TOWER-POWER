@@ -38,6 +38,7 @@ SKIP_PATH_PREFIXES = (
     "docs-site/.venv/",
     "frontend/node_modules/",
     "frontend/dist/",
+    "scripts/validate_coverage_predict.py",
 )
 
 PY_PATTERNS = [
