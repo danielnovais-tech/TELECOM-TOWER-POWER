@@ -1,0 +1,123 @@
+name: Retrain Coverage Model
+
+# Daily check: if at least N new observations have been ingested since the
+# last retrain, fit a fresh ridge model that blends synthetic samples with
+# real link_observations rows, upload coverage_model.npz to S3, and force
+# an ECS rolling deployment so the API picks up the new artifact on
+# container restart.
+#
+# Manual run:
+#   gh workflow run retrain-coverage-model.yml -f force=true
+
+on:
+  schedule:
+    - cron: '15 6 * * *'  # 06:15 UTC, after nightly Postgres backup (05:30)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Retrain even if observation delta is below threshold'
+        required: false
+        default: 'false'
+      threshold:
+        description: 'Override observation-delta threshold (default 1000)'
+        required: false
+        default: '1000'
+      with_opencellid:
+        description: 'Include OpenCelliD soft labels'
+        required: false
+        default: 'false'
+      dry_run:
+        description: 'Train + report but skip S3 upload + ECS rollout'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: retrain-coverage-model
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  AWS_REGION: sa-east-1
+  S3_URI: s3://telecom-tower-power-results/models/coverage_model.npz
+  ECS_CLUSTER: telecom-tower-power
+  ECS_SERVICE: telecom-tower-power
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      retrained: ${{ steps.train.outputs.retrained }}
+      observations: ${{ steps.train.outputs.observations }}
+      delta: ${{ steps.train.outputs.delta }}
+      rmse_db: ${{ steps.train.outputs.rmse_db }}
+      n_train: ${{ steps.train.outputs.n_train }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Light deps — coverage_predict + observation_store only need numpy + psycopg2 + boto3
+          pip install numpy boto3 psycopg2-binary
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Train (and upload if delta ≥ threshold)
+        id: train
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          ARGS=(--s3-uri "$S3_URI" --threshold "${{ inputs.threshold || '1000' }}")
+          if [[ "${{ inputs.force || 'false' }}" == "true" ]]; then
+            ARGS+=(--force)
+          fi
+          if [[ "${{ inputs.with_opencellid || 'false' }}" == "true" ]]; then
+            ARGS+=(--with-opencellid)
+          fi
+          if [[ "${{ inputs.dry_run || 'false' }}" == "true" ]]; then
+            ARGS+=(--dry-run)
+          fi
+          python scripts/retrain_coverage_model.py "${ARGS[@]}"
+
+      - name: Force ECS new deployment (so tasks reload coverage_model.npz)
+        if: steps.train.outputs.retrained == 'true' && inputs.dry_run != 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment \
+            --region "$AWS_REGION" \
+            --output json | jq -r '.service.deployments[0].id // empty'
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Coverage model retrain"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| retrained | ${{ steps.train.outputs.retrained || 'false' }} |"
+            echo "| observations | ${{ steps.train.outputs.observations || 'n/a' }} |"
+            echo "| delta vs last | ${{ steps.train.outputs.delta || 'n/a' }} |"
+            echo "| rmse_db | ${{ steps.train.outputs.rmse_db || 'n/a' }} |"
+            echo "| n_train | ${{ steps.train.outputs.n_train || 'n/a' }} |"
+            echo "| dry_run | ${{ inputs.dry_run || 'false' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

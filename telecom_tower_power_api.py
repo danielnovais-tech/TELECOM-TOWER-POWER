@@ -186,6 +186,21 @@ COVERAGE_OBSERVATIONS_TOTAL = Counter(
     "Total ground-truth coverage observations ingested",
     labelnames=["source"],
 )
+# Model freshness gauges — populated on startup and refreshed by
+# /coverage/model/info. The retrain workflow updates the underlying
+# coverage_model.npz; tasks pick up the new artifact on next deploy.
+COVERAGE_MODEL_RMSE_DB = Gauge(
+    "coverage_model_rmse_db",
+    "Training RMSE (dB) of the currently loaded coverage model",
+)
+COVERAGE_MODEL_N_TRAIN = Gauge(
+    "coverage_model_n_train",
+    "Number of training samples used to fit the loaded coverage model",
+)
+COVERAGE_MODEL_TRAINED_AT = Gauge(
+    "coverage_model_trained_at",
+    "Unix epoch seconds when the loaded coverage model was trained",
+)
 
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
@@ -2081,6 +2096,51 @@ async def coverage_observations_stats(_key: Dict = Depends(verify_api_key)):
             status_code=500,
             detail=f"observation_store error: {type(e).__name__}: {e}",
         )
+
+
+@app.get("/coverage/model/info")
+async def coverage_model_info(
+    refresh: bool = False,
+    _key: Dict = Depends(verify_api_key),
+):
+    """Return metadata about the currently loaded coverage model.
+
+    ``?refresh=true`` re-reads ``coverage_model.npz`` from disk (or S3 via
+    ``COVERAGE_MODEL_S3_URI``) so a freshly retrained artifact can be
+    picked up by a long-lived task without a full restart.
+    """
+    try:
+        import coverage_predict
+        sm_endpoint = coverage_predict.SAGEMAKER_ENDPOINT
+        model = coverage_predict.get_model(refresh=refresh)
+    except Exception as e:
+        logger.exception("coverage_model_info failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"coverage_predict error: {type(e).__name__}: {e}",
+        )
+
+    payload: Dict[str, Any] = {
+        "sagemaker_endpoint": sm_endpoint or None,
+        "local_model": None,
+        "model_path": coverage_predict.MODEL_PATH,
+        "model_s3_uri": coverage_predict.MODEL_S3_URI or None,
+    }
+    if model is not None:
+        payload["local_model"] = {
+            "version": model.version,
+            "rmse_db": round(model.rmse_db, 4),
+            "n_train": model.n_train,
+            "trained_at": model.trained_at,
+            "feature_count": int(len(model.feature_mean)),
+        }
+        try:
+            COVERAGE_MODEL_RMSE_DB.set(model.rmse_db)
+            COVERAGE_MODEL_N_TRAIN.set(model.n_train)
+            COVERAGE_MODEL_TRAINED_AT.set(model.trained_at)
+        except Exception:
+            logger.debug("coverage_model gauge update failed", exc_info=True)
+    return payload
 
 
 @app.post("/coverage/predict/export")
