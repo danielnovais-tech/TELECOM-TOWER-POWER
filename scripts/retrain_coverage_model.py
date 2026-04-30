@@ -74,11 +74,17 @@ def _write_marker(s3, bucket: str, key: str, payload: dict) -> None:
 
 
 def _count_observations() -> int:
-    """Total rows in ``link_observations``."""
+    """Total real point-to-point measurements in ``link_observations``.
+
+    These are submitted via ``POST /coverage/observations`` (auth required,
+    pro tier+) and are the only **labelled** real data the model can learn
+    from. The ``cell_signal_samples`` store is intentionally NOT counted
+    here — the free-tier OpenCelliD feed reports ``averageSignal=0`` for
+    all Brazilian rows, so those records carry no signal label even when
+    present.
+    """
     from observation_store import ObservationStore
     counts = ObservationStore().counts()
-    # ObservationStore.counts() returns {"link_observations": N, "cell_signal_samples": M};
-    # accept the legacy "observations" key too for forward compatibility.
     return int(counts.get("link_observations", counts.get("observations", 0)))
 
 

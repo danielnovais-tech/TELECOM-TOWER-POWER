@@ -23,9 +23,9 @@ on:
         required: false
         default: '1000'
       with_opencellid:
-        description: 'Include OpenCelliD soft labels (real crowdsourced cell measurements)'
+        description: '(deprecated — free-tier OpenCelliD has no signal data; kept for compat)'
         required: false
-        default: 'true'
+        default: 'false'
       dry_run:
         description: 'Train + report but skip S3 upload + ECS rollout'
         required: false
@@ -66,8 +66,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           # Light deps — coverage_predict + observation_store only need numpy + psycopg2 + boto3.
-          # `requests` is required by load_opencellid (hydrate step).
-          pip install numpy boto3 psycopg2-binary requests
+          pip install numpy boto3 psycopg2-binary
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -75,43 +74,13 @@ jobs:
           aws-secret-access-key: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ------------------------------------------------------------------
-      # Hydrate cell_signal_samples from OpenCelliD before training.
-      # Only runs when OPENCELLID_TOKEN is configured. The CSV is cached
-      # under ~/.cache/opencellid for ~24h to avoid repeated 70+ MB pulls.
-      # Skipped (with a warning) when the secret is absent — training falls
-      # back to whatever rows are already persisted (or pure synthetic).
-      # ------------------------------------------------------------------
-      - name: Hydrate OpenCelliD signal samples (real crowdsourced labels)
-        id: hydrate
-        if: ${{ inputs.dry_run != 'true' }}
-        env:
-          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
-          OPENCELLID_TOKEN: ${{ secrets.OPENCELLID_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${OPENCELLID_TOKEN:-}" ]]; then
-            echo "::warning::OPENCELLID_TOKEN secret not set — skipping hydrate; cell_signal_samples will not be refreshed."
-            echo "hydrated=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          python - <<'PY'
-          import os, sys, time
-          from load_opencellid import download_brazil_csv
-          from load_opencellid import load_opencellid_signal_samples
-          from observation_store import ObservationStore
-          token = os.environ["OPENCELLID_TOKEN"]
-          before = ObservationStore().counts().get("cell_signal_samples", 0)
-          t0 = time.time()
-          csv_path = download_brazil_csv(token)
-          # Cap to keep training time bounded; 50k samples is more than enough
-          # signal for a 17-feature ridge model and keeps S3/DB cost flat.
-          n = load_opencellid_signal_samples(file_path=csv_path, limit=50_000, min_samples=5)
-          after = ObservationStore().counts().get("cell_signal_samples", 0)
-          dt = time.time() - t0
-          print(f"::notice::OpenCelliD hydrate: {before} → {after} rows ({n} upserted) in {dt:.1f}s")
-          PY
-          echo "hydrated=true" >> "$GITHUB_OUTPUT"
+      # Note: an earlier revision attempted to hydrate cell_signal_samples
+      # from the free-tier OpenCelliD CSV, but the public Brazil (MCC=724)
+      # feed reports averageSignal=0 for 100 % of rows — the field is only
+      # populated for paid/contributor accounts. We removed the hydrate step
+      # rather than ship a no-op that misleads the docs. The honest real-data
+      # path is `POST /coverage/observations` → `link_observations`, which is
+      # already counted by the threshold check below.
 
       - name: Train (and upload if delta ≥ threshold)
         id: train
@@ -122,13 +91,6 @@ jobs:
           ARGS=(--s3-uri "$S3_URI" --threshold "${{ inputs.threshold || '1000' }}")
           if [[ "${{ inputs.force || 'false' }}" == "true" ]]; then
             ARGS+=(--force)
-          fi
-          # Default with_opencellid to TRUE on scheduled cron runs (real
-          # crowdsourced soft labels are the whole point of nightly retrain).
-          # Manual workflow_dispatch still respects the input toggle.
-          WITH_OCID="${{ inputs.with_opencellid }}"
-          if [[ -z "$WITH_OCID" || "$WITH_OCID" == "true" ]]; then
-            ARGS+=(--with-opencellid)
           fi
           if [[ "${{ inputs.dry_run || 'false' }}" == "true" ]]; then
             ARGS+=(--dry-run)
