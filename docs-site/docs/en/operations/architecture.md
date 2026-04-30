@@ -35,7 +35,7 @@ flowchart TB
     end
 
     subgraph Data
-        RDS[(PostgreSQL 16<br/>RDS prod / SQLite dev)]
+        RDS[(PostgreSQL 18.3<br/>Railway prod / SQLite dev)]
         Redis[(ElastiCache Redis<br/>hop cache · jobs · rate-limits)]
         S3[(S3 telecom-tower-power-results<br/>models · reports · backups)]
         SRTM[SRTM tiles<br/>local + Redis L2]
@@ -174,7 +174,7 @@ sequenceDiagram
 | **Edge** | ALB · Caddy · Railway router · Route 53 (DNS failover) | TLS termination, host routing, health checks |
 | **Compute** | ECS Fargate (primary) · EC2 + Docker Compose · Railway · AWS Lambda (`sqs_lambda_worker.py`) | API + workers + bursty batch consumer |
 | **Application** | FastAPI (`telecom_tower_power_api.py`) + Streamlit (`frontend.py`) + React SPA | HTTP / WebSocket / SSE surfaces |
-| **Data** | RDS PostgreSQL 16 · ElastiCache Redis · S3 (artefactos + backups) · cache SRTM (`hop_cache.py`, `srtm_elevation.py`) | Estado persistente, caches quentes, terreno |
+| **Data** | Railway PostgreSQL 18.3 · ElastiCache Redis · S3 (artefactos + backups) · cache SRTM (`hop_cache.py`, `srtm_elevation.py`) | Estado persistente, caches quentes, terreno |
 | **ML** | ridge-v1 em `.npz` · S3 hot-pull · retrain noturno em CI · Bedrock para cenários | Predição de sinal terrain-aware + GenAI |
 | **Async** | SQS priority queue · Lambda consumer · `batch_worker.py` · `repeater_jobs_store.py` (Redis) | Batches PDF longos e planejamento ≥4 hops |
 | **Auth** | API keys (`key_store_db.py`) · Cognito OIDC + Bearer · rate limits por tier · audit log | Hardening OWASP-Top-10 |

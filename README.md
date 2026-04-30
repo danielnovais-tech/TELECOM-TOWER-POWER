@@ -106,13 +106,13 @@ For a deeper dive (sequence diagrams, ML pipeline, request lifecycle) see
        ┌────────────────────┼─────────────────────┬──────────────────────────────┐
        ▼                    ▼                     ▼                              ▼
 ┌───────────────┐ ┌──────────────────┐ ┌───────────────────────┐ ┌────────────────────────┐
-│ PostgreSQL 16 │ │ ElastiCache Redis│ │ S3                    │ │ External APIs          │
-│ RDS prod /    │ │  hop cache       │ │  models/coverage_*.npz│ │  AWS Bedrock           │
+│ PostgreSQL 18.3│ │ Redis 8.6.2      │ │ S3                    │ │ External APIs          │
+│ Railway prod /│ │  hop cache       │ │  models/coverage_*.npz│ │  AWS Bedrock           │
 │ SQLite dev    │ │  jobs queue      │ │  reports/{tenant}/*   │ │  Stripe (billing)      │
 │ towers·jobs   │ │  rate-limits     │ │  backups/postgres/*   │ │  Cognito (OIDC SSO)    │
 │ api_keys·audit│ │                  │ │  backups/grafana/*    │ │  NASA SRTM             │
 │ link_obs·cells│ │                  │ │                       │ │  OpenCelliD / ANATEL   │
-└───────────────┘ └──────────────────┘ └───────────────────────┘ └────────────────────────┘
+└────────────────┘ └──────────────────┘ └─────────────────────┘ └──────────────────────┘
                                                   ▲
                                                   │ refresh_from_s3() on container boot
                                                   │

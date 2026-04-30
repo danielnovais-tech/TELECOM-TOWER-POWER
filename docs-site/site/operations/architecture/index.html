@@ -1861,7 +1861,7 @@
     end
 
     subgraph Data
-        RDS[(PostgreSQL 16&lt;br/&gt;RDS prod / SQLite dev)]
+        RDS[(PostgreSQL 18.3&lt;br/&gt;Railway prod / SQLite dev)]
         Redis[(ElastiCache Redis&lt;br/&gt;hop cache · jobs · rate-limits)]
         S3[(S3 telecom-tower-power-results&lt;br/&gt;models · reports · backups)]
         SRTM[SRTM tiles&lt;br/&gt;local + Redis L2]
@@ -2049,7 +2049,7 @@
 </tr>
 <tr>
 <td><strong>Data</strong></td>
-<td>RDS PostgreSQL 16 · ElastiCache Redis · S3 (artefactos + backups) · cache SRTM (<code>hop_cache.py</code>, <code>srtm_elevation.py</code>)</td>
+<td>Railway PostgreSQL 18.3 · ElastiCache Redis · S3 (artefactos + backups) · cache SRTM (<code>hop_cache.py</code>, <code>srtm_elevation.py</code>)</td>
 <td>Estado persistente, caches quentes, terreno</td>
 </tr>
 <tr>
