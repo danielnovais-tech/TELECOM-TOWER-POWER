@@ -78,6 +78,23 @@ if [ -n "${DATABASE_URL:-}" ] && [ -f "${KEY_STORE_PATH:-key_store.json}" ]; the
 fi
 
 echo "Starting uvicorn..."
+# Pull the latest coverage_model.npz from S3 if COVERAGE_MODEL_S3_URI is set.
+# Best-effort: any failure (no creds, network, missing key) falls back to the
+# baked-in artefact. Hard-capped at 30s so a slow/wedged S3 call cannot block
+# the API from coming up.
+if [ -n "${COVERAGE_MODEL_S3_URI:-}" ]; then
+    echo "Refreshing coverage model from ${COVERAGE_MODEL_S3_URI} (30s timeout)..."
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 30 python -c "import sys, coverage_predict as c; sys.exit(0 if c.refresh_from_s3() else 1)" \
+            && echo "Coverage model refreshed from S3" \
+            || echo "WARN: coverage model S3 refresh failed (exit $?), using baked artefact"
+    else
+        python -c "import sys, coverage_predict as c; sys.exit(0 if c.refresh_from_s3() else 1)" \
+            && echo "Coverage model refreshed from S3" \
+            || echo "WARN: coverage model S3 refresh failed (exit $?), using baked artefact"
+    fi
+fi
+
 if [ "${SERVICE_TYPE:-}" = "webhook" ]; then
     echo "SERVICE_TYPE=webhook → starting stripe_webhook_service"
     exec uvicorn stripe_webhook_service:app --host 0.0.0.0 --port "${PORT:-8080}"

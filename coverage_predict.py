@@ -288,6 +288,19 @@ def _download_from_s3(s3_uri: str, dest: str) -> bool:
         return False
 
 
+def refresh_from_s3() -> bool:
+    """Force-download the model from ``COVERAGE_MODEL_S3_URI`` to ``MODEL_PATH``.
+
+    Called from the container entrypoint so each boot picks up the latest
+    artefact published by the nightly retrain workflow without rebuilding the
+    image. Returns True on success (or when no S3 URI is configured — the
+    baked-in artefact is fine), False on download failure.
+    """
+    if not MODEL_S3_URI:
+        return True
+    return _download_from_s3(MODEL_S3_URI, MODEL_PATH)
+
+
 def get_model(refresh: bool = False) -> Optional[CoverageModel]:
     """Return the cached local model, lazily loading it from disk.
 
