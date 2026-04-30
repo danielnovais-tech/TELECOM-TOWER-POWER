@@ -47,7 +47,7 @@ docs-site/docs/compliance/soc2/
 | CC6.1 | Logical access | Cognito User Pool `sa-east-1_15uR6sR9o`, audit log (`/tenant/audit`) |
 | CC6.6 | TLS in transit | ALB ACM cert (auto-renew), Caddy TLS, HSTS headers |
 | CC6.7 | Encryption at rest | RDS KMS, S3 SSE-KMS, EBS KMS, SSM SecureString |
-| CC7.2 | System monitoring | Prometheus + Grafana + Alertmanager + 12 alert rules |
+| CC7.2 | System monitoring | Prometheus + Grafana + Alertmanager + 13 alert rules |
 | CC7.3 | Incident detection | PagerDuty (critical) + Slack (warning) |
 | CC8.1 | Change management | GitHub PR workflow + 16 hardened CI workflows |
 | A1.2 | Backup & restore | Nightly Postgres + Grafana → S3, weekly **verified restore drill** |

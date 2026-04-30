@@ -49,7 +49,7 @@ flowchart TB
     end
 
     subgraph Observability
-        Prom[Prometheus<br/>12 alert rules]
+        Prom[Prometheus<br/>13 alert rules]
         Graf[Grafana]
         AM[Alertmanager → Slack · PagerDuty]
         Loki[Loki]
@@ -178,7 +178,7 @@ sequenceDiagram
 | **ML** | ridge-v1 in `.npz` · S3 hot-pull · nightly retrain in CI · Bedrock for scenarios | Terrain-aware signal prediction + GenAI |
 | **Async** | SQS priority queue · Lambda consumer · `batch_worker.py` · `repeater_jobs_store.py` (Redis) | Long PDF batches and ≥4-hop planning |
 | **Auth** | API keys (`key_store_db.py`) · Cognito OIDC + Bearer · per-tier rate limits · audit log | OWASP-Top-10 hardening |
-| **Observability** | Prometheus (12 rules) · Grafana · Alertmanager · OpenTelemetry · Loki | Metrics, dashboards, paging (Slack + PagerDuty) |
+| **Observability** | Prometheus (13 rules) · Grafana · Alertmanager · OpenTelemetry · Loki | Metrics, dashboards, paging (Slack + PagerDuty) |
 | **CI/CD** | 16 GitHub Actions workflows · BuildKit cache · secret sync via SSM · weekly restore drill | Push-to-deploy, nightly retrain, restore drill |
 | **Backups** | Postgres + Grafana volume → S3 nightly (14d retention) · weekly verified restore | DR, RPO ≈ 24h |
 

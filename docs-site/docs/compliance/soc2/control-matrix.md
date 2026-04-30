@@ -43,7 +43,7 @@
 
 | ID | TSC | PoF | Control | Owner | Evidence | Cadence | Test |
 |---|---|---|---|---|---|---|---|
-| CC4.1.1 | CC4.1 | Ongoing monitoring | Prometheus + Grafana dashboards + 12 alert rules | SRE | `prometheus_alert_rules.yml` | Continuous | Trigger test alert, observe routing |
+| CC4.1.1 | CC4.1 | Ongoing monitoring | Prometheus + Grafana dashboards + 13 alert rules | SRE | `prometheus_alert_rules.yml` | Continuous | Trigger test alert, observe routing |
 | CC4.1.2 | CC4.1 | Synthetic monitoring | GitHub Actions cron probes `api.*`, `app.*`, `docs.*` every 5 min | SRE | `.github/workflows/synthetic-monitor.yml` | Continuous | Inspect last 100 runs |
 | CC4.2.1 | CC4.2 | Deficiency communication | All P1/P2 incidents create a postmortem within 5 business days | SRE | `evidence/incidents/postmortems/` | Per-incident | Inspect 100% of P1/P2 from period |
 
