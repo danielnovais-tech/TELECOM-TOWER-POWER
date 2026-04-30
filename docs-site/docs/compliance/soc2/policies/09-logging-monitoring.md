@@ -35,7 +35,7 @@
 
 ## 4. Monitoring & alerting
 
-- **Prometheus:** scrapes all services; 12 alert rules cover 5xx rate, p95 latency, queue depth, ECS task health, cert expiry, disk pressure, restore-drill failure, Lambda errors.
+- **Prometheus:** scrapes all services; 13 alert rules cover 5xx rate, p95 latency, queue depth, ECS task health, cert expiry, disk pressure, restore-drill failure, Lambda errors.
 - **Grafana:** dashboards for API, infra, billing, sales (see Sales Overview dashboard).
 - **Alertmanager:** routes by severity:
   - `severity=critical` → PagerDuty (Events API v2, `send_resolved=true`) → 24/7 on-call.
