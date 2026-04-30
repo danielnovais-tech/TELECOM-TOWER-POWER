@@ -169,18 +169,18 @@ sequenceDiagram
 | **CI/CD** | **19** GitHub Actions workflows (deploy, backup, drift, failover, retrain, secrets sync, …). |
 | **TLS** | ACM on ALB (sa-east-1) terminates HTTPS; Caddy on EC2 serves :80 origin only. |
 
-| Camada | Componentes | Função |
+| Layer | Components | Function |
 |---|---|---|
 | **Edge** | ALB · Caddy · Railway router · Route 53 (DNS failover) | TLS termination, host routing, health checks |
 | **Compute** | ECS Fargate (primary) · EC2 + Docker Compose · Railway · AWS Lambda (`sqs_lambda_worker.py`) | API + workers + bursty batch consumer |
 | **Application** | FastAPI (`telecom_tower_power_api.py`) + Streamlit (`frontend.py`) + React SPA | HTTP / WebSocket / SSE surfaces |
-| **Data** | Railway PostgreSQL 18.3 · ElastiCache Redis · S3 (artefactos + backups) · cache SRTM (`hop_cache.py`, `srtm_elevation.py`) | Estado persistente, caches quentes, terreno |
-| **ML** | ridge-v1 em `.npz` · S3 hot-pull · retrain noturno em CI · Bedrock para cenários | Predição de sinal terrain-aware + GenAI |
-| **Async** | SQS priority queue · Lambda consumer · `batch_worker.py` · `repeater_jobs_store.py` (Redis) | Batches PDF longos e planejamento ≥4 hops |
-| **Auth** | API keys (`key_store_db.py`) · Cognito OIDC + Bearer · rate limits por tier · audit log | Hardening OWASP-Top-10 |
-| **Observability** | Prometheus (12 regras) · Grafana · Alertmanager · OpenTelemetry · Loki | Métricas, dashboards, paging (Slack + PagerDuty) |
-| **CI/CD** | 16 workflows GitHub Actions · BuildKit cache · sync de secrets via SSM · drill semanal de restore | Push-to-deploy, retrain noturno, restore drill |
-| **Backups** | Postgres + volume Grafana → S3 nightly (14d retenção) · restore verificado semanal | DR, RPO ≈ 24h |
+| **Data** | Railway PostgreSQL 18.3 · ElastiCache Redis · S3 (artifacts + backups) · SRTM cache (`hop_cache.py`, `srtm_elevation.py`) | Persistent state, hot caches, terrain |
+| **ML** | ridge-v1 in `.npz` · S3 hot-pull · nightly retrain in CI · Bedrock for scenarios | Terrain-aware signal prediction + GenAI |
+| **Async** | SQS priority queue · Lambda consumer · `batch_worker.py` · `repeater_jobs_store.py` (Redis) | Long PDF batches and ≥4-hop planning |
+| **Auth** | API keys (`key_store_db.py`) · Cognito OIDC + Bearer · per-tier rate limits · audit log | OWASP-Top-10 hardening |
+| **Observability** | Prometheus (12 rules) · Grafana · Alertmanager · OpenTelemetry · Loki | Metrics, dashboards, paging (Slack + PagerDuty) |
+| **CI/CD** | 16 GitHub Actions workflows · BuildKit cache · secret sync via SSM · weekly restore drill | Push-to-deploy, nightly retrain, restore drill |
+| **Backups** | Postgres + Grafana volume → S3 nightly (14d retention) · weekly verified restore | DR, RPO ≈ 24h |
 
 ## 🧠 Key Algorithms
 
@@ -235,8 +235,8 @@ sequenceDiagram
 
 ```
 s3://telecom-tower-power-results/
-├── models/coverage_model.npz          ← artefato ML (ridge-v1, 1850 B)
-├── reports/{tenant}/{job_id}.zip      ← saídas async batch
-├── backups/postgres/YYYY-MM-DD.sql.gz ← pg_dump nightly
-└── backups/grafana/YYYY-MM-DD.tar.gz  ← snapshot de volume nightly
+├── models/coverage_model.npz          ← ML artifact (ridge-v1, 1850 B)
+├── reports/{tenant}/{job_id}.zip      ← async batch outputs
+├── backups/postgres/YYYY-MM-DD.sql.gz ← nightly pg_dump
+└── backups/grafana/YYYY-MM-DD.tar.gz  ← nightly Grafana volume snapshot
 ```
