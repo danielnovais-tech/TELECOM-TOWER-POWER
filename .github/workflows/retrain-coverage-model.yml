@@ -51,7 +51,7 @@ jobs:
       rmse_db: ${{ steps.train.outputs.rmse_db }}
       n_train: ${{ steps.train.outputs.n_train }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
         with:
