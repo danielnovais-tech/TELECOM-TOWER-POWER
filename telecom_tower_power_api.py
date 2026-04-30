@@ -3258,8 +3258,25 @@ class CheckoutRequest(BaseModel):
 #
 # Per-IP limit defaults: 5 signups / hour / IP. Tuned via env so we can
 # loosen for a launch event without a redeploy.
+# Accepted env values: a positive integer, or one of {"0", "off",
+# "none", "unlimited", "disabled"} (case-insensitive) to disable.
 # ─────────────────────────────────────────────────────────────────
-_SIGNUP_FREE_RPH = int(os.getenv("SIGNUP_FREE_RATE_LIMIT_PER_HOUR", "5"))
+def _parse_signup_free_rph(raw: str) -> int:
+    """Return the per-IP/hour limit. 0 == disabled (no enforcement)."""
+    raw = (raw or "").strip().lower()
+    if raw in {"", "0", "off", "none", "unlimited", "disabled", "false"}:
+        return 0
+    try:
+        n = int(raw)
+        return n if n > 0 else 0
+    except ValueError:
+        # Fail-safe: keep the default rather than crashing the app.
+        return 5
+
+
+_SIGNUP_FREE_RPH = _parse_signup_free_rph(
+    os.getenv("SIGNUP_FREE_RATE_LIMIT_PER_HOUR", "5")
+)
 _SIGNUP_FREE_WINDOW_S = 3600.0
 _signup_ip_buckets: Dict[str, collections.deque] = {}
 
@@ -3277,9 +3294,9 @@ def _check_signup_ip_rate_limit(ip: Optional[str]) -> None:
     """Raise 429 if `ip` has exceeded SIGNUP_FREE_RATE_LIMIT_PER_HOUR.
 
     Missing IP → no enforcement (behind a misconfigured proxy is annoying
-    but should never lock everyone out).
+    but should never lock everyone out). RPH==0 → disabled entirely.
     """
-    if not ip:
+    if not ip or _SIGNUP_FREE_RPH <= 0:
         return
     now = time.monotonic()
     bucket = _signup_ip_buckets.setdefault(ip, collections.deque())
