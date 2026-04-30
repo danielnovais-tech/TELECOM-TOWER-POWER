@@ -14,7 +14,7 @@ Establish the high-level information-security objectives that govern every syste
 
 ## 2. Scope
 
-All TELECOM TOWER POWER systems in the SOC 2 audit boundary defined in [`system-description.md`](../system-description.md), including production AWS account `490083271496/sa-east-1`, GitHub repositories, Cognito user pool, Stripe webhook integration, and the 16 production workflows.
+All TELECOM TOWER POWER systems in the SOC 2 audit boundary defined in [`system-description.md`](../system-description.md), including production AWS account `490083271496/sa-east-1`, GitHub repositories, Cognito user pool, Stripe webhook integration, and the 19 production workflows.
 
 ## 3. Policy
 
