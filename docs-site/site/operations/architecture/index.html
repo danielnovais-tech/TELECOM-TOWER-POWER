@@ -783,6 +783,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Camadas">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resumo-verificado-abr2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resumo verificado (abr/2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1761,6 +1778,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Camadas">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resumo-verificado-abr2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resumo verificado (abr/2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1934,6 +1968,61 @@
     API-&gt;&gt;Aud: row(action=predict, tenant, ts)
     API--&gt;&gt;C: {model_source:"local-model", model_version:"ridge-v1",&lt;br/&gt;signal_dbm:-31.4, confidence:0.75}</code></pre>
 <h2 id="camadas">Camadas<a class="headerlink" href="#camadas" title="Permanent link">&para;</a></h2>
+<h3 id="resumo-verificado-abr2026">Resumo verificado (<code>abr/2026</code>)<a class="headerlink" href="#resumo-verificado-abr2026" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Camada</th>
+<th>Implementação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Primary API</strong></td>
+<td>FastAPI (Python 3.13) — tráfego de produção via Caddy em EC2 t3.small (sa-east-1) com reverse-proxy para Railway; ECS Fargate (task-def rev 44) mantida como hot-warm. Stack local: Docker Compose com <strong>18 serviços</strong>.</td>
+</tr>
+<tr>
+<td><strong>Database</strong></td>
+<td>PostgreSQL <strong>18.3</strong> em Railway (managed) — <strong>140.498</strong> torres (verificado no dump nightly).</td>
+</tr>
+<tr>
+<td><strong>Cache &amp; Queue</strong></td>
+<td>Redis 8.6.2 (cache SRTM, hop cache, jobs, rate-limits).</td>
+</tr>
+<tr>
+<td><strong>Batch</strong></td>
+<td>Híbrido: ≤1 100 linhas síncrono; &gt;100 linhas assíncrono via SQS → Lambda → S3.</td>
+</tr>
+<tr>
+<td><strong>AI &amp; ML</strong></td>
+<td>AWS Bedrock (Claude / Titan / Llama) para chat; ridge-v1 (<code>coverage_predict.py</code>, 17 features).</td>
+</tr>
+<tr>
+<td><strong>Frontend</strong></td>
+<td>React PWA servida por Nginx 1.30 + Streamlit + MkDocs (Material).</td>
+</tr>
+<tr>
+<td><strong>Monitoring</strong></td>
+<td>Prometheus v3.11.2 + Grafana 13.0.1 + Alertmanager v0.32.0 + Jaeger 1.76.0 (OTLP).</td>
+</tr>
+<tr>
+<td><strong>Failover</strong></td>
+<td>Railway ativo para <code>api.*</code>; ECS Fargate em hot-warm; Route 53 latency-based failover <strong>planejado</strong>.</td>
+</tr>
+<tr>
+<td><strong>Backups</strong></td>
+<td>Nightly: Grafana volume → S3 (~23,05 MB), Railway Postgres → S3 (~1,78 MB gzip, restore verificado semanal).</td>
+</tr>
+<tr>
+<td><strong>CI/CD</strong></td>
+<td><strong>19</strong> workflows GitHub Actions (deploy, backup, drift, failover, retrain, secrets sync, …).</td>
+</tr>
+<tr>
+<td><strong>TLS</strong></td>
+<td>ACM no ALB (sa-east-1) termina HTTPS; Caddy em EC2 atende :80 como origin only.</td>
+</tr>
+</tbody>
+</table>
 <table>
 <thead>
 <tr>
