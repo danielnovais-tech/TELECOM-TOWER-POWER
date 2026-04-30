@@ -1,7 +1,15 @@
 # TELECOM TOWER POWER
 
-**Production-ready B2B SaaS platform for telecom RF engineering.**
-Tower database management, point-to-point link analysis, terrain-aware multi-hop repeater planning, PDF reporting, and self-service billing — all behind a tiered API with Prometheus monitoring.
+**Production B2B SaaS for telecom RF engineering — tailored to rural Brazil.**
+
+A single tiered API and managed database that gives RF engineers everything needed to design, validate and document long-range cellular and point-to-point links over Brazilian terrain:
+
+1. **Tower database management** — 140,498 georeferenced towers (ANATEL + OpenCelliD), CRUD + nearest-neighbour search.
+2. **Point-to-point link analysis** — Fresnel zone clearance, line-of-sight, RSSI, SRTM terrain profile (`POST /analyze`).
+3. **Multi-hop repeater planning** — Dijkstra path search over candidate towers with terrain-aware edge costs (`POST /plan_repeater[/async]`).
+4. **Batch PDF report generation** — sync ZIP for ≤100 receivers, async SQS+Lambda priority queue for Enterprise (`POST /batch_reports`, `GET /jobs/{id}`).
+5. **AI-assisted analysis** — Amazon Bedrock chat + scenario comparison (`POST /bedrock/chat`, `/bedrock/compare`), with playground SSE streaming.
+6. **Terrain-aware ML signal prediction** — ridge-regression model (17 features incl. SRTM elevation profile, fresnel ratio, terrain roughness) outperforms physics-only Hata baseline; nightly retrain in CI, S3-hot-pulled at boot (`POST /coverage/predict`, `GET /coverage/model/info`).
 
 > **140,498 towers** across Brazil — 105,240 from ANATEL (12 operators, 5,570 municipalities) + OpenCelliD crowd-sourced data. Default tower parameters: 35 m height, 43 dBm power, 700/1800 MHz bands.
 
@@ -28,7 +36,19 @@ See [docs-site/docs/operations/production-status.md](docs-site/docs/operations/p
 
 All features and security items shipped to production are live, tested, and documented:
 
-- **140,498 Brazilian towers** (ANATEL + OpenCelliD, geocoded with real GPS snapping)
+### Core RF engineering capabilities (all 6 verified live in prod 2026-04-29)
+
+| # | Capability | Endpoint(s) | Status |
+|---|---|---|---|
+| 1 | Tower database management | `GET/POST /towers`, `/towers/nearest`, `/towers/{id}` | ✅ 140,498 towers, PostgreSQL |
+| 2 | Point-to-point link analysis | `POST /analyze` | ✅ SRTM terrain, Fresnel/LOS/RSSI, capped knife-edge penalty |
+| 3 | Multi-hop repeater planning | `POST /plan_repeater[/async]` | ✅ Dijkstra + Redis hop cache, async for max_hops≥4 |
+| 4 | Batch PDF reports | `POST /batch_reports`, `/jobs/{id}` | ✅ Sync ZIP ≤100 rows, async SQS+Lambda for Enterprise |
+| 5 | AI-assisted analysis (Bedrock) | `POST /bedrock/chat`, `/bedrock/compare`, `/bedrock/models` | ✅ Foundation model catalog, scenario compare |
+| 6 | Terrain-aware ML signal prediction | `POST /coverage/predict`, `GET /coverage/model/info` | ✅ ridge-v1 (rmse 12.94 dB, n=20000, 17 features), S3 hot-pull, nightly retrain |
+
+### Platform & ops
+
 - **Tiered pricing & billing** — 5 tiers + annual; Stripe webhook auto-provisions API keys
 - **White-label tenant mode** — branding + dynamic CORS
 - **Audit log** — every tenant action recorded, queryable via `/tenant/audit`
