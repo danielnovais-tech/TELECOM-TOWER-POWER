@@ -7,6 +7,15 @@ COPY provisioning/ /etc/grafana/provisioning/
 # /var/lib/grafana data volume mounted in docker-compose)
 COPY dashboards/ /etc/grafana/dashboards/
 
+# Public status page: anonymous Viewer role lands directly on public-status.json.
+# Authenticated admin login still works via the standard form for editing.
+ENV GF_AUTH_ANONYMOUS_ENABLED="true" \
+    GF_AUTH_ANONYMOUS_ORG_ROLE="Viewer" \
+    GF_AUTH_ANONYMOUS_HIDE_VERSION="true" \
+    GF_USERS_VIEWERS_CAN_EDIT="false" \
+    GF_SECURITY_ALLOW_EMBEDDING="true" \
+    GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH="/etc/grafana/dashboards/public-status.json"
+
 # Entrypoint: hydrate SLACK_WEBHOOK_URL from Docker secret before launching Grafana
 USER root
 COPY entrypoint.sh /entrypoint.sh

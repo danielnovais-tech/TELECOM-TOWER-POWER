@@ -375,6 +375,64 @@
   
 
       
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../legal/terms/" class="md-tabs__link">
+          
+  
+  
+  Legal
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../status/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Status
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../contact/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Contato
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1732,6 +1790,203 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legal
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Legal
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../legal/terms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Termos de Serviço
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../legal/privacy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Política de Privacidade
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../legal/refund-policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Política de Reembolso
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contato
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1919,7 +2174,7 @@
     end
 
     subgraph Observability
-        Prom[Prometheus&lt;br/&gt;12 alert rules]
+        Prom[Prometheus&lt;br/&gt;13 alert rules]
         Graf[Grafana]
         AM[Alertmanager → Slack · PagerDuty]
         Loki[Loki]
@@ -1957,9 +2212,9 @@
 <h2 id="pipeline-de-ml-terrain-aware-signal-predictor">Pipeline de ML — <em>terrain-aware</em> signal predictor<a class="headerlink" href="#pipeline-de-ml-terrain-aware-signal-predictor" title="Permanent link">&para;</a></h2>
 <pre class="mermaid"><code>flowchart LR
     subgraph CI["Nightly CI · retrain_coverage_model.py"]
-        Synth[Synthetic generator&lt;br/&gt;n=20000, seed=13]
-        Real[(link_observations&lt;br/&gt;cell_signal_samples)]
-        Train[train_model&lt;br/&gt;l2=0.3, ridge-v1]
+        Synth[Synthetic generator&lt;br/&gt;n=10 000, seed=42]
+        Real[(Postgres link_observations&lt;br/&gt;real measurements via&lt;br/&gt;POST /coverage/observations&lt;br/&gt;or scripts/seed_observations.py)]
+        Train[train_model&lt;br/&gt;l2=1.0, ridge-v1&lt;br/&gt;real rows up-weighted 3×]
     end
 
     Synth --&gt; Train
@@ -2023,7 +2278,7 @@
 <tbody>
 <tr>
 <td><strong>Primary API</strong></td>
-<td>FastAPI (Python 3.13) — tráfego de produção via Caddy em EC2 t3.small (sa-east-1) com reverse-proxy para Railway; ECS Fargate (task-def rev 44) mantida como hot-warm. Stack local: Docker Compose com <strong>18 serviços</strong>.</td>
+<td>FastAPI (Python 3.13) — <code>api.telecomtowerpower.com.br</code> resolve para o ALB em sa-east-1 que faz round-robin entre dois targets: ECS Fargate (FastAPI direto, task-def rev 44) e EC2 t3.small com Caddy reverse-proxy para Railway. Stack local: Docker Compose com <strong>18 serviços</strong>.</td>
 </tr>
 <tr>
 <td><strong>Database</strong></td>
@@ -2047,11 +2302,11 @@
 </tr>
 <tr>
 <td><strong>Monitoring</strong></td>
-<td>Prometheus v3.11.2 + Grafana 13.0.1 + Alertmanager v0.32.0 + Jaeger 1.76.0 (OTLP).</td>
+<td>Prometheus v3.11.2 + Grafana 13.0.1 + Alertmanager v0.32.0 + Jaeger 1.76.0 (OTLP, head sampling 5% via <code>ParentBased(TraceIdRatioBased(0.05))</code> em <a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/tracing.py">tracing.py</a>; ajustável via <code>OTEL_TRACES_SAMPLER_ARG</code>).</td>
 </tr>
 <tr>
 <td><strong>Failover</strong></td>
-<td>Railway ativo para <code>api.*</code>; ECS Fargate em hot-warm; Route 53 latency-based failover <strong>planejado</strong>.</td>
+<td>Route 53 <strong>Failover routing</strong> (PRIMARY=ALB sa-east-1, SECONDARY=Railway edge) com health checks ALB; Railway warm para <code>api.*</code>; drift detectado por <code>failover-drift-check.yml</code>.</td>
 </tr>
 <tr>
 <td><strong>Backups</strong></td>
@@ -2113,12 +2368,12 @@
 </tr>
 <tr>
 <td><strong>Observability</strong></td>
-<td>Prometheus (12 regras) · Grafana · Alertmanager · OpenTelemetry · Loki</td>
+<td>Prometheus (13 regras) · Grafana · Alertmanager · OpenTelemetry · Loki</td>
 <td>Métricas, dashboards, paging (Slack + PagerDuty)</td>
 </tr>
 <tr>
 <td><strong>CI/CD</strong></td>
-<td>16 workflows GitHub Actions · BuildKit cache · sync de secrets via SSM · drill semanal de restore</td>
+<td>19 workflows GitHub Actions · BuildKit cache · sync de secrets via SSM · drill semanal de restore</td>
 <td>Push-to-deploy, retrain noturno, restore drill</td>
 </tr>
 <tr>
@@ -2151,7 +2406,7 @@
 </tr>
 <tr>
 <td><strong>ML signal prediction</strong></td>
-<td>Regressão ridge sobre <strong>17 features</strong> engenhadas (perfis SRTM, slope, contagem de obstruções, razão mínima de Fresnel, termos log/interação). Treinada em física sintética (<code>_physics_signal</code>) + sombra log-normal, com up-weight opcional de dados reais. <strong>Cadeia de fallback:</strong> SageMaker endpoint → modelo local <code>.npz</code> → física determinística (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/coverage_predict.py">coverage_predict.py</a> — <code>_FEATURE_NAMES</code>, <code>predict_signal</code>).</td>
+<td>Regressão ridge sobre <strong>17 features</strong> engenhadas (perfis SRTM, slope, contagem de obstruções, razão mínima de Fresnel, termos log/interação). Treinada em física sintética (<code>_physics_signal</code>) + sombra log-normal; medições ponto-a-ponto reais via <code>POST /coverage/observations</code> (ou bulk via <a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/scripts/seed_observations.py"><code>scripts/seed_observations.py</code></a> / workflow <code>seed-observations.yml</code>) são ingeridas em <code>link_observations</code> e ponderadas 3× quando ≥ 1000 novas linhas se acumulam (workflow noturno <code>retrain-coverage-model.yml</code>). Estado atual: 0 medições reais ingeridas → modelo 100 % sintético, transiciona automaticamente quando clientes submetem dados. <strong>Cadeia de fallback:</strong> SageMaker endpoint → modelo local <code>.npz</code> → física determinística (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/coverage_predict.py">coverage_predict.py</a> — <code>_FEATURE_NAMES</code>, <code>predict_signal</code>).</td>
 </tr>
 </tbody>
 </table>

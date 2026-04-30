@@ -49,7 +49,17 @@ const COPY = {
         { q: "Cancelamento?", a: "A qualquer momento via portal. Sem multa, sem fidelidade." }
       ]
     },
-    footer: "Feito em Brasília · © TELECOM TOWER POWER 2026"
+    footer: {
+      tagline: "Feito em Brasília · © TELECOM TOWER POWER 2026",
+      support: "Suporte",
+      sales: "Vendas",
+      status: "Status",
+      terms: "Termos",
+      privacy: "Privacidade",
+      refund: "Reembolso",
+      security: "Segurança",
+      contact: "Contato"
+    }
   },
   en: {
     nav: { features: "Features", pricing: "Pricing", docs: "Docs", faq: "FAQ", login: "Sign in", signup: "Sign up" },
@@ -97,7 +107,17 @@ const COPY = {
         { q: "Cancellation?", a: "Anytime via the self-service portal. No fees, no lock-in." }
       ]
     },
-    footer: "Built in Brasília · © TELECOM TOWER POWER 2026"
+    footer: {
+      tagline: "Built in Brasília · © TELECOM TOWER POWER 2026",
+      support: "Support",
+      sales: "Sales",
+      status: "Status",
+      terms: "Terms",
+      privacy: "Privacy",
+      refund: "Refunds",
+      security: "Security",
+      contact: "Contact"
+    }
   }
 };
 
@@ -189,7 +209,26 @@ export default function Landing({ onSignup, onLogin }) {
         </div>
       </section>
 
-      <footer style={styles.footer}>{t.footer}</footer>
+      <footer style={styles.footer}>
+        <div style={styles.footerLinks}>
+          <a href="mailto:support@telecomtowerpower.com.br">{t.footer.support}</a>
+          <span style={styles.footerSep}>·</span>
+          <a href="mailto:sales@telecomtowerpower.com.br">{t.footer.sales}</a>
+          <span style={styles.footerSep}>·</span>
+          <a href="https://monitoring.telecomtowerpower.com.br/" target="_blank" rel="noopener noreferrer">{t.footer.status}</a>
+          <span style={styles.footerSep}>·</span>
+          <a href={`https://docs.telecomtowerpower.com.br/${lang === "en" ? "en/" : ""}legal/terms/`}>{t.footer.terms}</a>
+          <span style={styles.footerSep}>·</span>
+          <a href={`https://docs.telecomtowerpower.com.br/${lang === "en" ? "en/" : ""}legal/privacy/`}>{t.footer.privacy}</a>
+          <span style={styles.footerSep}>·</span>
+          <a href={`https://docs.telecomtowerpower.com.br/${lang === "en" ? "en/" : ""}legal/refund-policy/`}>{t.footer.refund}</a>
+          <span style={styles.footerSep}>·</span>
+          <a href="https://github.com/danielnovaisantunes/TELECOM-TOWER-POWER/security/policy" target="_blank" rel="noopener noreferrer">{t.footer.security}</a>
+          <span style={styles.footerSep}>·</span>
+          <a href={`https://docs.telecomtowerpower.com.br/${lang === "en" ? "en/" : ""}contact/`}>{t.footer.contact}</a>
+        </div>
+        <div>{t.footer.tagline}</div>
+      </footer>
     </div>
   );
 }
@@ -225,5 +264,7 @@ const styles = {
   faq: { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "16px 20px", marginBottom: 10 },
   faqQ: { fontWeight: 600, cursor: "pointer", fontSize: 15 },
   faqA: { color: "#475569", marginTop: 10, lineHeight: 1.6, fontSize: 14 },
-  footer: { textAlign: "center", padding: "40px 24px", color: "#64748b", fontSize: 13, borderTop: "1px solid #e2e8f0" }
+  footer: { textAlign: "center", padding: "40px 24px", color: "#64748b", fontSize: 13, borderTop: "1px solid #e2e8f0" },
+  footerLinks: { display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", marginBottom: 16, fontSize: 13 },
+  footerSep: { color: "#cbd5e1" }
 };

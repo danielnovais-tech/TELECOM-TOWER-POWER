@@ -1,7 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import LoginWithSSO from "./LoginWithSSO";
 
 const BASE = "/api";
+const TURNSTILE_SCRIPT_ID = "cf-turnstile-script";
+
+function loadTurnstileScript() {
+  if (typeof window === "undefined") return;
+  if (document.getElementById(TURNSTILE_SCRIPT_ID)) return;
+  const s = document.createElement("script");
+  s.id = TURNSTILE_SCRIPT_ID;
+  s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+  s.async = true;
+  s.defer = true;
+  document.head.appendChild(s);
+}
 
 export default function Signup({ onKeyReceived }) {
   const [email, setEmail] = useState("");
@@ -23,6 +35,53 @@ export default function Signup({ onKeyReceived }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [captchaConfig, setCaptchaConfig] = useState({ required: false, site_key: null });
+  const [captchaToken, setCaptchaToken] = useState("");
+  const captchaContainerRef = useRef(null);
+  const captchaWidgetIdRef = useRef(null);
+
+  // Discover whether CAPTCHA is required and load Turnstile if so.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${BASE}/signup/config`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => {
+        if (cancelled || !cfg?.captcha) return;
+        setCaptchaConfig(cfg.captcha);
+        if (cfg.captcha.required && cfg.captcha.site_key) {
+          loadTurnstileScript();
+        }
+      })
+      .catch(() => { /* signup still works if config fetch fails */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Render the Turnstile widget once the script is loaded and we know the site key.
+  useEffect(() => {
+    if (!captchaConfig.required || !captchaConfig.site_key) return;
+    let mounted = true;
+    const tryRender = () => {
+      if (!mounted) return;
+      if (window.turnstile && captchaContainerRef.current && captchaWidgetIdRef.current === null) {
+        captchaWidgetIdRef.current = window.turnstile.render(captchaContainerRef.current, {
+          sitekey: captchaConfig.site_key,
+          callback: (token) => setCaptchaToken(token || ""),
+          "expired-callback": () => setCaptchaToken(""),
+          "error-callback": () => setCaptchaToken(""),
+        });
+      } else {
+        setTimeout(tryRender, 200);
+      }
+    };
+    tryRender();
+    return () => {
+      mounted = false;
+      if (window.turnstile && captchaWidgetIdRef.current !== null) {
+        try { window.turnstile.remove(captchaWidgetIdRef.current); } catch { /* ignore */ }
+        captchaWidgetIdRef.current = null;
+      }
+    };
+  }, [captchaConfig]);
 
   // Clear the one-shot preselection once mounted so a later visit lands on Free.
   useEffect(() => {
@@ -40,10 +99,13 @@ export default function Signup({ onKeyReceived }) {
 
     try {
       if (tier === "free") {
+        if (captchaConfig.required && !captchaToken) {
+          throw new Error("Please complete the CAPTCHA challenge.");
+        }
         const r = await fetch(`${BASE}/signup/free`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
+          body: JSON.stringify({ email, captcha_token: captchaToken || undefined }),
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.detail || r.statusText);
@@ -215,6 +277,13 @@ export default function Signup({ onKeyReceived }) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
           />
+          {tier === "free" && captchaConfig.required && (
+            <div
+              ref={captchaContainerRef}
+              className="cf-turnstile"
+              style={{ margin: "8px 0", display: "flex", justifyContent: "center" }}
+            />
+          )}
           <button type="submit" className="btn primary" disabled={loading}>
             {loading
               ? "Processando…"
@@ -224,6 +293,25 @@ export default function Signup({ onKeyReceived }) {
                   ? "Falar com vendas"
                   : `Assinar ${tier.charAt(0).toUpperCase() + tier.slice(1)}`}
           </button>
+          <p style={{ fontSize: 12, color: "#64748b", textAlign: "center", marginTop: 12, lineHeight: 1.5 }}>
+            Ao continuar, você concorda com os{" "}
+            <a
+              href="https://docs.telecomtowerpower.com.br/legal/terms/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Termos de Serviço
+            </a>{" "}
+            e a{" "}
+            <a
+              href="https://docs.telecomtowerpower.com.br/legal/privacy/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Política de Privacidade
+            </a>
+            .
+          </p>
         </form>
 
         {error && <div className="signup-error">{error}</div>}

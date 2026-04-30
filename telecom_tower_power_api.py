@@ -3228,6 +3228,12 @@ async def download_job_result(job_id: str, _key: Dict = Depends(require_tier(Tie
 
 class SignupRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=254)
+    captcha_token: Optional[str] = Field(
+        None,
+        max_length=2048,
+        description="Cloudflare Turnstile token from the signup page. "
+                    "Required when TURNSTILE_SECRET_KEY is set on the server.",
+    )
 
 class CheckoutRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=254)
@@ -3239,9 +3245,107 @@ class CheckoutRequest(BaseModel):
         description="ISO 3166-1 alpha-2 country code for SRTM tile pre-download (enterprise only)",
     )
 
+
+# ─────────────────────────────────────────────────────────────────
+# /signup/free abuse controls
+#
+# 1. Per-IP rate limiting (sliding window, in-process). Cheap defence
+#    against single-host bots — real distributed abuse is mitigated by
+#    Turnstile below.
+# 2. Optional Cloudflare Turnstile verification. Enabled when
+#    `TURNSTILE_SECRET_KEY` is set; otherwise the limiter alone protects
+#    the endpoint and the field is ignored.
+#
+# Per-IP limit defaults: 5 signups / hour / IP. Tuned via env so we can
+# loosen for a launch event without a redeploy.
+# ─────────────────────────────────────────────────────────────────
+_SIGNUP_FREE_RPH = int(os.getenv("SIGNUP_FREE_RATE_LIMIT_PER_HOUR", "5"))
+_SIGNUP_FREE_WINDOW_S = 3600.0
+_signup_ip_buckets: Dict[str, collections.deque] = {}
+
+_TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
+_TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
+SIGNUP_ABUSE_REJECTIONS = Counter(
+    "signup_free_abuse_rejections_total",
+    "Free-signup attempts rejected for abuse",
+    labelnames=["reason"],  # ip_rate_limit | turnstile_missing | turnstile_invalid
+)
+
+
+def _check_signup_ip_rate_limit(ip: Optional[str]) -> None:
+    """Raise 429 if `ip` has exceeded SIGNUP_FREE_RATE_LIMIT_PER_HOUR.
+
+    Missing IP → no enforcement (behind a misconfigured proxy is annoying
+    but should never lock everyone out).
+    """
+    if not ip:
+        return
+    now = time.monotonic()
+    bucket = _signup_ip_buckets.setdefault(ip, collections.deque())
+    while bucket and bucket[0] <= now - _SIGNUP_FREE_WINDOW_S:
+        bucket.popleft()
+    if len(bucket) >= _SIGNUP_FREE_RPH:
+        SIGNUP_ABUSE_REJECTIONS.labels(reason="ip_rate_limit").inc()
+        retry_after = int(_SIGNUP_FREE_WINDOW_S - (now - bucket[0]))
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Too many signup attempts from this IP "
+                f"({_SIGNUP_FREE_RPH}/hour). Try again later."
+            ),
+            headers={"Retry-After": str(max(retry_after, 1))},
+        )
+    bucket.append(now)
+    # Periodic sweep of stale IPs (cheap O(n) when bucket grows large).
+    if len(_signup_ip_buckets) > 10_000:
+        cutoff = now - _SIGNUP_FREE_WINDOW_S
+        for k, v in list(_signup_ip_buckets.items()):
+            if not v or v[-1] <= cutoff:
+                _signup_ip_buckets.pop(k, None)
+
+
+async def _verify_turnstile(token: Optional[str], ip: Optional[str]) -> None:
+    """Verify a Cloudflare Turnstile token. No-op when TURNSTILE_SECRET_KEY
+    is unset (allows local dev / preview to keep working)."""
+    if not _TURNSTILE_SECRET_KEY:
+        return
+    if not token:
+        SIGNUP_ABUSE_REJECTIONS.labels(reason="turnstile_missing").inc()
+        raise HTTPException(status_code=400, detail="CAPTCHA token missing.")
+    payload = {
+        "secret": _TURNSTILE_SECRET_KEY,
+        "response": token[:2048],  # Turnstile tokens are <2KB; cap defensively.
+    }
+    if ip:
+        payload["remoteip"] = ip
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=5)
+        ) as session:
+            async with session.post(_TURNSTILE_VERIFY_URL, data=payload) as resp:
+                data = await resp.json(content_type=None)
+    except Exception:  # pragma: no cover - network noise
+        # Fail-closed: if Cloudflare is unreachable we cannot trust the token.
+        SIGNUP_ABUSE_REJECTIONS.labels(reason="turnstile_invalid").inc()
+        raise HTTPException(status_code=503, detail="CAPTCHA verifier unavailable.")
+    if not data.get("success"):
+        SIGNUP_ABUSE_REJECTIONS.labels(reason="turnstile_invalid").inc()
+        raise HTTPException(status_code=400, detail="CAPTCHA verification failed.")
+
+
 @app.post("/signup/free", status_code=201)
 async def signup_free(body: SignupRequest, request: Request):
-    """Register a free-tier account and receive an API key instantly."""
+    """Register a free-tier account and receive an API key instantly.
+
+    Rate-limited to 5 signups/hour/IP and (when configured) gated by
+    Cloudflare Turnstile to prevent automated free-key farming, which
+    would otherwise be an open faucet against per-call SRTM and Bedrock
+    costs.
+    """
+    ip = _client_ip(request)
+    _check_signup_ip_rate_limit(ip)
+    await _verify_turnstile(body.captcha_token, ip)
     try:
         result = stripe_billing.register_free_user(body.email)
     except ValueError as exc:
@@ -3271,6 +3375,21 @@ class SsoExchangeRequest(BaseModel):
                           description="OIDC ID token (Cognito 'id_token').")
     provider: str = Field("cognito", min_length=2, max_length=20,
                           description="IdP identifier; only 'cognito' is supported today.")
+
+
+@app.get("/signup/config")
+async def signup_config():
+    """Public hint for the signup form: whether CAPTCHA is required and
+    which Turnstile site key to render. Never returns the secret key."""
+    site_key = os.getenv("TURNSTILE_SITE_KEY", "").strip()
+    return {
+        "captcha": {
+            "required": bool(_TURNSTILE_SECRET_KEY),
+            "provider": "turnstile" if _TURNSTILE_SECRET_KEY else None,
+            "site_key": site_key or None,
+        },
+        "signup_free_per_ip_per_hour": _SIGNUP_FREE_RPH,
+    }
 
 
 @app.get("/auth/sso/config")

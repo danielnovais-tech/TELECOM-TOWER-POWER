@@ -375,6 +375,64 @@
   
 
       
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../legal/terms/" class="md-tabs__link">
+          
+  
+  
+  Legal
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../status/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Status
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../contact/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Contact
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1732,6 +1790,203 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legal
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Legal
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../legal/terms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terms of Service
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../legal/privacy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Privacy Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../legal/refund-policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Refund Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contact
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1919,7 +2174,7 @@
     end
 
     subgraph Observability
-        Prom[Prometheus&lt;br/&gt;12 alert rules]
+        Prom[Prometheus&lt;br/&gt;13 alert rules]
         Graf[Grafana]
         AM[Alertmanager → Slack · PagerDuty]
         Loki[Loki]
@@ -1957,9 +2212,9 @@
 <h2 id="pipeline-de-ml-terrain-aware-signal-predictor">Pipeline de ML — <em>terrain-aware</em> signal predictor<a class="headerlink" href="#pipeline-de-ml-terrain-aware-signal-predictor" title="Permanent link">&para;</a></h2>
 <pre class="mermaid"><code>flowchart LR
     subgraph CI["Nightly CI · retrain_coverage_model.py"]
-        Synth[Synthetic generator&lt;br/&gt;n=20000, seed=13]
-        Real[(link_observations&lt;br/&gt;cell_signal_samples)]
-        Train[train_model&lt;br/&gt;l2=0.3, ridge-v1]
+        Synth[Synthetic generator&lt;br/&gt;n=10 000, seed=42]
+        Real[(Postgres link_observations&lt;br/&gt;real measurements via&lt;br/&gt;POST /coverage/observations&lt;br/&gt;or scripts/seed_observations.py)]
+        Train[train_model&lt;br/&gt;l2=1.0, ridge-v1&lt;br/&gt;real rows up-weighted 3×]
     end
 
     Synth --&gt; Train
@@ -2023,7 +2278,7 @@
 <tbody>
 <tr>
 <td><strong>Primary API</strong></td>
-<td>FastAPI (Python 3.13) — prod traffic via Caddy on EC2 t3.small (sa-east-1) reverse-proxied to Railway; ECS Fargate task-def rev 44 kept warm. Local stack: <strong>18-service</strong> Docker Compose.</td>
+<td>FastAPI (Python 3.13) — <code>api.telecomtowerpower.com.br</code> resolves to the sa-east-1 ALB which round-robins between two targets: ECS Fargate (FastAPI direct, task-def rev 44) and an EC2 t3.small running Caddy that reverse-proxies to Railway. Local stack: <strong>18-service</strong> Docker Compose.</td>
 </tr>
 <tr>
 <td><strong>Database</strong></td>
@@ -2047,11 +2302,11 @@
 </tr>
 <tr>
 <td><strong>Monitoring</strong></td>
-<td>Prometheus v3.11.2 + Grafana 13.0.1 + Alertmanager v0.32.0 + Jaeger 1.76.0 (OTLP).</td>
+<td>Prometheus v3.11.2 + Grafana 13.0.1 + Alertmanager v0.32.0 + Jaeger 1.76.0 (OTLP, head sampling 5% via <code>ParentBased(TraceIdRatioBased(0.05))</code> in <a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/tracing.py">tracing.py</a>; tunable via <code>OTEL_TRACES_SAMPLER_ARG</code>).</td>
 </tr>
 <tr>
 <td><strong>Failover</strong></td>
-<td>Railway active for <code>api.*</code>; ECS Fargate kept warm; Route 53 latency-based failover <strong>planned</strong>.</td>
+<td>Route 53 <strong>Failover routing</strong> (PRIMARY=ALB sa-east-1, SECONDARY=Railway edge) driven by ALB health checks; Railway kept warm for <code>api.*</code>; drift detected by <code>failover-drift-check.yml</code>.</td>
 </tr>
 <tr>
 <td><strong>Backups</strong></td>
@@ -2070,9 +2325,9 @@
 <table>
 <thead>
 <tr>
-<th>Camada</th>
-<th>Componentes</th>
-<th>Função</th>
+<th>Layer</th>
+<th>Components</th>
+<th>Function</th>
 </tr>
 </thead>
 <tbody>
@@ -2093,37 +2348,37 @@
 </tr>
 <tr>
 <td><strong>Data</strong></td>
-<td>Railway PostgreSQL 18.3 · ElastiCache Redis · S3 (artefactos + backups) · cache SRTM (<code>hop_cache.py</code>, <code>srtm_elevation.py</code>)</td>
-<td>Estado persistente, caches quentes, terreno</td>
+<td>Railway PostgreSQL 18.3 · ElastiCache Redis · S3 (artifacts + backups) · SRTM cache (<code>hop_cache.py</code>, <code>srtm_elevation.py</code>)</td>
+<td>Persistent state, hot caches, terrain</td>
 </tr>
 <tr>
 <td><strong>ML</strong></td>
-<td>ridge-v1 em <code>.npz</code> · S3 hot-pull · retrain noturno em CI · Bedrock para cenários</td>
-<td>Predição de sinal terrain-aware + GenAI</td>
+<td>ridge-v1 in <code>.npz</code> · S3 hot-pull · nightly retrain in CI · Bedrock for scenarios</td>
+<td>Terrain-aware signal prediction + GenAI</td>
 </tr>
 <tr>
 <td><strong>Async</strong></td>
 <td>SQS priority queue · Lambda consumer · <code>batch_worker.py</code> · <code>repeater_jobs_store.py</code> (Redis)</td>
-<td>Batches PDF longos e planejamento ≥4 hops</td>
+<td>Long PDF batches and ≥4-hop planning</td>
 </tr>
 <tr>
 <td><strong>Auth</strong></td>
-<td>API keys (<code>key_store_db.py</code>) · Cognito OIDC + Bearer · rate limits por tier · audit log</td>
-<td>Hardening OWASP-Top-10</td>
+<td>API keys (<code>key_store_db.py</code>) · Cognito OIDC + Bearer · per-tier rate limits · audit log</td>
+<td>OWASP-Top-10 hardening</td>
 </tr>
 <tr>
 <td><strong>Observability</strong></td>
-<td>Prometheus (12 regras) · Grafana · Alertmanager · OpenTelemetry · Loki</td>
-<td>Métricas, dashboards, paging (Slack + PagerDuty)</td>
+<td>Prometheus (13 rules) · Grafana · Alertmanager · OpenTelemetry · Loki</td>
+<td>Metrics, dashboards, paging (Slack + PagerDuty)</td>
 </tr>
 <tr>
 <td><strong>CI/CD</strong></td>
-<td>16 workflows GitHub Actions · BuildKit cache · sync de secrets via SSM · drill semanal de restore</td>
-<td>Push-to-deploy, retrain noturno, restore drill</td>
+<td>19 GitHub Actions workflows · BuildKit cache · secret sync via SSM · weekly restore drill</td>
+<td>Push-to-deploy, nightly retrain, restore drill</td>
 </tr>
 <tr>
 <td><strong>Backups</strong></td>
-<td>Postgres + volume Grafana → S3 nightly (14d retenção) · restore verificado semanal</td>
+<td>Postgres + Grafana volume → S3 nightly (14d retention) · weekly verified restore</td>
 <td>DR, RPO ≈ 24h</td>
 </tr>
 </tbody>
@@ -2151,7 +2406,7 @@
 </tr>
 <tr>
 <td><strong>ML signal prediction</strong></td>
-<td>Ridge regression on <strong>17 engineered features</strong> (SRTM profiles, slope, obstruction count, min Fresnel ratio, log/interaction terms). Trained on synthetic physics (<code>_physics_signal</code>) + log-normal shadow fading, with optional real-data up-weighting. <strong>Fallback chain:</strong> SageMaker endpoint → local <code>.npz</code> model → deterministic physics (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/coverage_predict.py">coverage_predict.py</a> — <code>_FEATURE_NAMES</code>, <code>predict_signal</code>).</td>
+<td>Ridge regression on <strong>17 engineered features</strong> (SRTM profiles, slope, obstruction count, min Fresnel ratio, log/interaction terms). Trained on synthetic physics (<code>_physics_signal</code>) + log-normal shadow fading; real point-to-point measurements posted to <code>POST /coverage/observations</code> (or bulk-loaded via <a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/scripts/seed_observations.py"><code>scripts/seed_observations.py</code></a> / workflow <code>seed-observations.yml</code>) land in <code>link_observations</code> and are up-weighted 3× once ≥ 1 000 fresh rows accumulate (nightly <code>retrain-coverage-model.yml</code>). Current state: 0 real measurements ingested → model is 100 % synthetic and transitions automatically as customers submit data. <strong>Fallback chain:</strong> SageMaker endpoint → local <code>.npz</code> model → deterministic physics (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/coverage_predict.py">coverage_predict.py</a> — <code>_FEATURE_NAMES</code>, <code>predict_signal</code>).</td>
 </tr>
 </tbody>
 </table>
@@ -2196,10 +2451,10 @@
 </ul>
 <h2 id="s3-single-source-of-truth">S3 — single source of truth<a class="headerlink" href="#s3-single-source-of-truth" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>s3://telecom-tower-power-results/
-├── models/coverage_model.npz          ← artefato ML (ridge-v1, 1850 B)
-├── reports/{tenant}/{job_id}.zip      ← saídas async batch
-├── backups/postgres/YYYY-MM-DD.sql.gz ← pg_dump nightly
-└── backups/grafana/YYYY-MM-DD.tar.gz  ← snapshot de volume nightly
+├── models/coverage_model.npz          ← ML artifact (ridge-v1, 1850 B)
+├── reports/{tenant}/{job_id}.zip      ← async batch outputs
+├── backups/postgres/YYYY-MM-DD.sql.gz ← nightly pg_dump
+└── backups/grafana/YYYY-MM-DD.tar.gz  ← nightly Grafana volume snapshot
 </code></pre></div>
 
 

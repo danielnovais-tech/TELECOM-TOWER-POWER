@@ -240,6 +240,13 @@ def create_checkout_session(email: str, tier: str, country: Optional[str] = None
         success_url=f"{FRONTEND_URL}/signup/success?session_id={{CHECKOUT_SESSION_ID}}",
         cancel_url=f"{FRONTEND_URL}/signup/cancel",
         metadata=metadata,
+        # Stripe live-mode + LGPD: require the customer to acknowledge
+        # our Terms of Service before payment is confirmed. The TOS URL
+        # is configured in the Stripe Dashboard (Settings → Public
+        # details → Terms of service) — this flag merely enables the
+        # checkbox. Without an active TOS URL configured this argument
+        # is ignored, so it is safe to keep set.
+        consent_collection={"terms_of_service": "required"},
     )
     return session.url
 

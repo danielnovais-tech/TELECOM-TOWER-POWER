@@ -77,6 +77,12 @@ plugins:
             12 Segurança física: 12 Physical security
             13 Gestão de risco: 13 Risk management
             14 Gestão de ativos: 14 Asset management
+            Legal: Legal
+            Termos de Serviço: Terms of Service
+            Política de Privacidade: Privacy Policy
+            Política de Reembolso: Refund Policy
+            Status: Status
+            Contato: Contact
 
 markdown_extensions:
   - admonition
@@ -132,3 +138,9 @@ nav:
           - 14 Gestão de ativos: compliance/soc2/policies/14-asset-management.md
   - Referência da API:
       - api/overview.md
+  - Legal:
+      - Termos de Serviço: legal/terms.md
+      - Política de Privacidade: legal/privacy.md
+      - Política de Reembolso: legal/refund-policy.md
+  - Status: operations/status.md
+  - Contato: contact.md
