@@ -81,18 +81,29 @@ echo "Starting uvicorn..."
 # Pull the latest coverage_model.npz from S3 if COVERAGE_MODEL_S3_URI is set.
 # Best-effort: any failure (no creds, network, missing key) falls back to the
 # baked-in artefact. Hard-capped at 30s so a slow/wedged S3 call cannot block
-# the API from coming up.
+# the API from coming up. On success, log the loaded model's metadata so we
+# can verify in container logs which artefact (S3 vs baked) is active.
 if [ -n "${COVERAGE_MODEL_S3_URI:-}" ]; then
     echo "Refreshing coverage model from ${COVERAGE_MODEL_S3_URI} (30s timeout)..."
+    _COV_REFRESH_CMD='import sys, coverage_predict as c
+ok = c.refresh_from_s3()
+if ok:
+    m = c.get_model(refresh=True)
+    if m is not None:
+        print(f"Coverage model active: version={m.version} rmse_db={m.rmse_db:.4f} n_train={m.n_train}")
+sys.exit(0 if ok else 1)'
     if command -v timeout >/dev/null 2>&1; then
-        timeout 30 python -c "import sys, coverage_predict as c; sys.exit(0 if c.refresh_from_s3() else 1)" \
-            && echo "Coverage model refreshed from S3" \
-            || echo "WARN: coverage model S3 refresh failed (exit $?), using baked artefact"
+        timeout 30 python -c "$_COV_REFRESH_CMD"
     else
-        python -c "import sys, coverage_predict as c; sys.exit(0 if c.refresh_from_s3() else 1)" \
-            && echo "Coverage model refreshed from S3" \
-            || echo "WARN: coverage model S3 refresh failed (exit $?), using baked artefact"
+        python -c "$_COV_REFRESH_CMD"
     fi
+    _COV_RC=$?
+    if [ "$_COV_RC" -eq 0 ]; then
+        echo "Coverage model refreshed from S3"
+    else
+        echo "WARN: coverage model S3 refresh failed (exit $_COV_RC), using baked artefact"
+    fi
+    unset _COV_REFRESH_CMD _COV_RC
 fi
 
 if [ "${SERVICE_TYPE:-}" = "webhook" ]; then
