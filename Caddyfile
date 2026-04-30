@@ -42,9 +42,11 @@
         handle /webhook* {
                 reverse_proxy localhost:8001
         }
-        handle /grafana* {
-                reverse_proxy localhost:3001
-        }
+        # Grafana is reached via the dedicated subdomain
+        # (monitoring.telecomtowerpower.com.br → ttp-grafana-tg:3001 at the ALB).
+        # No /grafana* path handler here: a path-prefix proxy without
+        # GF_SERVER_SERVE_FROM_SUB_PATH causes Grafana to 302 to /login,
+        # which the default handler below would then serve as the React SPA.
         # React frontend as default
         handle {
                 reverse_proxy localhost:3000
