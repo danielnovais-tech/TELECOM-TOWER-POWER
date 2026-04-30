@@ -803,6 +803,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#key-algorithms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🧠 Key Algorithms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🗄️ Data Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#s3-single-source-of-truth" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1798,6 +1820,28 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#key-algorithms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🧠 Key Algorithms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🗄️ Data Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#s3-single-source-of-truth" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2084,6 +2128,72 @@
 </tr>
 </tbody>
 </table>
+<h2 id="key-algorithms">🧠 Key Algorithms<a class="headerlink" href="#key-algorithms" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Implementation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Link budget</strong></td>
+<td>Free-space path loss + zona de Fresnel + curvatura terrestre (raio efetivo <code>k=4/3</code>). Ver <a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/pdf_generator.py">pdf_generator.py</a> (<code>_free_space_path_loss</code>, envelope da 1ª zona, <code>earth_bulge</code>).</td>
+</tr>
+<tr>
+<td><strong>Repeater planning</strong></td>
+<td>Dijkstra de <strong>caminho gargalo</strong> (min-max) sobre torres candidatas; relaxação <code>new_bottleneck = max(bottleneck, effective_loss)</code> com <code>effective_loss</code> ponderado por terreno (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/telecom_tower_power_api.py#L731">telecom_tower_power_api.py#L731</a>).</td>
+</tr>
+<tr>
+<td><strong>PDF reports</strong></td>
+<td>ReportLab para tabelas/layout + Matplotlib para o plot de terreno + zona de Fresnel (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/pdf_generator.py">pdf_generator.py</a>).</td>
+</tr>
+<tr>
+<td><strong>ML signal prediction</strong></td>
+<td>Regressão ridge sobre <strong>17 features</strong> engenhadas (perfis SRTM, slope, contagem de obstruções, razão mínima de Fresnel, termos log/interação). Treinada em física sintética (<code>_physics_signal</code>) + sombra log-normal, com up-weight opcional de dados reais. <strong>Cadeia de fallback:</strong> SageMaker endpoint → modelo local <code>.npz</code> → física determinística (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/coverage_predict.py">coverage_predict.py</a> — <code>_FEATURE_NAMES</code>, <code>predict_signal</code>).</td>
+</tr>
+</tbody>
+</table>
+<h2 id="data-pipeline">🗄️ Data Pipeline<a class="headerlink" href="#data-pipeline" title="Permanent link">&para;</a></h2>
+<p><strong>Tower sources</strong></p>
+<ul>
+<li><strong>ANATEL</strong> (oficial) — 105.240 estações únicas (contagem da prod Postgres).
+  Geocodificadas via centroides de municípios IBGE + jitter aleatório leve
+  (~800 m) para que torres da mesma cidade não se sobreponham
+  (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/load_anatel.py">load_anatel.py</a>).</li>
+<li><strong>OpenCelliD</strong> (crowdsourced) — 35.248 células com GPS
+  (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/load_opencellid.py">load_opencellid.py</a>).</li>
+</ul>
+<p><strong>Geocodificação</strong></p>
+<ul>
+<li>Tabela pré-construída com ~5.570 municípios IBGE em
+  <code>municipios_brasileiros.csv</code> → centroide + ±jitter.</li>
+<li>Cache miss recorre ao Nominatim (rate-limit 1,1 req/s).</li>
+<li><strong>Refinamento ANATEL→OpenCelliD</strong> (
+  <a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/snap_anatel.py">snap_anatel.py</a>):
+  para cada torre <code>ANATEL_*</code>, encontra a torre <code>OCID_*</code> mais próxima do
+  <strong>mesmo operador</strong> dentro de um raio configurável (padrão <strong>5 km</strong>) usando
+  índice por buckets de 0,05° + distância haversine; grava <code>lat</code>/<code>lon</code> da
+  candidata, mantendo o <code>id</code>. Cobertura por bucket = 3×3, operação O(N).
+  CLI: <code>python snap_anatel.py [--max-km 5.0] [--dry-run]</code>.</li>
+</ul>
+<p><strong>Tiles SRTM (90 m)</strong></p>
+<ul>
+<li>Arquivos <code>.hgt</code> locais em <code>./srtm_data/</code> (cache L1 in-process).</li>
+<li>Cache L2 opcional em Redis: blobs <code>.hgt</code> brutos, TTL de 7 dias
+  (<a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/srtm_elevation.py">srtm_elevation.py</a>
+  — chave <code>srtm:&lt;tile&gt;</code>).</li>
+<li>Sem fallback Open-Elevation hoje; tile ausente → <code>ValueError</code>.</li>
+</ul>
+<p><strong>Sync noturno (AWS RDS → Railway)</strong></p>
+<ul>
+<li><a href="https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/.github/workflows/sync-towers.yml">.github/workflows/sync-towers.yml</a>,
+  cron <code>05:00 UTC</code>.</li>
+<li>Tunelamento SSM via bastion EC2 (sem ingress de SG) → <code>localhost:15432</code>
+  → <code>RDS:5432</code>; executa
+  <code>import_towers.py --source-env AWS --target-env RAILWAY --delete-missing</code>.</li>
+</ul>
 <h2 id="s3-single-source-of-truth">S3 — single source of truth<a class="headerlink" href="#s3-single-source-of-truth" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code>s3://telecom-tower-power-results/
 ├── models/coverage_model.npz          ← artefato ML (ridge-v1, 1850 B)
