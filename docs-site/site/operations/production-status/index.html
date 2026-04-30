@@ -16,7 +16,7 @@
         <link rel="prev" href="../../getting-started/rate-limits/">
       
       
-        <link rel="next" href="../runbook/">
+        <link rel="next" href="../architecture/">
       
       
         
@@ -772,6 +772,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Arquitetura
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1778,7 +1806,7 @@
 </ul>
 </li>
 <li><strong>Caddy</strong> listens on <code>:80</code> behind the ALB (which terminates TLS). Routing rules:<ul>
-<li><code>api.telecomtowerpower.com.br</code> → Railway edge (<code>i1fuknjg.up.railway.app</code>).
+<li><code>api.telecomtowerpower.com.br</code> → Railway edge (<code>web-production-90b1f.up.railway.app</code>).
   <strong>A terminação TLS depende do estado do failover do Route 53</strong> — veja abaixo.</li>
 <li><code>www.*</code> / <code>app.*</code> API paths (<code>/api/*</code>, <code>/health*</code>, <code>/calculate*</code>, <code>/towers*</code>, <code>/batch*</code>, <code>/jobs*</code>, <code>/docs*</code>, <code>/openapi.json</code>, <code>/stripe*</code>, <code>/usage*</code>, <code>/api-key*</code>, <code>/signup*</code>, <code>/login*</code>, <code>/profile*</code>, <code>/portal*</code>, <code>/analyze*</code>, <code>/plan_repeater*</code>, <code>/export_report*</code>, <code>/bedrock*</code>, <code>/coverage*</code>, <code>/srtm*</code>) → Railway.</li>
 <li><code>/webhook*</code> → local Stripe handler on <code>localhost:8001</code>.</li>
@@ -1974,6 +2002,8 @@
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
       
     
   </body>
