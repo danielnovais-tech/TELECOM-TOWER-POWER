@@ -1,0 +1,95 @@
+name: Seed Coverage Observations
+
+# Bulk-load real RF measurements from a remote CSV into the
+# `link_observations` table on the production Railway Postgres. Once
+# the table holds ≥ 1 000 rows, the next nightly retrain
+# (`retrain-coverage-model.yml`) will train on a genuinely non-synthetic
+# blend.
+#
+# Trigger:
+#   gh workflow run seed-observations.yml \
+#     -f csv_url=https://example.com/drive_test.csv \
+#     -f column_map="rx_lat=latitude rx_lon=longitude observed_dbm=rsrp \
+#                    freq_hz=earfcn_freq_hz tx_lat=site_lat tx_lon=site_lon"
+#
+# Source CSV must be reachable over plain HTTPS (no auth). For
+# auth-gated datasets (Kaggle, IEEE Dataport), download locally and
+# run `python scripts/seed_observations.py` directly against
+# `DATABASE_URL`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      csv_url:
+        description: 'Public HTTPS URL of the CSV to ingest (plain or .csv.gz)'
+        required: true
+      column_map:
+        description: 'Optional space-separated canonical=source overrides'
+        required: false
+        default: ''
+      limit:
+        description: 'Stop after N successfully coerced rows (0 = no limit)'
+        required: false
+        default: '0'
+      dry_run:
+        description: 'Validate without writing to Postgres'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install --no-cache-dir psycopg2-binary
+
+      - name: Download CSV
+        env:
+          CSV_URL: ${{ inputs.csv_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/seed
+          curl --fail --location --silent --show-error \
+            --max-time 600 \
+            "$CSV_URL" -o /tmp/seed/data.csv
+          ls -lh /tmp/seed/data.csv
+          # Sanity: refuse < 1 KB downloads (HTML error pages, 0-byte truncation).
+          size=$(stat -c%s /tmp/seed/data.csv)
+          if [ "$size" -lt 1024 ]; then
+            echo "::error::Downloaded CSV is suspiciously small ($size bytes)"
+            head -c 500 /tmp/seed/data.csv
+            exit 1
+          fi
+          head -2 /tmp/seed/data.csv
+
+      - name: Seed link_observations
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          MAP: ${{ inputs.column_map }}
+          LIMIT: ${{ inputs.limit }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          args=(--csv /tmp/seed/data.csv --limit "$LIMIT" -v)
+          if [ "$DRY" = "true" ]; then args+=(--dry-run); fi
+          # Split MAP into separate --map flags.
+          for entry in $MAP; do args+=(--map "$entry"); done
+          python scripts/seed_observations.py "${args[@]}"
+
+      - name: Report counts
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          python -c "from observation_store import ObservationStore; \
+            print('link_observations:', ObservationStore().counts())"

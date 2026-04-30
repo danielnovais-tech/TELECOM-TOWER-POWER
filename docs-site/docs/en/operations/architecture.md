@@ -92,7 +92,7 @@ flowchart TB
 flowchart LR
     subgraph CI["Nightly CI · retrain_coverage_model.py"]
         Synth[Synthetic generator<br/>n=10 000, seed=42]
-        Real[(Postgres link_observations<br/>real measurements via<br/>POST /coverage/observations)]
+        Real[(Postgres link_observations<br/>real measurements via<br/>POST /coverage/observations<br/>or scripts/seed_observations.py)]
         Train[train_model<br/>l2=1.0, ridge-v1<br/>real rows up-weighted 3×]
     end
 
@@ -189,7 +189,7 @@ sequenceDiagram
 | **Link budget** | Free-space path loss + Fresnel zone + earth curvature (effective radius `k=4/3`). See [pdf_generator.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/pdf_generator.py) (`_free_space_path_loss`, first-zone envelope, `earth_bulge`). |
 | **Repeater planning** | **Bottleneck-shortest-path** Dijkstra (min-max) over candidate towers; relaxation `new_bottleneck = max(bottleneck, effective_loss)` with terrain-scored `effective_loss` ([telecom_tower_power_api.py#L731](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/telecom_tower_power_api.py#L731)). |
 | **PDF reports** | ReportLab for tables/layout + Matplotlib for the terrain + Fresnel-zone plot ([pdf_generator.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/pdf_generator.py)). |
-| **ML signal prediction** | Ridge regression on **17 engineered features** (SRTM profiles, slope, obstruction count, min Fresnel ratio, log/interaction terms). Trained on synthetic physics (`_physics_signal`) + log-normal shadow fading; real point-to-point measurements posted to `POST /coverage/observations` land in `link_observations` and are up-weighted 3× once ≥ 1 000 fresh rows accumulate (nightly `retrain-coverage-model.yml`). Current state: 0 real measurements ingested → model is 100 % synthetic and transitions automatically as customers submit data. **Fallback chain:** SageMaker endpoint → local `.npz` model → deterministic physics ([coverage_predict.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/coverage_predict.py) — `_FEATURE_NAMES`, `predict_signal`). |
+| **ML signal prediction** | Ridge regression on **17 engineered features** (SRTM profiles, slope, obstruction count, min Fresnel ratio, log/interaction terms). Trained on synthetic physics (`_physics_signal`) + log-normal shadow fading; real point-to-point measurements posted to `POST /coverage/observations` (or bulk-loaded via [`scripts/seed_observations.py`](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/scripts/seed_observations.py) / workflow `seed-observations.yml`) land in `link_observations` and are up-weighted 3× once ≥ 1 000 fresh rows accumulate (nightly `retrain-coverage-model.yml`). Current state: 0 real measurements ingested → model is 100 % synthetic and transitions automatically as customers submit data. **Fallback chain:** SageMaker endpoint → local `.npz` model → deterministic physics ([coverage_predict.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/coverage_predict.py) — `_FEATURE_NAMES`, `predict_signal`). |
 
 ## 🗄️ Data Pipeline
 
