@@ -157,7 +157,7 @@ sequenceDiagram
 
 | Layer | Implementation |
 |---|---|
-| **Primary API** | FastAPI (Python 3.13) — prod traffic via Caddy on EC2 t3.small (sa-east-1) reverse-proxied to Railway; ECS Fargate task-def rev 44 kept warm. Local stack: **18-service** Docker Compose. |
+| **Primary API** | FastAPI (Python 3.13) — `api.telecomtowerpower.com.br` resolves to the sa-east-1 ALB which round-robins between two targets: ECS Fargate (FastAPI direct, task-def rev 44) and an EC2 t3.small running Caddy that reverse-proxies to Railway. Local stack: **18-service** Docker Compose. |
 | **Database** | PostgreSQL **18.3** on Railway (managed) — **140,498** towers (verified from nightly dump). |
 | **Cache & Queue** | Redis 8.6.2 (SRTM cache, hop cache, jobs, rate-limits). |
 | **Batch** | Hybrid: ≤100 rows sync; >100 rows async via SQS → Lambda → S3. |
