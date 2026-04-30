@@ -163,7 +163,7 @@ sequenceDiagram
 | **Batch** | Híbrido: ≤1 100 linhas síncrono; >100 linhas assíncrono via SQS → Lambda → S3. |
 | **AI & ML** | AWS Bedrock (Claude / Titan / Llama) para chat; ridge-v1 (`coverage_predict.py`, 17 features). |
 | **Frontend** | React PWA servida por Nginx 1.30 + Streamlit + MkDocs (Material). |
-| **Monitoring** | Prometheus v3.11.2 + Grafana 13.0.1 + Alertmanager v0.32.0 + Jaeger 1.76.0 (OTLP). |
+| **Monitoring** | Prometheus v3.11.2 + Grafana 13.0.1 + Alertmanager v0.32.0 + Jaeger 1.76.0 (OTLP, head sampling 5% via `ParentBased(TraceIdRatioBased(0.05))` em [tracing.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/tracing.py); ajustável via `OTEL_TRACES_SAMPLER_ARG`). |
 | **Failover** | Railway ativo para `api.*`; ECS Fargate em hot-warm; Route 53 latency-based failover **planejado**. |
 | **Backups** | Nightly: Grafana volume → S3 (~23,05 MB), Railway Postgres → S3 (~1,78 MB gzip, restore verificado semanal). |
 | **CI/CD** | **19** workflows GitHub Actions (deploy, backup, drift, failover, retrain, secrets sync, …). |

@@ -6,6 +6,8 @@ Evaluation mode: tracing is OFF by default. Enable by setting:
     OTEL_ENABLED=true
     OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317   # OTLP/gRPC into Jaeger
     OTEL_SERVICE_NAME=telecom-tower-power-api         # optional
+    OTEL_TRACES_SAMPLER_ARG=0.05                      # head sample ratio
+                                                      # (default 5%)
 
 If `OTEL_ENABLED` is not truthy, `setup_tracing()` is a no-op — so the
 production path keeps zero overhead until we opt in.
@@ -48,6 +50,7 @@ def setup_tracing(app, service_name: Optional[str] = None) -> bool:
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
             OTLPSpanExporter,
         )
@@ -72,7 +75,17 @@ def setup_tracing(app, service_name: Optional[str] = None) -> bool:
         return True
 
     resource = Resource.create({"service.name": name})
-    provider = TracerProvider(resource=resource)
+    # Head-based sampling: keep ~5% of root traces by default. Honour the
+    # parent decision when one is propagated so distributed traces stay
+    # consistent across services. Override with OTEL_TRACES_SAMPLER_ARG
+    # (a float in [0.0, 1.0]).
+    try:
+        ratio = float(os.getenv("OTEL_TRACES_SAMPLER_ARG", "0.05"))
+    except ValueError:
+        ratio = 0.05
+    ratio = max(0.0, min(1.0, ratio))
+    sampler = ParentBased(root=TraceIdRatioBased(ratio))
+    provider = TracerProvider(resource=resource, sampler=sampler)
     exporter = OTLPSpanExporter(endpoint=endpoint, insecure=insecure)
     provider.add_span_processor(BatchSpanProcessor(exporter))
     provider._ttp_configured = True  # type: ignore[attr-defined]
@@ -84,6 +97,7 @@ def setup_tracing(app, service_name: Optional[str] = None) -> bool:
     RequestsInstrumentor().instrument()
 
     logger.info(
-        "tracing enabled (service=%s, endpoint=%s)", name, endpoint,
+        "tracing enabled (service=%s, endpoint=%s, sample_ratio=%.3f)",
+        name, endpoint, ratio,
     )
     return True
