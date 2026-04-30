@@ -182,6 +182,46 @@ sequenceDiagram
 | **CI/CD** | 16 workflows GitHub Actions · BuildKit cache · sync de secrets via SSM · drill semanal de restore | Push-to-deploy, retrain noturno, restore drill |
 | **Backups** | Postgres + volume Grafana → S3 nightly (14d retenção) · restore verificado semanal | DR, RPO ≈ 24h |
 
+## 🗄️ Data Pipeline
+
+**Tower sources**
+
+- **ANATEL** (oficial) — 105.240 estações únicas (contagem da prod Postgres).
+  Geocodificadas via centroides de municípios IBGE + jitter aleatório leve
+  (~800 m) para que torres da mesma cidade não se sobreponham
+  ([load_anatel.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/load_anatel.py)).
+- **OpenCelliD** (crowdsourced) — 35.248 células com GPS
+  ([load_opencellid.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/load_opencellid.py)).
+
+**Geocodificação**
+
+- Tabela pré-construída com ~5.570 municípios IBGE em
+  `municipios_brasileiros.csv` → centroide + ±jitter.
+- Cache miss recorre ao Nominatim (rate-limit 1,1 req/s).
+- **Refinamento ANATEL→OpenCelliD** (
+  [snap_anatel.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/snap_anatel.py)):
+  para cada torre `ANATEL_*`, encontra a torre `OCID_*` mais próxima do
+  **mesmo operador** dentro de um raio configurável (padrão **5 km**) usando
+  índice por buckets de 0,05° + distância haversine; grava `lat`/`lon` da
+  candidata, mantendo o `id`. Cobertura por bucket = 3×3, operação O(N).
+  CLI: `python snap_anatel.py [--max-km 5.0] [--dry-run]`.
+
+**Tiles SRTM (90 m)**
+
+- Arquivos `.hgt` locais em `./srtm_data/` (cache L1 in-process).
+- Cache L2 opcional em Redis: blobs `.hgt` brutos, TTL de 7 dias
+  ([srtm_elevation.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/srtm_elevation.py)
+  — chave `srtm:<tile>`).
+- Sem fallback Open-Elevation hoje; tile ausente → `ValueError`.
+
+**Sync noturno (AWS RDS → Railway)**
+
+- [.github/workflows/sync-towers.yml](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/.github/workflows/sync-towers.yml),
+  cron `05:00 UTC`.
+- Tunelamento SSM via bastion EC2 (sem ingress de SG) → `localhost:15432`
+  → `RDS:5432`; executa
+  `import_towers.py --source-env AWS --target-env RAILWAY --delete-missing`.
+
 ## S3 — single source of truth
 
 ```

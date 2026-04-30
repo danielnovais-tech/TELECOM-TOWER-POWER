@@ -182,6 +182,46 @@ sequenceDiagram
 | **CI/CD** | 16 workflows GitHub Actions · BuildKit cache · sync de secrets via SSM · drill semanal de restore | Push-to-deploy, retrain noturno, restore drill |
 | **Backups** | Postgres + volume Grafana → S3 nightly (14d retenção) · restore verificado semanal | DR, RPO ≈ 24h |
 
+## 🗄️ Data Pipeline
+
+**Tower sources**
+
+- **ANATEL** (official) — 105,240 unique stations (Postgres prod count).
+  Geocoded via IBGE municipality centroids + small random jitter (~800 m)
+  so same-city towers don't stack
+  ([load_anatel.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/load_anatel.py)).
+- **OpenCelliD** (crowdsourced) — 35,248 GPS-tagged cells
+  ([load_opencellid.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/load_opencellid.py)).
+
+**Geocoding**
+
+- Pre-built lookup table of ~5,570 IBGE municipalities in
+  `municipios_brasileiros.csv` → centroid + ±jitter.
+- Cache misses fall back to Nominatim (rate-limited to 1.1 req/s).
+- **ANATEL→OpenCelliD snap pass** (
+  [snap_anatel.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/snap_anatel.py)):
+  for every `ANATEL_*` tower, find the closest `OCID_*` tower of the
+  **same operator** within a configurable radius (default **5 km**) using
+  a 0.05° spatial bucket index + haversine distance; rewrite `lat`/`lon`
+  to the candidate's, keeping the `id`. 3×3 bucket lookup, O(N) overall.
+  CLI: `python snap_anatel.py [--max-km 5.0] [--dry-run]`.
+
+**SRTM elevation tiles (90 m)**
+
+- Local `.hgt` files in `./srtm_data/` (L1 in-process cache).
+- Optional Redis L2 cache: raw `.hgt` blobs, 7-day TTL
+  ([srtm_elevation.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/srtm_elevation.py)
+  — key `srtm:<tile>`).
+- No Open-Elevation API fallback today; missing tile → `ValueError`.
+
+**Nightly sync (AWS RDS → Railway)**
+
+- [.github/workflows/sync-towers.yml](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/.github/workflows/sync-towers.yml),
+  cron `05:00 UTC`.
+- SSM port-forward via EC2 bastion (no SG ingress) → `localhost:15432`
+  → `RDS:5432`; runs
+  `import_towers.py --source-env AWS --target-env RAILWAY --delete-missing`.
+
 ## S3 — single source of truth
 
 ```
