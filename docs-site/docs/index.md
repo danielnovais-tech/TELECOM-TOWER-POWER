@@ -10,7 +10,7 @@ Uma API REST que responde à pergunta que todo ISP, consultor RF e operadora se 
 
 > *"Existe uma torre que possa atender este endereço, com linha de visada e margem de enlace suficiente?"*
 
-Entregamos a resposta em milissegundos, consultando 140.906 torres georreferenciadas (ANATEL + OpenCelliD), cruzando com relevo SRTM de 90 m e — opcionalmente — produzindo uma análise técnica em linguagem natural via IA.
+Entregamos a resposta em milissegundos, consultando 140.498 torres georreferenciadas (ANATEL + OpenCelliD), cruzando com relevo SRTM de 90 m e — opcionalmente — produzindo uma análise técnica em linguagem natural via IA.
 
 ## Em 30 segundos
 

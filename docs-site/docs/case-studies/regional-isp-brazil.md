@@ -54,7 +54,7 @@ Resultado em 90 dias:
             ┌─────────────┼──────────────┐
             ▼             ▼              ▼
       Postgres       SQS Priority    Audit log
-     140.906 torres   → Lambda      → /tenant/audit
+     140.498 torres   → Lambda      → /tenant/audit
                                     → SIEM mensal
 ```
 

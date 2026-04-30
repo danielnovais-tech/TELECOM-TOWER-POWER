@@ -153,6 +153,22 @@ sequenceDiagram
 
 ## Camadas
 
+### Verified summary (`Apr 2026`)
+
+| Layer | Implementation |
+|---|---|
+| **Primary API** | FastAPI (Python 3.13) — prod traffic via Caddy on EC2 t3.small (sa-east-1) reverse-proxied to Railway; ECS Fargate task-def rev 44 kept warm. Local stack: **18-service** Docker Compose. |
+| **Database** | PostgreSQL **18.3** on Railway (managed) — **140,498** towers (verified from nightly dump). |
+| **Cache & Queue** | Redis 8.6.2 (SRTM cache, hop cache, jobs, rate-limits). |
+| **Batch** | Hybrid: ≤100 rows sync; >100 rows async via SQS → Lambda → S3. |
+| **AI & ML** | AWS Bedrock (Claude / Titan / Llama) for chat; ridge-v1 (`coverage_predict.py`, 17 features). |
+| **Frontend** | React PWA served by Nginx 1.30 + Streamlit + MkDocs (Material). |
+| **Monitoring** | Prometheus v3.11.2 + Grafana 13.0.1 + Alertmanager v0.32.0 + Jaeger 1.76.0 (OTLP). |
+| **Failover** | Railway active for `api.*`; ECS Fargate kept warm; Route 53 latency-based failover **planned**. |
+| **Backups** | Nightly: Grafana volume → S3 (~23.05 MB), Railway Postgres → S3 (~1.78 MB gzip, weekly verified restore). |
+| **CI/CD** | **19** GitHub Actions workflows (deploy, backup, drift, failover, retrain, secrets sync, …). |
+| **TLS** | ACM on ALB (sa-east-1) terminates HTTPS; Caddy on EC2 serves :80 origin only. |
+
 | Camada | Componentes | Função |
 |---|---|---|
 | **Edge** | ALB · Caddy · Railway router · Route 53 (DNS failover) | TLS termination, host routing, health checks |
