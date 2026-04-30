@@ -66,31 +66,64 @@ All features and security items shipped to production are live, tested, and docu
 
 ## Architecture
 
+For a deeper dive (sequence diagrams, ML pipeline, request lifecycle) see
+[docs-site/docs/operations/architecture.md](docs-site/docs/operations/architecture.md)
+(rendered at `https://docs.telecomtowerpower.com.br/operations/architecture/`).
+
 ```
-                           ┌──────────────────────────────────────────────────────┐
-                           │                 Docker Compose Stack                 │
-                           │                                                     │
-┌──────────────┐           │  ┌──────────────────────────────────┐               │
-│  React SPA   │───────────│─▸│  FastAPI  (telecom_tower_power   │               │
-│  (Leaflet)   │ port 3000 │  │           _api.py)  :8000        │               │
-└──────────────┘           │  │                                  │               │
-                           │  │  Auth ─▸ Rate Limiter ─▸ Metrics │               │
-┌──────────────┐           │  │  CORS ─▸ Security Headers        │               │
-│ Streamlit UI │───────────│─▸│  Stripe billing │ Prometheus     │               │
-│ frontend.py  │ port 8501 │  └────────┬────────┴────────────────┘               │
-└──────────────┘           │           │                                         │
-                           │           ▼                                         │
-                           │  ┌─────────────────┐   ┌────────────────────┐       │
-                           │  │  PostgreSQL 16   │   │  Batch Worker      │       │
-                           │  │  (tower_db.py)   │◂──│  (batch_worker.py) │       │
-                           │  │  towers, jobs    │   │  polls job queue   │       │
-                           │  └─────────────────┘   └────────────────────┘       │
-                           │                                                     │
-                           │  ┌─────────────────┐   ┌────────────────────┐       │
-                           │  │  Prometheus      │──▸│  Grafana           │       │
-                           │  │  :9090           │   │  :3001             │       │
-                           │  └─────────────────┘   └────────────────────┘       │
-                           └──────────────────────────────────────────────────────┘
+                    ┌──────────────────────────── PUBLIC INGRESS ────────────────────────────┐
+                    │                                                                         │
+   api.telecomtowerpower.com.br ────────► AWS ALB (sa-east-1) ────────► ECS Fargate           │
+   app/www/monitoring/prometheus.* ─────► Caddy on EC2 (EIP 18.229.14.122)                    │
+   web-production-90b1f.up.railway.app ─► Railway router (warm failover)                      │
+                    └─────────────────────────────────────────────────────────────────────────┘
+                                                  │
+        ┌─────────────────────────────────────────┼────────────────────────────────────────┐
+        ▼                                         ▼                                        ▼
+┌──────────────────┐               ┌──────────────────────────────┐            ┌──────────────────┐
+│  ECS Fargate     │               │  EC2  (Docker Compose stack) │            │  Railway service │
+│  rev 38+         │               │  api · frontend · streamlit  │            │  identical image │
+│  prod-of-record  │               │  prometheus · grafana · loki │            │                  │
+└────────┬─────────┘               └─────────┬────────────────────┘            └──────┬───────────┘
+         │                                   │                                         │
+         └───────────────────┬───────────────┴─────────────────────────────────────────┘
+                             ▼
+              ┌──────────────────────────────┐
+              │   FastAPI app  (3700+ LOC)   │      telecom_tower_power_api.py
+              │   Auth · Rate-limit · Audit  │      verify_api_key · require_tier
+              │   CORS · Prometheus metrics  │
+              │                              │
+              │   /towers · /towers/nearest  │      Tower DB (CRUD + nearest-neighbour)
+              │   /analyze                   │      Fresnel · LOS · RSSI · SRTM profile
+              │   /plan_repeater[/async]     │      Dijkstra · Redis hop cache
+              │   /coverage/predict          │      ridge-v1 ML  (terrain-aware)
+              │   /coverage/observations     │      Real-RSSI ingestion (DB-backed retrain)
+              │   /batch_reports · /jobs/{id}│      Sync ZIP · async SQS+Lambda
+              │   /bedrock/{chat,compare}    │      AWS Bedrock foundation models
+              │   /tenant/* · /admin/*       │      Branding · audit · sales · impersonate
+              └─────────────┬────────────────┘
+                            │
+       ┌────────────────────┼─────────────────────┬──────────────────────────────┐
+       ▼                    ▼                     ▼                              ▼
+┌───────────────┐ ┌──────────────────┐ ┌───────────────────────┐ ┌────────────────────────┐
+│ PostgreSQL 16 │ │ ElastiCache Redis│ │ S3                    │ │ External APIs          │
+│ RDS prod /    │ │  hop cache       │ │  models/coverage_*.npz│ │  AWS Bedrock           │
+│ SQLite dev    │ │  jobs queue      │ │  reports/{tenant}/*   │ │  Stripe (billing)      │
+│ towers·jobs   │ │  rate-limits     │ │  backups/postgres/*   │ │  Cognito (OIDC SSO)    │
+│ api_keys·audit│ │                  │ │  backups/grafana/*    │ │  NASA SRTM             │
+│ link_obs·cells│ │                  │ │                       │ │  OpenCelliD / ANATEL   │
+└───────────────┘ └──────────────────┘ └───────────────────────┘ └────────────────────────┘
+                                                  ▲
+                                                  │ refresh_from_s3() on container boot
+                                                  │
+                  ┌───────────────────────────────┴──────────────────────────────┐
+                  │  ML pipeline (coverage_predict.py)                            │
+                  │   Nightly CI ─► retrain (synthetic + real obs)                │
+                  │             ─► coverage_model.npz  (ridge-v1, 17 features)    │
+                  │             ─► aws s3 cp s3://.../models/                     │
+                  │   Boot      ─► entrypoint.sh refresh_from_s3 ─► load → log    │
+                  │             "Coverage model active: ver=ridge-v1 rmse=12.94"  │
+                  └───────────────────────────────────────────────────────────────┘
 
 SQLite fallback: when DATABASE_URL is not set, the API and worker use a local
 towers.db file automatically — no PostgreSQL required for development.
