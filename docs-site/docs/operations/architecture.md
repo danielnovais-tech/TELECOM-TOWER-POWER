@@ -182,6 +182,15 @@ sequenceDiagram
 | **CI/CD** | 16 workflows GitHub Actions · BuildKit cache · sync de secrets via SSM · drill semanal de restore | Push-to-deploy, retrain noturno, restore drill |
 | **Backups** | Postgres + volume Grafana → S3 nightly (14d retenção) · restore verificado semanal | DR, RPO ≈ 24h |
 
+## 🧠 Key Algorithms
+
+| Feature | Implementation |
+|---|---|
+| **Link budget** | Free-space path loss + zona de Fresnel + curvatura terrestre (raio efetivo `k=4/3`). Ver [pdf_generator.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/pdf_generator.py) (`_free_space_path_loss`, envelope da 1ª zona, `earth_bulge`). |
+| **Repeater planning** | Dijkstra de **caminho gargalo** (min-max) sobre torres candidatas; relaxação `new_bottleneck = max(bottleneck, effective_loss)` com `effective_loss` ponderado por terreno ([telecom_tower_power_api.py#L731](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/telecom_tower_power_api.py#L731)). |
+| **PDF reports** | ReportLab para tabelas/layout + Matplotlib para o plot de terreno + zona de Fresnel ([pdf_generator.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/pdf_generator.py)). |
+| **ML signal prediction** | Regressão ridge sobre **17 features** engenhadas (perfis SRTM, slope, contagem de obstruções, razão mínima de Fresnel, termos log/interação). Treinada em física sintética (`_physics_signal`) + sombra log-normal, com up-weight opcional de dados reais. **Cadeia de fallback:** SageMaker endpoint → modelo local `.npz` → física determinística ([coverage_predict.py](https://github.com/danielnovais-tech/TELECOM-TOWER-POWER/blob/main/coverage_predict.py) — `_FEATURE_NAMES`, `predict_signal`). |
+
 ## 🗄️ Data Pipeline
 
 **Tower sources**
