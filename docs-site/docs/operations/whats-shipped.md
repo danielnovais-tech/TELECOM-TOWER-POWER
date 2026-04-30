@@ -15,7 +15,7 @@
 ## Features
 
 - **140,498 Brazilian towers** — ANATEL (105,240 across 12 operators and 5,570 municipalities, geocoded from IBGE municipality centroids) + OpenCelliD (35,248 GPS-tagged cells). A post-load pass (`snap_anatel.py`) snaps each ANATEL tower to the nearest same-operator OpenCelliD tower within 5 km when one is available.
-- **Tiered pricing & billing** — 5 tiers (Free, Pro, Business, Enterprise, Ultra) + annual plans. Stripe webhook auto-provisions API keys on checkout success.
+- **Tiered pricing & billing** — 6 tiers (Free, Starter, Pro, Business, Enterprise, Ultra) + annual plans. Stripe webhook auto-provisions API keys on checkout success.
 - **White-label tenant mode** — per-tenant branding, dynamic CORS, custom logo/favicon.
 - **Audit log** — every tenant action recorded with actor, route, params, IP, and timestamp; queryable via `GET /tenant/audit`.
 - **SSO / OIDC** — Cognito User Pool with Hosted UI; server-side OAuth code exchange; Bearer-token fallback in `verify_api_key` lets enterprise users hit the raw API directly with their Cognito ID token.

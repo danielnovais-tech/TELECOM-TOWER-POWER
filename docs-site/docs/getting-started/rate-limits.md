@@ -8,7 +8,8 @@ Cada chave tem uma janela deslizante de 60 segundos. Ao ser excedida a API devol
 | Starter | 30 | 3.000 | 100 |
 | Pro | 100 | 25.000 | 500 |
 | Business | 300 | 150.000 | 2.000 |
-| Enterprise | 1.000+ | customizado | 10.000 |
+| Enterprise | 1.000 | customizado | 10.000 |
+| Ultra | 5.000 | customizado | 50.000 |
 
 ## Headers de resposta
 
