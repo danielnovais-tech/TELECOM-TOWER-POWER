@@ -42,7 +42,7 @@ Trigger the workflow:
 gh workflow run deploy-ec2-docker.yml
 ```
 
-The workflow builds, pushes the API image, and runs `docker compose pull && docker compose up -d` on EC2 via SSM. Rolling replacement is performed per service — no manual downtime window needed.
+The workflow opens an ephemeral SSH ingress on the EC2 security group, pushes a one-shot key via EC2 Instance Connect, then over SSH runs `git pull && docker compose build && docker compose up -d` on the host. Rolling replacement is performed per service — no manual downtime window needed.
 
 ### Sync Stripe secrets to EC2
 

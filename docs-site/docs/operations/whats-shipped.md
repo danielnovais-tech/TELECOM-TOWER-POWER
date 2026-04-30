@@ -43,7 +43,7 @@
 | Workflow | Purpose |
 |---|---|
 | `deploy-ecs.yml` | Build + push to ECR, register new task def, force ECS service update |
-| `deploy-ec2-docker.yml` | Build + ship images to EC2 over SSM; `docker compose up -d` |
+| `deploy-ec2-docker.yml` | SSH via EC2 Instance Connect (ephemeral SG ingress) → `git pull` → on-host `docker compose build && up -d` |
 | `deploy-lambda.yml` | SAM build/deploy for batch worker + priority worker + SSO callback |
 | `deploy-caddy.yml` | scp Caddyfile → EC2, `caddy reload`, post-deploy health checks |
 | `deploy-docs.yml` | Build mkdocs-material, push to S3, invalidate CloudFront |

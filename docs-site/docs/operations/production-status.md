@@ -32,7 +32,7 @@ Three hardened workflows drive production operations:
 
 | Workflow | Purpose |
 |---|---|
-| `deploy-ec2-docker.yml` | Build + push API image, SSM-deploy Docker Compose stack |
+| `deploy-ec2-docker.yml` | SSH via EC2 Instance Connect → `git pull` → build e `docker compose up -d` no host |
 | `update-ec2-stripe-secrets.yml` | Sync Stripe secrets to EC2 via SSM |
 | `update-ec2-alerting-secrets.yml` | Sync Slack webhook + SES SMTP credentials to EC2 |
 
@@ -84,6 +84,6 @@ Current files on EC2:
 
 ## Deployment
 
-- **Zero-downtime** — `aws ssm send-command` triggers `docker compose pull && docker compose up -d` on the EC2 host. Compose performs rolling replacement per service.
+- **Zero-downtime** — o workflow abre uma regra efêmera no SG, injeta uma chave SSH one-shot via EC2 Instance Connect e roda `git pull && docker compose build && docker compose up -d` no host EC2 via SSH. O Compose faz substituição rolling por serviço.
 - **No SSH keys in CI** — all remote execution goes through SSM.
 - **Railway/Railpack compatibility preserved** — `railway.json`, `Procfile`, and `Dockerfile` remain valid; API image can be redeployed to Railway without changes.
