@@ -98,10 +98,16 @@ jobs:
           # patching is handled by unattended-upgrades on a timer.
 
           echo "==> Pulling latest code..."
+          # Capture current HEAD before pulling so we can roll back if the new
+          # build fails its post-deploy health check.
+          PREV_SHA=$(git rev-parse HEAD)
+          echo "==> Previous commit: $PREV_SHA"
           git config credential.helper '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN}"; }; f'
           git stash --include-untracked 2>/dev/null || true
           git pull origin main
           git config --unset credential.helper
+          NEW_SHA=$(git rev-parse HEAD)
+          echo "==> New commit:      $NEW_SHA"
 
           echo "==> Pulling latest Docker base images..."
           docker compose pull --quiet postgres redis 2>/dev/null || true
@@ -163,8 +169,25 @@ jobs:
           STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" http://localhost:8000/health)
           echo "API health check: HTTP $STATUS"
           if [ "$STATUS" != "200" ]; then
-            echo "ERROR: API health check failed"
-            docker compose logs --tail=30 api
+            echo "::error::API health check failed (HTTP $STATUS) — attempting auto-rollback to $PREV_SHA"
+            docker compose logs --tail=50 api || true
+            if [ -n "$PREV_SHA" ] && [ "$PREV_SHA" != "$NEW_SHA" ]; then
+              echo "==> Rolling back: git reset --hard $PREV_SHA"
+              git reset --hard "$PREV_SHA"
+              echo "==> Rebuilding api at previous commit..."
+              docker compose build api
+              docker compose up -d --no-deps api
+              sleep 10
+              ROLLBACK_STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+              echo "Rollback health check: HTTP $ROLLBACK_STATUS"
+              if [ "$ROLLBACK_STATUS" = "200" ]; then
+                echo "::warning::Auto-rollback to $PREV_SHA succeeded. New commit $NEW_SHA was reverted."
+              else
+                echo "::error::Auto-rollback also failed (HTTP $ROLLBACK_STATUS). Manual intervention required."
+              fi
+            else
+              echo "::error::No previous SHA available for rollback (PREV_SHA=$PREV_SHA NEW_SHA=$NEW_SHA)."
+            fi
             exit 1
           fi
           echo "==> Deploy complete"

@@ -133,10 +133,17 @@ jobs:
             if [ "${{ github.event.inputs.force_new_deployment }}" = "true" ]; then
               FORCE="--force-new-deployment"
             fi
+            # Auto-rollback: deploymentCircuitBreaker rolls the service back to
+            # the previous task-def revision when the new tasks fail to reach a
+            # steady state (failed container health checks, crash loops, ALB
+            # target-group unhealthy, etc.). minimumHealthyPercent=100 +
+            # maximumPercent=200 forces blue/green-style rolling replacement so
+            # capacity never dips below 100% during the rollout.
             aws ecs update-service \
               --cluster "$CLUSTER_NAME" \
               --service "$SERVICE_NAME" \
               --task-definition "${{ steps.register.outputs.task_def_arn }}" \
+              --deployment-configuration "deploymentCircuitBreaker={enable=true,rollback=true},minimumHealthyPercent=100,maximumPercent=200" \
               $FORCE \
               --region "$AWS_REGION" \
               --query 'service.{status:status,desired:desiredCount,running:runningCount}' \

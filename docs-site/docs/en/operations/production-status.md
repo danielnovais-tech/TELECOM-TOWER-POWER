@@ -32,7 +32,7 @@ Three hardened workflows drive production operations:
 
 | Workflow | Purpose |
 |---|---|
-| `deploy-ec2-docker.yml` | SSH via EC2 Instance Connect → `git pull` → on-host `docker compose build && up -d` |
+| `deploy-ec2-docker.yml` | SSH via EC2 Instance Connect → `git pull` → on-host `docker compose build && up -d` → auto-rollback (`git reset --hard $PREV_SHA` + rebuild) on `/health` failure |
 | `update-ec2-stripe-secrets.yml` | Sync Stripe secrets to EC2 via SSM |
 | `update-ec2-alerting-secrets.yml` | Sync Slack webhook + SES SMTP credentials to EC2 |
 
