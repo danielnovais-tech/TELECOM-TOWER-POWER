@@ -28,7 +28,7 @@
 | ✅ | CC4.1.2 | Synthetic monitor probes all three entrypoints | 2026 (in production) |
 | ✅ | CC7.3.1 | PagerDuty (critical) + Slack (warning) live with `send_resolved=true` | 2026-04 |
 | ✅ | CC6.1.1 | Cognito SSO + MFA enforced for admin Cognito group | 2026-04 |
-| ✅ | CC8.1.2 | 16 hardened GitHub Actions workflows with concurrency + retries | 2026-04-27 |
+| ✅ | CC8.1.2 | 19 hardened GitHub Actions workflows with concurrency + retries | 2026-04-27 |
 
 ## Pre-audit readiness checklist
 

@@ -84,7 +84,7 @@
 | ID | TSC | PoF | Control | Owner | Evidence | Cadence | Test |
 |---|---|---|---|---|---|---|---|
 | CC8.1.1 | CC8.1 | Change authorization | All production changes via GitHub PR with ≥1 reviewer; main branch protected | Engineering | GitHub branch protection + PR audit log | Continuous | Sample 25 merged PRs |
-| CC8.1.2 | CC8.1 | Automated deployment | 16 hardened GitHub Actions workflows: deploy, secret-sync, backup, restore-drill, failover, synthetic | DevOps | `.github/workflows/` | Continuous | Inspect last 50 workflow runs |
+| CC8.1.2 | CC8.1 | Automated deployment | 19 hardened GitHub Actions workflows: deploy, secret-sync, backup, restore-drill, failover, synthetic | DevOps | `.github/workflows/` | Continuous | Inspect last 50 workflow runs |
 | CC8.1.3 | CC8.1 | Schema changes | Alembic migrations reviewed by CAB; backward-compatible by default | Engineering | `migrations/` + PR reviewers | Per-change | Sample 25 migration PRs |
 | CC8.1.4 | CC8.1 | Emergency change | Emergency hotfix path: deploy first, postmortem within 48 h | Engineering | `evidence/changes/emergency/` | Per-event | Sample 100% of emergency deploys |
 

@@ -32,7 +32,7 @@ No production change reaches customers without (a) automated tests, (b) peer rev
 3. **Review:** ≥1 reviewer with the relevant code-owner mapping (`.github/CODEOWNERS`). For infra or schema PRs, ≥1 reviewer from CAB.
 4. **CI:** All checks must pass — unit tests, integration tests, lint, type-check, security scan (Dependabot, ECR scan-on-push), `mkdocs build --strict`.
 5. **Merge:** Squash merge to `main`. Branch protection blocks force-push and requires up-to-date branch.
-6. **Deploy:** Automated via the matching workflow under `.github/workflows/`. All 16 workflows use `concurrency:` groups to serialize per-environment.
+6. **Deploy:** Automated via the matching workflow under `.github/workflows/`. All 19 workflows use `concurrency:` groups to serialize per-environment.
 7. **Post-deploy:** Health checks; on failure, automated rollback (where supported) or paged on-call.
 
 ## 4. Emergency change

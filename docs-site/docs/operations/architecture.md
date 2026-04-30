@@ -179,7 +179,7 @@ sequenceDiagram
 | **Async** | SQS priority queue · Lambda consumer · `batch_worker.py` · `repeater_jobs_store.py` (Redis) | Batches PDF longos e planejamento ≥4 hops |
 | **Auth** | API keys (`key_store_db.py`) · Cognito OIDC + Bearer · rate limits por tier · audit log | Hardening OWASP-Top-10 |
 | **Observability** | Prometheus (13 regras) · Grafana · Alertmanager · OpenTelemetry · Loki | Métricas, dashboards, paging (Slack + PagerDuty) |
-| **CI/CD** | 16 workflows GitHub Actions · BuildKit cache · sync de secrets via SSM · drill semanal de restore | Push-to-deploy, retrain noturno, restore drill |
+| **CI/CD** | 19 workflows GitHub Actions · BuildKit cache · sync de secrets via SSM · drill semanal de restore | Push-to-deploy, retrain noturno, restore drill |
 | **Backups** | Postgres + volume Grafana → S3 nightly (14d retenção) · restore verificado semanal | DR, RPO ≈ 24h |
 
 ## 🧠 Key Algorithms

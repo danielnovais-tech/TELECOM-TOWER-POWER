@@ -38,7 +38,7 @@
 - **Weekly restore drill** (`backup-restore-drill.yml`) every Monday 07:15 UTC: pulls the latest dump, verifies it's ≤36 h old, restores into an ephemeral Postgres 18 container, and asserts row counts on `towers` (≥100k), `api_keys` (≥1), `alembic_version` (≥1). Failures optionally page via SNS.
 - **Failover rotate & drift check** — periodic Route 53 / ALB drift detection between ECS and Railway.
 
-## CI/CD — 16 hardened GitHub Actions workflows
+## CI/CD — 19 hardened GitHub Actions workflows
 
 | Workflow | Purpose |
 |---|---|

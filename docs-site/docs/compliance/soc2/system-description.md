@@ -64,7 +64,7 @@ In scope:
 
 - All endpoints under `api.telecomtowerpower.com.br`.
 - All AWS resources in account `490083271496`, region `sa-east-1`.
-- The 16 GitHub Actions workflows under `.github/workflows/`.
+- The 19 GitHub Actions workflows under `.github/workflows/`.
 - Cognito User Pool `sa-east-1_15uR6sR9o`.
 - Stripe webhook endpoint at `app.telecomtowerpower.com.br/webhook`.
 - Public docs at `docs.telecomtowerpower.com.br`.

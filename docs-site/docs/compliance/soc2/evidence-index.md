@@ -16,7 +16,7 @@
 | CC7.1.1 | CVE patching SLA | GitHub Dependabot alerts + ECR image-scan findings | All findings during period |
 | CC7.3.1 | Incident pages | PagerDuty incident export | All P1/P2 during period |
 | CC8.1.1 | PR reviews | GitHub branch protection settings + merged PR audit log | Sample 25 |
-| CC8.1.2 | Workflow runs | GitHub Actions: all 16 workflows | Last 90 days, all runs |
+| CC8.1.2 | Workflow runs | GitHub Actions: all 19 workflows | Last 90 days, all runs |
 | A1.2.1 | Nightly backups | S3: `s3://telecom-tower-power-results/backups/railway-postgres/` | Last 90 dumps |
 | A1.2.2 | Verified restore drill | GitHub Actions: `backup-restore-drill.yml` | Last 12 weekly runs |
 | C1.1.2 | Tenant isolation | `models.py` + `test_suite.py::test_idor_*` | Test suite output (CI) |
