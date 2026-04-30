@@ -118,7 +118,8 @@ For a deeper dive (sequence diagrams, ML pipeline, request lifecycle) see
                                                   │
                   ┌───────────────────────────────┴──────────────────────────────┐
                   │  ML pipeline (coverage_predict.py)                            │
-                  │   Nightly CI ─► retrain (synthetic + real obs)                │
+                  │   Nightly CI ─► retrain (synthetic + OpenCelliD soft labels  │
+                  │                  + link_observations when ≥1k accumulate)    │
                   │             ─► coverage_model.npz  (ridge-v1, 17 features)    │
                   │             ─► aws s3 cp s3://.../models/                     │
                   │   Boot      ─► entrypoint.sh refresh_from_s3 ─► load → log    │
