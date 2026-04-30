@@ -96,9 +96,6 @@ def main() -> int:
                    help="Min new observations since last retrain (default: 1000)")
     p.add_argument("--n-synthetic", type=int, default=10_000,
                    help="Synthetic samples blended into training (default: 10000)")
-    p.add_argument("--with-opencellid", action="store_true",
-                   help="Also include OpenCelliD soft labels.")
-    p.add_argument("--max-opencellid", type=int, default=20_000)
     p.add_argument("--force", action="store_true",
                    help="Retrain even if delta < threshold.")
     p.add_argument("--dry-run", action="store_true",
@@ -136,8 +133,6 @@ def main() -> int:
 
     historical = load_historical_from_stores(
         include_observations=True,
-        include_opencellid=args.with_opencellid,
-        max_opencellid=args.max_opencellid,
     )
     logger.info("loaded %d historical samples", len(historical))
 
@@ -173,7 +168,6 @@ def main() -> int:
         "rmse_db": model.rmse_db,
         "n_train": model.n_train,
         "version": model.version,
-        "with_opencellid": args.with_opencellid,
     }
     _write_marker(s3, bucket, marker_key, payload)
     logger.info("wrote marker s3://%s/%s", bucket, marker_key)

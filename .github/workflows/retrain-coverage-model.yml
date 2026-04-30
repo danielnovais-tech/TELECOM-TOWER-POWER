@@ -22,10 +22,6 @@ on:
         description: 'Override observation-delta threshold (default 1000)'
         required: false
         default: '1000'
-      with_opencellid:
-        description: '(deprecated — free-tier OpenCelliD has no signal data; kept for compat)'
-        required: false
-        default: 'false'
       dry_run:
         description: 'Train + report but skip S3 upload + ECS rollout'
         required: false

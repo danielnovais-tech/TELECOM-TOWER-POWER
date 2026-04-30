@@ -47,22 +47,12 @@ def test_insert_observations_many(store):
     assert store.counts()["link_observations"] == 5
 
 
-def test_upsert_cell_samples_dedupes_on_tower_freq(store):
-    samples = [
-        {"tower_id": "C1", "centroid_lat": -23.5, "centroid_lon": -46.6,
-         "range_m": 1500, "samples": 100, "freq_hz": 1.8e9, "avg_signal_dbm": -90.0},
-        # Duplicate (tower_id, freq_hz) — should overwrite
-        {"tower_id": "C1", "centroid_lat": -23.5, "centroid_lon": -46.6,
-         "range_m": 1600, "samples": 200, "freq_hz": 1.8e9, "avg_signal_dbm": -88.0},
-        {"tower_id": "C1", "centroid_lat": -23.5, "centroid_lon": -46.6,
-         "range_m": 1500, "samples": 50, "freq_hz": 900e6, "avg_signal_dbm": -92.0},
-    ]
-    store.upsert_cell_samples_many(samples)
-    out = list(store.iter_cell_samples())
-    assert len(out) == 2
-    by_freq = {r["freq_hz"]: r for r in out}
-    assert by_freq[1.8e9]["avg_signal_dbm"] == -88.0  # latest wins
-    assert by_freq[1.8e9]["samples"] == 200
+# NOTE: tests for upsert_cell_samples_many / iter_cell_samples were removed
+# alongside the OpenCelliD averageSignal training path. The free-tier feed
+# returns 0 for 100 % of Brazilian rows, so the upsert path is unreachable
+# in practice. The schema + methods remain for backwards-compat with any
+# pre-existing prod data; if you need to revive it, restore both the test
+# and the call sites in coverage_predict.load_historical_from_stores.
 
 
 def test_counts_starts_empty(store):

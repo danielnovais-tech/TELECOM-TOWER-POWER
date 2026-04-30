@@ -326,7 +326,7 @@ Tower creation is **rate-limited per API key** — an in-memory counter tracks t
 | `POST` | `/coverage/predict` | Pro+ | ML-based signal prediction (point or grid) — terrain-aware, SageMaker-backed |
 | `POST` | `/coverage/observations` | Any tier | Submit a real RSSI measurement to improve the model |
 | `POST` | `/coverage/observations/batch` | Pro+ | Bulk-upload up to 10 000 measurements |
-| `GET` | `/coverage/observations/stats` | Any tier | Counts of stored observations and OpenCelliD samples |
+| `GET` | `/coverage/observations/stats` | Any tier | Counts of stored observations (link_observations) |
 | `GET` | `/export_report` | Pro+ | Download PDF link report |
 | `GET` | `/export_report/pdf` | Pro+ | Download PDF link report (alias) |
 | `POST` | `/batch_reports` | Pro+ | Upload CSV → ZIP of PDFs (≤100 sync, >100 async job) |

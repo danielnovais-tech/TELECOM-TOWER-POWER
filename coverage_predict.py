@@ -405,25 +405,28 @@ def _generate_synthetic_dataset(n: int) -> Tuple[np.ndarray, np.ndarray]:
 def load_historical_from_stores(
     *,
     include_observations: bool = True,
-    include_opencellid: bool = False,
+    include_opencellid: bool = False,  # deprecated, retained for arg compat
     max_observations: Optional[int] = None,
-    max_opencellid: Optional[int] = None,
+    max_opencellid: Optional[int] = None,  # deprecated, ignored
 ) -> List[Tuple[np.ndarray, float]]:
-    """Build training tuples from the two persisted label stores.
+    """Build training tuples from the persisted label store.
 
-    - ``link_observations`` rows are real point-to-point measurements; the
-      receiver position, antenna params, and ``observed_dbm`` are all known.
-      No terrain profile is fetched here (avoid round-trips at train time);
-      ``build_features`` falls back to zero terrain features when none is
-      provided. The local model already includes ``log_d_km`` and frequency
-      terms, so it can still learn a useful correction.
+    Only ``link_observations`` rows are used — real point-to-point
+    measurements where the receiver position, antenna params, and
+    ``observed_dbm`` are all known. No terrain profile is fetched here
+    (avoid round-trips at train time); ``build_features`` falls back to
+    zero terrain features when none is provided. The local model already
+    includes ``log_d_km`` and frequency terms, so it can still learn a
+    useful correction.
 
-    - ``cell_signal_samples`` rows are OpenCelliD ``averageSignal`` values
-      aggregated per cell. The exact receiver location is unknown, so we
-      treat the cell centroid as ``rx`` and ``range_m / 2`` as the link
-      distance. These are SOFT labels — by convention the caller should
-      down-weight them or ingest a smaller ``max_opencellid`` cap.
+    The ``cell_signal_samples`` table (OpenCelliD ``averageSignal``
+    aggregates) is no longer consulted: the free tier returns 0 for
+    100 %% of Brazilian rows (verified empirically 2026-04-30 with token
+    pk.e560… → 54 549 rows downloaded, 0 with non-zero averageSignal).
+    The ``include_opencellid`` and ``max_opencellid`` kwargs are kept
+    for argument compatibility but ignored.
     """
+    del include_opencellid, max_opencellid  # silence unused warnings
     from observation_store import ObservationStore  # local import to avoid cycles
     store = ObservationStore()
     out: List[Tuple[np.ndarray, float]] = []
@@ -446,23 +449,6 @@ def load_historical_from_stores(
                 terrain_profile=None,
             )
             out.append((feats, float(row["observed_dbm"])))
-
-    if include_opencellid:
-        for i, row in enumerate(store.iter_cell_samples()):
-            if max_opencellid is not None and i >= max_opencellid:
-                break
-            d_km = max(float(row["range_m"]) / 2_000.0, 0.05)  # half-range in km
-            feats = build_features(
-                d_km=d_km,
-                f_hz=float(row["freq_hz"]),
-                tx_h_m=35.0,        # OpenCelliD default tower height
-                rx_h_m=1.5,         # handset
-                tx_power_dbm=43.0,
-                tx_gain_dbi=17.0,
-                rx_gain_dbi=0.0,
-                terrain_profile=None,
-            )
-            out.append((feats, float(row["avg_signal_dbm"])))
 
     return out
 
@@ -994,15 +980,6 @@ if __name__ == "__main__":   # pragma: no cover
         "--with-observations", action="store_true",
         help="Include rows from the link_observations table as training labels.",
     )
-    p_train.add_argument(
-        "--with-opencellid", action="store_true",
-        help="Include OpenCelliD averageSignal rows from cell_signal_samples "
-             "as soft labels (cell centroid = rx, range/2 = distance).",
-    )
-    p_train.add_argument(
-        "--max-opencellid", type=int, default=20_000,
-        help="Cap on OpenCelliD soft-label rows used (default: 20000).",
-    )
 
     p_show = sub.add_parser("info", help="Show metadata for the persisted model")
 
@@ -1011,15 +988,12 @@ if __name__ == "__main__":   # pragma: no cover
 
     if args.cmd == "train":
         historical = None
-        if args.with_observations or args.with_opencellid:
+        if args.with_observations:
             historical = load_historical_from_stores(
                 include_observations=args.with_observations,
-                include_opencellid=args.with_opencellid,
-                max_opencellid=args.max_opencellid,
             )
             print(f"Loaded {len(historical)} historical samples "
-                  f"(observations={args.with_observations}, "
-                  f"opencellid={args.with_opencellid})")
+                  f"(observations={args.with_observations})")
         m = train_model(
             n_synthetic=args.n, l2=args.l2, seed=args.seed,
             save_to=args.out, historical=historical,
