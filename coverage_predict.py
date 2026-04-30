@@ -759,8 +759,10 @@ def predict_signal(
             rssi = model.predict(feats)
             source = "local-model"
             version = model.version
-            # 1 σ ≈ rmse; map to 0..1 confidence (≤ 6 dB → 0.9, ≥ 20 dB → 0.3)
-            confidence = max(0.3, min(0.9, 1.0 - (model.rmse_db - 6.0) / 20.0))
+            # 1 σ ≈ rmse; map to 0..1 confidence. Anchor on realistic sub-GHz
+            # NLOS propagation accuracy (Hata/Okumura class): ≤ 8 dB → 0.9
+            # (excellent), 13 dB → 0.75 (good), ≥ 18 dB → 0.4 (poor).
+            confidence = max(0.3, min(0.9, 1.0 - (model.rmse_db - 8.0) / 20.0))
 
     if rssi is None:
         rssi = _physics_fallback(feats)
