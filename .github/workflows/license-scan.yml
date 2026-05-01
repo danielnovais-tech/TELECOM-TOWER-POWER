@@ -197,3 +197,47 @@ jobs:
             exit 1
           fi
           echo "All $(git ls-files '*.py' | wc -l) Python files carry a valid SPDX header."
+
+  foreign-copyright:
+    # Detects files that carry an "All Rights Reserved" notice WITHOUT a
+    # recognized SPDX-License-Identifier header, i.e. likely third-party
+    # source pasted in without licensing review. Legal documents that
+    # legitimately quote "All Rights Reserved" are explicitly allowlisted.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for foreign "All Rights Reserved" notices
+        run: |
+          set -euo pipefail
+          # Files where "All Rights Reserved" appears as legitimate
+          # contractual / documentation text (not as a third-party copyright
+          # claim). Keep this list minimal.
+          ALLOWLIST_RE='^(LICENSE\.md|LICENSE-DATA\.md|LICENSE\.previous-commercial\.md|LICENSE\.OLD-2025|EULA\.md|EULA-SUMMARY\.md|DPA-LGPD\.md|DPA-LGPD-SUMMARY\.md|CONTRIBUTING\.md|NOTICE|README\.md|SECURITY\.md|\.github/workflows/license-scan\.yml)$'
+          # SPDX identifiers acceptable on first-party code. A file with
+          # "All Rights Reserved" AND one of these is our own header.
+          OK_SPDX_RE='SPDX-License-Identifier:[[:space:]]*(LicenseRef-TTP-Proprietary|Apache-2\.0|MIT|BSD-3-Clause|BSD-2-Clause|ISC)'
+
+          suspicious=()
+          while IFS= read -r f; do
+            [[ "$f" =~ $ALLOWLIST_RE ]] && continue
+            # Skip binary files
+            file --mime "$f" 2>/dev/null | grep -q 'charset=binary' && continue
+            if grep -qiI "all rights reserved" "$f" 2>/dev/null; then
+              if ! grep -qE "$OK_SPDX_RE" "$f" 2>/dev/null; then
+                suspicious+=("$f")
+              fi
+            fi
+          done < <(git ls-files)
+
+          if [[ ${#suspicious[@]} -gt 0 ]]; then
+            echo "::error::Files with 'All Rights Reserved' but no recognized SPDX header:"
+            printf '  %s\n' "${suspicious[@]}"
+            echo ""
+            echo "These may be third-party sources pasted without licensing review."
+            echo "Either add the proprietary SPDX header (if you wrote it) or"
+            echo "remove the file and document the dependency in NOTICE."
+            exit 1
+          fi
+          echo "No foreign 'All Rights Reserved' notices found."
