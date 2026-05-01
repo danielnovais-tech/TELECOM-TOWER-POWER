@@ -42,8 +42,24 @@ cd .. && docker compose up -d
 | `ses_smtp_password`     | `SES_SMTP_PASSWORD`        |
 | `valid_api_keys`        | `VALID_API_KEYS`           |
 | `slack_webhook_url`     | `SLACK_WEBHOOK_URL`        |
+| `audit_target_hmac_pepper` | `AUDIT_TARGET_HMAC_PEPPER` |
 
 > **Security**: All files are git-ignored. Never commit secret values.
+
+> **`audit_target_hmac_pepper`** keys the HMAC that pseudonymises
+> business-sensitive identifiers (e.g. `tower_id`) in the audit log,
+> protecting them from leaking via DB backups, admin reads, or legal
+> subpoenas. Generate once and rotate only in coordination with a full
+> audit-log purge — rotating invalidates tenants' ability to correlate
+> their own historical entries. To create:
+>
+> ```bash
+> openssl rand -hex 32 > secrets/audit_target_hmac_pepper
+> chmod 600 secrets/audit_target_hmac_pepper
+> ```
+>
+> Leaving the file empty disables HMACing (cleartext logging) — only
+> acceptable in local dev / CI.
 
 ## Production sync (EC2)
 

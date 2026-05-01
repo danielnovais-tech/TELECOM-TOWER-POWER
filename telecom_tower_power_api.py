@@ -3046,7 +3046,12 @@ async def batch_reports(
             ip=_client_ip(request),
             user_agent=request.headers.get("user-agent"),
             metadata={
-                "tower_id": tower_id,
+                # tower_id is a competitive-intel signal (it geolocates
+                # the tenant's planning targets); only persist a stable
+                # per-tenant HMAC so the tenant can correlate their own
+                # history while admins / backups / subpoenas see opaque
+                # references.
+                "tower_ref": _audit.hmac_target(tower_id, _caller_key),
                 "rows": len(receivers),
                 "queue": "priority" if _queue_url == SQS_QUEUE_URL_PRIORITY and _queue_url else (
                     "default" if _queue_url else "db-only"

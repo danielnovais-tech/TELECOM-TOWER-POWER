@@ -1,0 +1,123 @@
+name: Audit Log Prune (daily retention)
+
+# Daily retention enforcement for the audit_log table. Without this,
+# rows accumulate indefinitely — especially competitive-intel signals
+# like `batch.create` metadata. Pairs with the per-tenant HMAC of
+# tower_id so the rows that *do* survive are non-reversible to any
+# party that doesn't already hold the tenant's api_key + the server
+# pepper.
+#
+# Runs against the same EC2 host as deploy-ec2-docker.yml, executes
+# the prune script inside the running api container so DATABASE_URL
+# and the docker secrets are already present (no need to re-fetch
+# anything from SSM).
+
+on:
+  schedule:
+    # 03:17 UTC daily — off-peak for sa-east-1 traffic, and out of the
+    # backup window (07:15 UTC restore-drill / nightly backups).
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      security_days:
+        description: 'Override security retention (days)'
+        required: false
+        default: ''
+      operational_days:
+        description: 'Override operational retention (days)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Report counts only, do not delete'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: audit-log-prune
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Whitelist runner IP in EC2 SG
+        id: sg
+        env:
+          EC2_SG_ID: ${{ secrets.EC2_SG_ID }}
+        run: |
+          : "${EC2_SG_ID:?EC2_SG_ID secret not set}"
+          RUNNER_IP=$(curl -sSf https://checkip.amazonaws.com | tr -d '\r\n')
+          echo "runner_ip=${RUNNER_IP}" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${EC2_SG_ID}" \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" \
+            --tag-specifications "ResourceType=security-group-rule,Tags=[{Key=Name,Value=gh-actions-ephemeral},{Key=Workflow,Value=audit-log-prune}]" \
+            2>&1 | grep -v "InvalidPermission.Duplicate" || true
+
+      - name: Push SSH key via EC2 Instance Connect
+        run: |
+          ssh-keygen -t rsa -b 2048 -f /tmp/ec2_key -N "" -q
+          aws ec2-instance-connect send-ssh-public-key \
+            --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+            --instance-os-user ubuntu \
+            --ssh-public-key file:///tmp/ec2_key.pub
+
+      - name: Run prune on EC2
+        env:
+          SECURITY_DAYS: ${{ github.event.inputs.security_days }}
+          OPERATIONAL_DAYS: ${{ github.event.inputs.operational_days }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} \
+            "SECURITY_DAYS='${SECURITY_DAYS}' OPERATIONAL_DAYS='${OPERATIONAL_DAYS}' DRY_RUN='${DRY_RUN}' bash -s" << 'PRUNE'
+          set -euo pipefail
+          cd /home/ubuntu/TELECOM-TOWER-POWER
+
+          ARGS=()
+          [ -n "${SECURITY_DAYS:-}" ]    && ARGS+=( --security-days    "${SECURITY_DAYS}" )
+          [ -n "${OPERATIONAL_DAYS:-}" ] && ARGS+=( --operational-days "${OPERATIONAL_DAYS}" )
+          [ "${DRY_RUN:-false}" = "true" ] && ARGS+=( --dry-run )
+
+          # Run inside the api container so /run/secrets/* and DATABASE_URL
+          # are already wired up. -T disables TTY allocation (we're piping
+          # via SSH heredoc).
+          OUT=$(docker compose exec -T api sh -lc \
+            ". /app/load_secrets.sh && python /app/scripts/audit_log_prune.py ${ARGS[*]:-}")
+          echo "$OUT"
+
+          # Surface the JSON result to the GitHub step summary.
+          echo "$OUT" | tail -1
+          PRUNE
+
+      - name: Revoke runner IP
+        if: always()
+        env:
+          EC2_SG_ID: ${{ secrets.EC2_SG_ID }}
+          RUNNER_IP: ${{ steps.sg.outputs.runner_ip }}
+        run: |
+          [ -z "${RUNNER_IP:-}" ] && exit 0
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${EC2_SG_ID}" \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" \
+            2>&1 | grep -v "InvalidPermission.NotFound" || true

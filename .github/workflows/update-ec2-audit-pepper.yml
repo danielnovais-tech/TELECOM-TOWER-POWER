@@ -1,0 +1,173 @@
+name: Update EC2 Audit HMAC Pepper
+
+# Push the AUDIT_TARGET_HMAC_PEPPER secret to the EC2 host via SSM and
+# restart the API container so load_secrets.sh exports the new value.
+# Manual trigger only — rotating this pepper invalidates every tenant's
+# ability to correlate their own historical `tower_ref` HMACs across
+# the rotation boundary, so it must be a deliberate action paired with
+# an audit-log purge if continuity matters.
+#
+# Required GitHub Actions secrets:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY  — creds with SSM:SendCommand on the instance
+#   EC2_INSTANCE_ID                           — e.g. i-0123456789abcdef0
+#   AUDIT_TARGET_HMAC_PEPPER                  — 32+ hex chars (generate via `openssl rand -hex 32`)
+
+on:
+  workflow_dispatch:
+    inputs:
+      acknowledge_rotation:
+        description: 'Type ROTATE to confirm. Leaving blank pushes only if no pepper exists yet.'
+        required: false
+        default: ''
+
+concurrency:
+  group: update-ec2-audit-pepper
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  update-audit-pepper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Validate required GitHub secrets
+        env:
+          AUDIT_TARGET_HMAC_PEPPER: ${{ secrets.AUDIT_TARGET_HMAC_PEPPER }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AUDIT_TARGET_HMAC_PEPPER:-}" ]; then
+            echo "::error::Missing GitHub Actions secret: AUDIT_TARGET_HMAC_PEPPER"
+            exit 1
+          fi
+          # Sanity: at least 32 chars of entropy (openssl rand -hex 32 = 64 chars).
+          if [ ${#AUDIT_TARGET_HMAC_PEPPER} -lt 32 ]; then
+            echo "::error::Pepper must be ≥32 chars; got length ${#AUDIT_TARGET_HMAC_PEPPER}."
+            echo "Generate with: openssl rand -hex 32"
+            exit 1
+          fi
+          echo "Pepper length OK (${#AUDIT_TARGET_HMAC_PEPPER} chars)."
+
+      - name: Verify EC2 is managed by SSM
+        run: |
+          set -euo pipefail
+          PING_STATUS=$(aws ssm describe-instance-information \
+            --region sa-east-1 \
+            --filters "Key=InstanceIds,Values=${{ secrets.EC2_INSTANCE_ID }}" \
+            --query 'InstanceInformationList[0].PingStatus' \
+            --output text 2>/dev/null || true)
+
+          echo "SSM PingStatus: ${PING_STATUS}"
+
+          if [ -z "$PING_STATUS" ] || [ "$PING_STATUS" = "None" ] || [ "$PING_STATUS" = "null" ]; then
+            echo "::error::Instance not found in SSM."
+            exit 1
+          fi
+
+          if [ "$PING_STATUS" != "Online" ]; then
+            echo "::error::EC2 instance is not Online in SSM. Current status: ${PING_STATUS}"
+            exit 1
+          fi
+
+      - name: Write audit pepper on EC2 via SSM
+        env:
+          AUDIT_TARGET_HMAC_PEPPER: ${{ secrets.AUDIT_TARGET_HMAC_PEPPER }}
+          ACK: ${{ github.event.inputs.acknowledge_rotation }}
+        run: |
+          set -euo pipefail
+          PEPPER_B64=$(printf '%s' "$AUDIT_TARGET_HMAC_PEPPER" | base64 -w 0)
+          ACK_B64=$(printf '%s' "$ACK" | base64 -w 0)
+
+          # Refuse to overwrite an existing non-empty pepper unless the
+          # operator explicitly typed ROTATE in the workflow input.
+          # Rotation is destructive (breaks per-tenant HMAC continuity),
+          # so we make the operator opt in.
+          cat > /tmp/audit-pepper-ssm-commands.json <<EOF
+          {
+            "commands": [
+              "set -euo pipefail",
+              "if [ -d /home/ubuntu/TELECOM-TOWER-POWER ]; then REPO_DIR=/home/ubuntu/TELECOM-TOWER-POWER; elif [ -d /home/ec2-user/TELECOM-TOWER-POWER ]; then REPO_DIR=/home/ec2-user/TELECOM-TOWER-POWER; else echo 'Repo directory not found'; exit 1; fi",
+              "cd \$REPO_DIR",
+              "mkdir -p secrets",
+              "umask 077",
+              "ACK=\$(printf '%s' '${ACK_B64}' | base64 -d)",
+              "if [ -s secrets/audit_target_hmac_pepper ] && [ \"\$ACK\" != 'ROTATE' ]; then",
+              "  echo 'Pepper already present; refusing to overwrite without ROTATE confirmation.'",
+              "  echo 'Re-run this workflow with acknowledge_rotation=ROTATE to rotate.'",
+              "  exit 2",
+              "fi",
+              "printf '%s' '${PEPPER_B64}' | base64 -d > secrets/audit_target_hmac_pepper",
+              "chmod 600 secrets/audit_target_hmac_pepper",
+              "chown 1000:1000 secrets/audit_target_hmac_pepper 2>/dev/null || true",
+              "[ -s secrets/audit_target_hmac_pepper ] || { echo 'audit_target_hmac_pepper empty after write'; exit 1; }",
+              "PEPPER_BYTES=\$(wc -c < secrets/audit_target_hmac_pepper)",
+              "echo \"Pepper written (\$PEPPER_BYTES bytes).\"",
+              "docker compose up -d --no-deps --force-recreate api",
+              "i=0; while [ \$i -lt 60 ]; do i=\$((i+1)); if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then echo 'API healthy'; break; fi; sleep 2; done",
+              "curl -fsS http://localhost:8000/health >/dev/null",
+              "echo 'Audit pepper updated; API restarted successfully.'"
+            ]
+          }
+          EOF
+
+          COMMAND_ID=$(aws ssm send-command \
+            --region sa-east-1 \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Update AUDIT_TARGET_HMAC_PEPPER secret" \
+            --parameters file:///tmp/audit-pepper-ssm-commands.json \
+            --query 'Command.CommandId' \
+            --output text)
+
+          for _ in $(seq 1 30); do
+            STATUS=$(aws ssm get-command-invocation \
+              --region sa-east-1 \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+              --query 'Status' \
+              --output text)
+
+            case "$STATUS" in
+              Success)
+                aws ssm get-command-invocation \
+                  --region sa-east-1 \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                  --query 'StandardOutputContent' \
+                  --output text
+                exit 0
+                ;;
+              Failed|TimedOut|Cancelled|Cancelling)
+                aws ssm get-command-invocation \
+                  --region sa-east-1 \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+                  --query '{status:Status,stdout:StandardOutputContent,stderr:StandardErrorContent}' \
+                  --output json
+                exit 1
+                ;;
+            esac
+
+            sleep 5
+          done
+
+          echo "::error::Timed out waiting for SSM command ${COMMAND_ID}"
+          aws ssm get-command-invocation \
+            --region sa-east-1 \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query '{status:Status,stdout:StandardOutputContent,stderr:StandardErrorContent}' \
+            --output json || true
+          exit 1

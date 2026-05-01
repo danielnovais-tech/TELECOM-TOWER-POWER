@@ -120,6 +120,7 @@ services:
       - valid_api_keys
       - slack_webhook_url
       - admin_api_keys
+      - audit_target_hmac_pepper
     volumes:
       - ./srtm_data:/app/srtm_data:ro
       - ./key_store.json:/app/key_store.json
@@ -430,3 +431,5 @@ secrets:
     file: ./secrets/pagerduty_routing_key
   admin_api_keys:
     file: ./secrets/admin_api_keys
+  audit_target_hmac_pepper:
+    file: ./secrets/audit_target_hmac_pepper

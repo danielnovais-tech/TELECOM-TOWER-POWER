@@ -24,13 +24,15 @@ Schema is created by Alembic migration ``a8e7f4d521b6_add_audit_log``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,97 @@ logger = logging.getLogger(__name__)
 _MEM_MAX = int(os.getenv("AUDIT_MEM_MAX", "5000"))
 # Cap metadata JSON size so a malicious caller can't blow up the table.
 _META_MAX_BYTES = 4096
+
+# ---------------------------------------------------------------------------
+# Competitive-intelligence hardening
+# ---------------------------------------------------------------------------
+#
+# Several audited actions reference business-sensitive identifiers (most
+# notably ``tower_id`` in ``batch.create`` metadata, which can geolocate
+# a customer's expansion plans before any public announcement). Storing
+# these in cleartext exposes the data to:
+#
+#   * nightly Postgres → S3 backups (longer retention than the live DB)
+#   * any admin / impersonation read of the audit log
+#   * legal / regulatory subpoenas that ask for "all audit data"
+#
+# :func:`hmac_target` replaces those values with a per-tenant HMAC. The
+# HMAC key combines a server-side pepper (``AUDIT_TARGET_HMAC_PEPPER``,
+# loaded from a secret file or env) with the tenant's own ``api_key``.
+# A tenant reading their own audit log via :func:`recent_for_key` always
+# sees a stable identifier (same ``tower_id`` ⇒ same hash), but an
+# admin or a subpoena holding only the audit table cannot reverse the
+# hash without compelling the pepper AND the per-tenant api_key.
+#
+# When the pepper is unset (local dev / CI) the function is a no-op so
+# tests stay deterministic.
+
+_PEPPER_FILE = "/run/secrets/audit_target_hmac_pepper"
+_PEPPER_ENV = "AUDIT_TARGET_HMAC_PEPPER"
+
+
+def _load_pepper() -> bytes:
+    try:
+        if os.path.exists(_PEPPER_FILE):
+            with open(_PEPPER_FILE, "rb") as fh:
+                return fh.read().strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return os.getenv(_PEPPER_ENV, "").strip().encode("utf-8")
+
+
+_HMAC_PEPPER: bytes = _load_pepper()
+
+
+def hmac_target(value: Any, api_key: Optional[str] = None) -> str:
+    """Return a stable, non-reversible token for ``value``.
+
+    When ``AUDIT_TARGET_HMAC_PEPPER`` is configured, returns
+    ``"h:" + first 16 hex chars of HMAC-SHA256(pepper||api_key, value)``.
+    Otherwise (dev / CI) returns ``str(value)`` unchanged so tests stay
+    deterministic. ``None``/empty inputs are returned as the empty
+    string regardless of configuration.
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    if not s:
+        return ""
+    if not _HMAC_PEPPER:
+        return s
+    key = _HMAC_PEPPER + b"\x00" + (api_key or "").encode("utf-8")
+    digest = hmac.new(key, s.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"h:{digest[:16]}"
+
+
+# ---------------------------------------------------------------------------
+# Retention policy
+# ---------------------------------------------------------------------------
+#
+# Two retention buckets keyed off the ``action`` column:
+#
+#   * SECURITY actions (key issue, SSO exchanges, admin operations) —
+#     long retention so SOC 2 / LGPD investigators can reconstruct who
+#     issued or used a credential. Default 365 days.
+#   * OPERATIONAL actions (batch.create, tenant.branding.*, ...) — short
+#     retention so we don't accumulate competitive-intel exhaust.
+#     Default 90 days.
+#
+# Both windows are env-tunable. Use :func:`prune` from a daily job.
+
+_SECURITY_ACTION_PREFIXES: Tuple[str, ...] = (
+    "key.issue.",
+    "key.revoke.",
+    "key.rotate.",
+    "auth.sso.",
+    "auth.login.",
+    "admin.",
+)
+
+
+def _is_security_action(action: str) -> bool:
+    a = (action or "").lower()
+    return any(a.startswith(p) for p in _SECURITY_ACTION_PREFIXES)
 
 # In-memory ring (used when DB is unavailable).
 _mem: Deque[Dict[str, Any]] = deque(maxlen=_MEM_MAX)
@@ -256,6 +349,86 @@ def top_actors(since_ts: float, limit: int = 20) -> List[Dict[str, Any]]:
         counts[k] = counts.get(k, 0) + 1
     ranked = sorted(counts.items(), key=lambda kv: -kv[1])[:limit]
     return [{"api_key": k, "count": c} for k, c in ranked]
+
+
+def prune(
+    *,
+    security_days: Optional[int] = None,
+    operational_days: Optional[int] = None,
+    now: Optional[float] = None,
+) -> Dict[str, int]:
+    """Delete audit rows older than the configured retention windows.
+
+    Two buckets driven by :func:`_is_security_action`:
+
+    * security actions  — kept ``security_days`` (default 365, env
+      ``AUDIT_RETENTION_SECURITY_DAYS``).
+    * operational actions — kept ``operational_days`` (default 90, env
+      ``AUDIT_RETENTION_OPERATIONAL_DAYS``).
+
+    Returns a dict ``{"security_deleted": int, "operational_deleted": int}``.
+    Idempotent and safe to run repeatedly. Database errors are surfaced
+    so a daily cron flags them — unlike the write path, silent failure
+    here would let retention drift.
+    """
+    if security_days is None:
+        security_days = int(os.getenv("AUDIT_RETENTION_SECURITY_DAYS", "365"))
+    if operational_days is None:
+        operational_days = int(os.getenv("AUDIT_RETENTION_OPERATIONAL_DAYS", "90"))
+    if security_days < 1 or operational_days < 1:
+        raise ValueError("retention windows must be ≥ 1 day")
+    now_ts = float(now if now is not None else time.time())
+    sec_cutoff = now_ts - security_days * 86400.0
+    op_cutoff = now_ts - operational_days * 86400.0
+
+    sec_clauses = " OR ".join(
+        ["lower(action) LIKE %s"] * len(_SECURITY_ACTION_PREFIXES)
+    )
+    sec_params = [p + "%" for p in _SECURITY_ACTION_PREFIXES]
+
+    deleted = {"security_deleted": 0, "operational_deleted": 0}
+
+    if _db_disabled:
+        # In-memory ring: filter by the same rules.
+        with _mem_lock:
+            kept = deque(maxlen=_MEM_MAX)
+            for r in _mem:
+                action = r.get("action") or ""
+                ts = r.get("ts") or 0.0
+                if _is_security_action(action):
+                    if ts < sec_cutoff:
+                        deleted["security_deleted"] += 1
+                        continue
+                else:
+                    if ts < op_cutoff:
+                        deleted["operational_deleted"] += 1
+                        continue
+                kept.append(r)
+            _mem.clear()
+            _mem.extend(kept)
+        return deleted
+
+    import psycopg2  # type: ignore
+
+    with psycopg2.connect(_DB_URL) as conn, conn.cursor() as cur:
+        cur.execute(
+            f"DELETE FROM audit_log WHERE ts < %s AND ({sec_clauses})",
+            [sec_cutoff, *sec_params],
+        )
+        deleted["security_deleted"] = cur.rowcount or 0
+        cur.execute(
+            f"DELETE FROM audit_log WHERE ts < %s AND NOT ({sec_clauses})",
+            [op_cutoff, *sec_params],
+        )
+        deleted["operational_deleted"] = cur.rowcount or 0
+        conn.commit()
+    logger.info(
+        "audit_log prune complete: security=%d operational=%d "
+        "(security_days=%d operational_days=%d)",
+        deleted["security_deleted"], deleted["operational_deleted"],
+        security_days, operational_days,
+    )
+    return deleted
 
 
 def reset_for_tests() -> None:

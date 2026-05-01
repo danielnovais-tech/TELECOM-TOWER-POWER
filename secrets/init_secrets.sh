@@ -22,7 +22,8 @@ for name in \
     slack_webhook_url \
     grafana_admin_password \
     pagerduty_routing_key \
-    admin_api_keys
+    admin_api_keys \
+    audit_target_hmac_pepper
 do
     if [ ! -f "$name" ]; then
         touch "$name"
