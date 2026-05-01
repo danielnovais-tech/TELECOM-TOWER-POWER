@@ -52,7 +52,7 @@ jobs:
           python-version: '3.12'
 
       - name: Setup AWS SAM CLI
-        uses: aws-actions/setup-sam@v2
+        uses: aws-actions/setup-sam@v3
         with:
           use-installer: true
 
