@@ -9,12 +9,14 @@ name: License Scan
 on:
   pull_request:
     paths:
+      - "**/*.py"
       - "requirements*.txt"
       - "packages_*.txt"
       - ".github/workflows/license-scan.yml"
   push:
     branches: [main]
     paths:
+      - "**/*.py"
       - "requirements*.txt"
       - "packages_*.txt"
       - ".github/workflows/license-scan.yml"
@@ -69,17 +71,25 @@ jobs:
       - name: Fail on disallowed licenses
         run: |
           set -euo pipefail
-          # Disallowed: copyleft incompatible with proprietary distribution
-          # and "no commercial use" / source-available-only families.
+          # Disallowed: strong + weak copyleft incompatible with proprietary
+          # SaaS distribution, plus "no commercial use" / share-alike /
+          # source-available-only families.
           # We match on substring (case-insensitive) of the License field.
-          DISALLOWED='GPL-2.0|GPL-3.0|GNU General Public License|AGPL|Affero|SSPL|Server Side Public License|CC-BY-NC|Commons Clause|BUSL|Business Source|EUPL|RPL|Reciprocal Public License'
-          # Allow LGPL (dynamic-link OK for our use), MIT, BSD, Apache, ISC,
-          # MPL-2.0, PSF, Python-2.0, Unlicense, 0BSD, CC0, CC-BY-4.0.
+          DISALLOWED='GPL-2\.0|GPL-3\.0|GNU General Public License|AGPL|Affero|LGPL-2\.1|LGPL-3\.0|LGPLv2|LGPLv3|GNU Lesser|SSPL|Server Side Public License|CC-BY-NC|CC-BY-SA|CC-SA|Creative Commons Attribution-ShareAlike|Commons Clause|BUSL|Business Source|EUPL|RPL|Reciprocal Public License'
+          # Allowed: MIT, BSD (all variants), Apache-2.0, ISC, MPL-2.0,
+          # PSF, Python-2.0, Unlicense, 0BSD, CC0, CC-BY-4.0.
 
-          # Known-good packages whose metadata is misreported. Keep this list
-          # MINIMAL and review entries on every renewal.
-          # Format: "<package-name-lowercase>"
-          ALLOWLIST=()
+          # Known-good packages whose metadata triggers a denylist match but
+          # whose actual usage is compatible. Keep this list MINIMAL and
+          # re-review on every dependency bump.
+          # Format: lowercase package name. Each entry MUST cite rationale
+          # in NOTICE.
+          ALLOWLIST=(
+            # LGPL — used only as dynamically-linked libraries, no
+            # modification, no static linking. See NOTICE §"LGPL components".
+            "psycopg2-binary"
+            "simplekml"
+          )
 
           violations=$(
             jq -r --arg deny "$DISALLOWED" '
@@ -91,9 +101,9 @@ jobs:
             ' artifacts/licenses.json
           )
 
-          if [[ -n "$ALLOWLIST" ]]; then
+          if [[ ${#ALLOWLIST[@]} -gt 0 ]]; then
             for pkg in "${ALLOWLIST[@]}"; do
-              violations=$(echo "$violations" | grep -viE "^${pkg}\b" || true)
+              violations=$(echo "$violations" | grep -viE "^${pkg}[[:space:]]" || true)
             done
           fi
 
@@ -134,3 +144,56 @@ jobs:
           name: license-inventory
           path: artifacts/
           retention-days: 90
+
+  spdx-headers:
+    # Verifies every tracked .py source file carries an SPDX-License-Identifier
+    # header. Catches new files committed without the proprietary header (or
+    # files copy-pasted from incompatible upstream sources).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check SPDX headers on Python sources
+        run: |
+          set -euo pipefail
+          # Allowed SPDX identifiers for first-party code.
+          ALLOWED='LicenseRef-TTP-Proprietary|Apache-2\.0|MIT|BSD-3-Clause|BSD-2-Clause|ISC'
+          # Paths excluded from the check (vendored, generated, third-party).
+          EXCLUDE_RE='^(\.venv|venv|build|dist|node_modules|migrations/versions/[0-9a-f]+_)'
+
+          missing=()
+          forbidden=()
+          while IFS= read -r f; do
+            [[ "$f" =~ $EXCLUDE_RE ]] && continue
+            header=$(head -n 5 "$f" | grep -m1 -E '^# *SPDX-License-Identifier:' || true)
+            if [[ -z "$header" ]]; then
+              missing+=("$f")
+              continue
+            fi
+            ident=$(echo "$header" | sed -E 's/^# *SPDX-License-Identifier:[[:space:]]*//; s/[[:space:]]+$//')
+            if ! echo "$ident" | grep -qE "^(${ALLOWED})$"; then
+              forbidden+=("$f :: $ident")
+            fi
+          done < <(git ls-files '*.py')
+
+          fail=0
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "::error::Python files missing SPDX-License-Identifier header:"
+            printf '  %s\n' "${missing[@]}"
+            fail=1
+          fi
+          if [[ ${#forbidden[@]} -gt 0 ]]; then
+            echo "::error::Python files with disallowed SPDX identifier:"
+            printf '  %s\n' "${forbidden[@]}"
+            echo "Allowed: ${ALLOWED//\\/}"
+            fail=1
+          fi
+          if [[ $fail -ne 0 ]]; then
+            echo ""
+            echo "Add the proprietary header at the top of each file:"
+            echo "  # SPDX-License-Identifier: LicenseRef-TTP-Proprietary"
+            echo "  # Copyright (c) 2026 Daniel Azevedo Novais (\"TELECOM-TOWER-POWER\"). All rights reserved."
+            exit 1
+          fi
+          echo "All $(git ls-files '*.py' | wc -l) Python files carry a valid SPDX header."
