@@ -104,7 +104,7 @@ and incident notification to ANPD.
 
 The TELECOM-TOWER-POWER hosted service acts as **operador** for personal
 data submitted by customers via the API, under the terms of the applicable
-Data Processing Addendum (DPA).
+[Data Processing Addendum (DPA)](DPA-LGPD.md).
 
 ## 7. No warranty
 

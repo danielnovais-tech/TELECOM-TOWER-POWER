@@ -762,6 +762,8 @@ Copyright (c) 2026 TELECOM-TOWER-POWER. All rights reserved.
 - **Trained models, geocode caches and derived datasets**: governed by
   [LICENSE-DATA.md](LICENSE-DATA.md) — separate terms, **not** covered by the
   code license.
+- **End User License Agreement (EULA SaaS)**: [EULA.md](EULA.md).
+- **Data Processing Agreement (LGPD / DPA)**: [DPA-LGPD.md](DPA-LGPD.md).
 - **Contributions**: require sign-off per [CONTRIBUTING.md](CONTRIBUTING.md)
   (DCO).
 - **Production use, SLAs and enterprise integrations**: require a signed
