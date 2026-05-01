@@ -45,6 +45,10 @@
           "value": "true"
         },
         {
+          "name": "SIGNUP_FREE_RATE_LIMIT_PER_HOUR",
+          "value": "20"
+        },
+        {
           "name": "BEDROCK_REGION",
           "value": "us-east-1"
         },
