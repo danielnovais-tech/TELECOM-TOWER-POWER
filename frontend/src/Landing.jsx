@@ -16,15 +16,16 @@ const COPY = {
     stats: [
       { n: "140.906", l: "torres na base" },
       { n: "5.570", l: "municípios cobertos" },
-      { n: "12", l: "operadoras indexadas" },
+      { n: "12", l: "prestadoras indexadas" },
       { n: "< 400 ms", l: "latência p50 cacheada" }
     ],
     features: {
-      title: "Tudo que um ISP ou operadora precisa",
+      title: "Tudo que um ISP ou consultor RF precisa",
       items: [
-        { t: "Base ANATEL + OpenCelliD", d: "105.240 ERBs oficiais Anatel + dados comunitários OpenCelliD, sincronizados diariamente." },
+        { t: "Base ANATEL + OpenCelliD", d: "105.240 ERBs oficiais Anatel + dados comunitários OpenCelliD, sincronizados diariamente, com snap por prestadora (Vivo, Claro, TIM, Algar, Sercomtel etc.)." },
         { t: "Terreno SRTM real", d: "Perfil de elevação ponto-a-ponto via SRTM 90 m, com cache Redis em 4 camadas e latência sub-segundo." },
         { t: "Análise de link com IA", d: "Explicação em linguagem natural de perda de percurso, Fresnel e margem via Amazon Bedrock (Claude)." },
+        { t: "Modelo ML calibrado", d: "Ridge-v1 com 17 features (SRTM, Fresnel, rugosidade) treinado contra RSSI real — RMSE 12,94 dB em n=20 000, supera Hata físico-puro." },
         { t: "Repetidores multi-saltos", d: "Encontre a cadeia ótima de torres para atender um receptor fora da linha de visada principal." },
         { t: "PDF institucional", d: "Relatório completo com mapa, perfil do terreno e parecer técnico pronto para cliente ou ANATEL." },
         { t: "SDKs Python e JS", d: "Clientes gerados do OpenAPI, prontos para integrar em suas ferramentas internas." }
@@ -35,8 +36,28 @@ const COPY = {
       items: [
         { t: "WISPs em expansão", d: "Descubra antes de subir a torre se aquele novo bairro está em linha de visada. Economize viagens de campo." },
         { t: "Consultores de RF", d: "Emita pareceres técnicos em minutos. Atenda 3× mais clientes sem comprar Pathloss ou Atoll." },
-        { t: "Integradoras", d: "Protótipo de cobertura para propostas comerciais antes mesmo de fechar contrato." },
+        { t: "Integradoras", d: "Cobertura preliminar para propostas comerciais antes mesmo de fechar contrato." },
         { t: "Órgãos públicos e LAI", d: "Responda pedidos de acesso à informação com mapas de cobertura oficiais em 5 minutos." }
+      ]
+    },
+    scope: {
+      title: "Escopo & limitações",
+      sub: "Honestidade técnica vale mais do que marketing. Eis o que fazemos — e o que não fazemos.",
+      doTitle: "Fazemos",
+      do: [
+        "Enlaces ponto-a-ponto e ponto-multiponto outdoor licenciados",
+        "Free-Space Path Loss + correção de relevo SRTM 90 m + 1ª zona de Fresnel",
+        "Plano de repetidores multi-saltos sobre torres ANATEL",
+        "Estimativa preliminar de cobertura para WISPs / ISPs regionais",
+        "Pareceres técnicos em PDF e exportação KML/Shapefile"
+      ],
+      dontTitle: "Não fazemos (use Atoll, Planet, Asset ou CelPlan)",
+      dont: [
+        "Planejamento RAN macro/indoor/5G mmWave para operadoras Tier-1",
+        "Simulação de tráfego, capacidade e interferência multi-célula",
+        "Drive-test analytics e calibração de modelo por medição",
+        "Modelos Longley-Rice (roadmap Q3/2026) e ITU-R P.1812 fora de beta",
+        "Substituir Atoll, Planet ou CelPlan em operações de Tier-1"
       ]
     },
     faq: {
@@ -58,6 +79,7 @@ const COPY = {
       privacy: "Privacidade",
       refund: "Reembolso",
       security: "Segurança",
+      reliability: "Confiabilidade",
       contact: "Contato"
     }
   },
@@ -74,15 +96,16 @@ const COPY = {
     stats: [
       { n: "140,498", l: "towers indexed" },
       { n: "5,570", l: "municipalities" },
-      { n: "12", l: "operators tracked" },
+      { n: "12", l: "SMP/SME providers" },
       { n: "< 400 ms", l: "cached p50" }
     ],
     features: {
-      title: "Everything an ISP or carrier needs",
+      title: "Everything an ISP or RF consultant needs",
       items: [
-        { t: "ANATEL + OpenCelliD DB", d: "105,240 officially licensed Anatel sites plus crowd-sourced OpenCelliD cells, refreshed daily." },
+        { t: "ANATEL + OpenCelliD DB", d: "105,240 officially licensed Anatel sites plus crowd-sourced OpenCelliD cells, refreshed daily, snapped per provider (Vivo, Claro, TIM, Algar, Sercomtel, etc.)." },
         { t: "Real SRTM terrain", d: "Point-to-point elevation profile from 90m SRTM with a 4-layer Redis cache and sub-second latency." },
         { t: "AI link analysis", d: "Natural-language explanation of path loss, Fresnel clearance and link margin via Amazon Bedrock (Claude)." },
+        { t: "Calibrated ML model", d: "Ridge-v1 with 17 features (SRTM, Fresnel, roughness) trained on real RSSI — RMSE 12.94 dB at n=20,000, beats raw Hata." },
         { t: "Multi-hop repeaters", d: "Find the optimal chain of existing towers to serve a receiver outside the main line of sight." },
         { t: "Branded PDF report", d: "Map, terrain profile and technical statement — deliverable to clients or regulators." },
         { t: "Python and JS SDKs", d: "OpenAPI-generated clients, ready to drop into your internal tooling." }
@@ -93,8 +116,28 @@ const COPY = {
       items: [
         { t: "Growing WISPs", d: "Know before the truck rolls whether that new neighborhood is in line-of-sight. Skip scouting trips." },
         { t: "RF consultants", d: "Ship technical reports in minutes. Serve 3× more clients without buying Pathloss or Atoll." },
-        { t: "System integrators", d: "Prototype coverage for commercial proposals before the contract is signed." },
+        { t: "System integrators", d: "Preliminary coverage estimates for commercial proposals before the contract is signed." },
         { t: "Government & FOIA", d: "Answer public information requests with official coverage maps in under 5 minutes." }
+      ]
+    },
+    scope: {
+      title: "Scope & limitations",
+      sub: "Technical honesty beats marketing. Here is what we do — and what we don't.",
+      doTitle: "What we do",
+      do: [
+        "Licensed outdoor point-to-point and point-to-multipoint links",
+        "Free-space path loss + 90 m SRTM terrain correction + first Fresnel zone",
+        "Multi-hop repeater planning across ANATEL towers",
+        "Preliminary coverage estimates for WISPs / regional ISPs",
+        "PDF technical reports and KML/Shapefile export"
+      ],
+      dontTitle: "What we don't do (use Atoll, Planet, Asset or CelPlan)",
+      dont: [
+        "Macro RAN / indoor / 5G mmWave planning for Tier-1 operators",
+        "Traffic, capacity and multi-cell interference simulation",
+        "Drive-test analytics and measurement-based model calibration",
+        "Longley-Rice (roadmap Q3/2026) and out-of-beta ITU-R P.1812",
+        "Replacing Atoll, Planet or CelPlan in Tier-1 operations"
       ]
     },
     faq: {
@@ -116,6 +159,7 @@ const COPY = {
       privacy: "Privacy",
       refund: "Refunds",
       security: "Security",
+      reliability: "Reliability",
       contact: "Contact"
     }
   }
@@ -223,7 +267,9 @@ export default function Landing({ onSignup, onLogin }) {
           <span style={styles.footerSep}>·</span>
           <a href={`https://docs.telecomtowerpower.com.br/${lang === "en" ? "en/" : ""}legal/refund-policy/`}>{t.footer.refund}</a>
           <span style={styles.footerSep}>·</span>
-          <a href="https://github.com/danielnovaisantunes/TELECOM-TOWER-POWER/security/policy" target="_blank" rel="noopener noreferrer">{t.footer.security}</a>
+          <a href={`https://docs.telecomtowerpower.com.br/${lang === "en" ? "en/" : ""}legal/security/`}>{t.footer.security}</a>
+          <span style={styles.footerSep}>·</span>
+          <a href={`https://docs.telecomtowerpower.com.br/${lang === "en" ? "en/" : ""}legal/reliability/`}>{t.footer.reliability}</a>
           <span style={styles.footerSep}>·</span>
           <a href={`https://docs.telecomtowerpower.com.br/${lang === "en" ? "en/" : ""}contact/`}>{t.footer.contact}</a>
         </div>

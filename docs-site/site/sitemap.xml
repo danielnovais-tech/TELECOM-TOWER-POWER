@@ -2,476 +2,504 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
     <url>
         <loc>https://docs.telecomtowerpower.com.br/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/contact/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/contact/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/contact/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/api/overview/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/api/overview/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/api/overview/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/case-studies/regional-isp-brazil/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/case-studies/regional-isp-brazil/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/case-studies/regional-isp-brazil/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/control-matrix/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/control-matrix/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/control-matrix/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/evidence-index/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/evidence-index/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/evidence-index/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/gap-analysis/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/gap-analysis/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/gap-analysis/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/system-description/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/system-description/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/system-description/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/01-information-security/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/01-information-security/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/01-information-security/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/02-access-control/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/02-access-control/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/02-access-control/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/03-change-management/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/03-change-management/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/03-change-management/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/04-incident-response/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/04-incident-response/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/04-incident-response/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/05-vendor-management/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/05-vendor-management/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/05-vendor-management/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/06-business-continuity/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/06-business-continuity/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/06-business-continuity/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/07-data-classification/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/07-data-classification/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/07-data-classification/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/08-encryption/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/08-encryption/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/08-encryption/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/09-logging-monitoring/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/09-logging-monitoring/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/09-logging-monitoring/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/10-secure-sdlc/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/10-secure-sdlc/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/10-secure-sdlc/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/11-hr-security/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/11-hr-security/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/11-hr-security/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/12-physical-security/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/12-physical-security/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/12-physical-security/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/13-risk-management/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/13-risk-management/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/13-risk-management/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/compliance/soc2/policies/14-asset-management/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/14-asset-management/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/14-asset-management/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/getting-started/authentication/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/authentication/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/authentication/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/getting-started/quickstart/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/quickstart/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/quickstart/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/getting-started/rate-limits/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/rate-limits/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/rate-limits/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/legal/privacy/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/privacy/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/privacy/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/legal/refund-policy/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/refund-policy/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/refund-policy/"/>
     </url>
     <url>
+        <loc>https://docs.telecomtowerpower.com.br/legal/reliability/</loc>
+        <lastmod>2026-05-01</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/reliability/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/reliability/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/legal/security/</loc>
+        <lastmod>2026-05-01</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/security/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/security/"/>
+    </url>
+    <url>
         <loc>https://docs.telecomtowerpower.com.br/legal/terms/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/terms/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/terms/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/operations/architecture/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/architecture/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/architecture/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/operations/production-status/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/production-status/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/production-status/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/operations/runbook/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/runbook/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/runbook/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/operations/status/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/status/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/status/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/operations/whats-shipped/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/whats-shipped/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/whats-shipped/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/contact/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/contact/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/contact/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/api/overview/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/api/overview/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/api/overview/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/case-studies/regional-isp-brazil/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/case-studies/regional-isp-brazil/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/case-studies/regional-isp-brazil/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/control-matrix/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/control-matrix/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/control-matrix/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/evidence-index/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/evidence-index/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/evidence-index/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/gap-analysis/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/gap-analysis/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/gap-analysis/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/system-description/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/system-description/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/system-description/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/01-information-security/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/01-information-security/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/01-information-security/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/02-access-control/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/02-access-control/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/02-access-control/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/03-change-management/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/03-change-management/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/03-change-management/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/04-incident-response/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/04-incident-response/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/04-incident-response/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/05-vendor-management/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/05-vendor-management/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/05-vendor-management/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/06-business-continuity/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/06-business-continuity/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/06-business-continuity/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/07-data-classification/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/07-data-classification/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/07-data-classification/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/08-encryption/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/08-encryption/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/08-encryption/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/09-logging-monitoring/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/09-logging-monitoring/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/09-logging-monitoring/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/10-secure-sdlc/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/10-secure-sdlc/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/10-secure-sdlc/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/11-hr-security/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/11-hr-security/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/11-hr-security/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/12-physical-security/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/12-physical-security/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/12-physical-security/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/13-risk-management/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/13-risk-management/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/13-risk-management/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/14-asset-management/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/compliance/soc2/policies/14-asset-management/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/compliance/soc2/policies/14-asset-management/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/getting-started/authentication/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/authentication/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/authentication/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/getting-started/quickstart/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/quickstart/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/quickstart/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/getting-started/rate-limits/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/getting-started/rate-limits/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/getting-started/rate-limits/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/legal/privacy/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/privacy/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/privacy/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/legal/refund-policy/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/refund-policy/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/refund-policy/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/legal/terms/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/terms/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/terms/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/operations/architecture/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/architecture/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/architecture/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/operations/production-status/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/production-status/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/production-status/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/operations/runbook/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/runbook/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/runbook/"/>
     </url>
     <url>
         <loc>https://docs.telecomtowerpower.com.br/en/operations/status/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/status/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/status/"/>
     </url>
     <url>
+        <loc>https://docs.telecomtowerpower.com.br/en/legal/reliability/</loc>
+        <lastmod>2026-05-01</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/reliability/"/>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/reliability/"/>
+    </url>
+    <url>
+        <loc>https://docs.telecomtowerpower.com.br/en/legal/security/</loc>
+        <lastmod>2026-05-01</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/legal/security/"/>
+        <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/legal/security/"/>
+    </url>
+    <url>
         <loc>https://docs.telecomtowerpower.com.br/en/operations/whats-shipped/</loc>
-        <lastmod>2026-04-30</lastmod>
+        <lastmod>2026-05-01</lastmod>
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="en" href="https://docs.telecomtowerpower.com.br/en/operations/whats-shipped/"/>
         <xhtml:link rel="alternate" hreflang="pt" href="https://docs.telecomtowerpower.com.br/operations/whats-shipped/"/>

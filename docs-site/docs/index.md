@@ -6,7 +6,7 @@
 
 ## O que é
 
-Uma API REST que responde à pergunta que todo ISP, consultor RF e operadora se faz todo dia:
+Uma API REST que responde à pergunta que todo ISP regional, WISP e consultor RF se faz todo dia:
 
 > *"Existe uma torre que possa atender este endereço, com linha de visada e margem de enlace suficiente?"*
 

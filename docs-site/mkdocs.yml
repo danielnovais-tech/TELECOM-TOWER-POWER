@@ -81,6 +81,8 @@ plugins:
             Termos de Serviço: Terms of Service
             Política de Privacidade: Privacy Policy
             Política de Reembolso: Refund Policy
+            Segurança: Security
+            Confiabilidade: Reliability
             Status: Status
             Contato: Contact
 
@@ -142,5 +144,7 @@ nav:
       - Termos de Serviço: legal/terms.md
       - Política de Privacidade: legal/privacy.md
       - Política de Reembolso: legal/refund-policy.md
+      - Segurança: legal/security.md
+      - Confiabilidade: legal/reliability.md
   - Status: operations/status.md
   - Contato: contact.md
