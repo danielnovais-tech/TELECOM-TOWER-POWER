@@ -44,6 +44,96 @@ A tabela a seguir mostra quanto cada perfil de cliente brasileiro gasta hoje **s
 - **Tier-2/3 regional**: TTP substitui *consultoria externa pontual*, não Atoll. O ROI de 6× cobre o ticket Ultra.
 - **Tier-1 nacional**: TTP não substitui Atoll/Planet/CelPlan. Não é ICP.
 
+## Comparação perfil-a-perfil contra cada concorrente
+
+As tabelas abaixo decompõem o custo anual total (licenças + horas humanas + scouting + retrabalho) para cada combinação realista de stack, em cada perfil. Δ = custo do stack − custo da opção TTP recomendada.
+
+### Perfil 1 — WISP regional (5–30k assinantes)
+
+| Stack | Licença/SaaS | Horas humanas | Scouting | Retrabalho ANATEL | **Total/ano** | Δ vs TTP Pro |
+|---|---:|---:|---:|---:|---:|---:|
+| **TTP Pro** | R$ 4.188 | R$ 18.000 | R$ 24.000 | R$ 3.000 | **R$ 49.188** | — |
+| Google Earth + planilha (DIY) | 0 | R$ 72.000 | R$ 72.000 | R$ 18.000 | R$ 162.000 | **+R$ 113k** |
+| Atoll (1 seat) | R$ 100.000 | R$ 50.000 | R$ 36.000 | R$ 6.000 | R$ 192.000 | **+R$ 143k** |
+| EDX SignalPro | R$ 50.000 | R$ 45.000 | R$ 36.000 | R$ 6.000 | R$ 137.000 | **+R$ 88k** |
+| Consultoria RF terceirizada | 0 | 0 | (incluso) | (incluso) | R$ 240.000 | **+R$ 191k** |
+
+> Para WISP, **TTP é o piso de custo**. Atoll é overkill (ROI negativo neste porte). DIY parece grátis mas custa R$ 113k/ano em horas e visitas evitáveis.
+
+### Perfil 2 — Consultoria RF (1–3 consultores)
+
+Métrica é margem anual gerada (não corte de custo) — TTP triplica capacidade da equipe:
+
+| Stack | Custo ferramentas | Capacidade laudos/ano | Receita | Margem 40% | Δ vs TTP+Pathloss |
+|---|---:|---:|---:|---:|---:|
+| Pathloss puro | R$ 12.000 | 30 | R$ 150.000 | R$ 60.000 | -R$ 105k |
+| **Pathloss + TTP Business** | **R$ 27.588** | **90** | **R$ 450.000** | **R$ 165.000** | — |
+| Pathloss + Atoll seat | R$ 112.000 | 50 | R$ 250.000 | R$ 100.000 | -R$ 65k |
+| iBwave Design + Pathloss | R$ 87.000 | 40 | R$ 200.000 | R$ 80.000 | -R$ 85k |
+
+> A alavancagem (3× capacidade) supera o ganho marginal de precisão de Atoll/iBwave para o caso típico de laudo regulatório / viabilidade.
+
+### Perfil 3 — ISP regional grande (50–200k assinantes)
+
+| Stack | Licenças/SaaS | Engenharia (FTE) | Scouting | Atrasos homologação | **Total/ano** | Δ vs TTP Enterprise |
+|---|---:|---:|---:|---:|---:|---:|
+| **TTP Enterprise** | R$ 22.680 | R$ 125.000 (0,5 FTE) | R$ 90.000 | R$ 50.000 | **R$ 287.680** | — |
+| Planilha + 2 FTE | 0 | R$ 500.000 | R$ 300.000 | R$ 150.000 | R$ 950.000 | **+R$ 662k** |
+| Atoll (2 seats) + 1,5 FTE | R$ 220.000 | R$ 375.000 | R$ 150.000 | R$ 75.000 | R$ 820.000 | **+R$ 532k** |
+| EDX (2 seats) + 1,5 FTE | R$ 110.000 | R$ 375.000 | R$ 180.000 | R$ 100.000 | R$ 765.000 | **+R$ 477k** |
+| Planet (1 seat) + 2 FTE | R$ 180.000 | R$ 500.000 | R$ 200.000 | R$ 100.000 | R$ 980.000 | **+R$ 692k** |
+
+> Maior salto de economia. TTP Enterprise entrega 4× mais ROI que Atoll neste porte porque o gargalo é **velocidade de iteração**, não precisão de modelo.
+
+### Perfil 4 — Tier-2/3 regional (Algar, Sercomtel, Brisanet)
+
+Atoll já é sunk cost — comparação é sobre o que TTP elimina (consultoria externa + retrabalho rural):
+
+| Stack | Atoll (sunk) | Consultoria externa | Retrabalho rural | TTP / outros | **Total/ano** | Δ vs Atoll+TTP Ultra |
+|---|---:|---:|---:|---:|---:|---:|
+| **Atoll + TTP Ultra** | (sunk) | R$ 150.000 | R$ 25.000 | R$ 34.800 | **R$ 209.800** | — |
+| Atoll puro (status quo) | (sunk) | R$ 350.000 | R$ 100.000 | 0 | R$ 450.000 | **+R$ 240k** |
+| Atoll + iBwave outdoor | (sunk) | R$ 250.000 | R$ 75.000 | R$ 80.000 | R$ 405.000 | **+R$ 195k** |
+| Atoll + CelPlan SoW | (sunk) | R$ 150.000 | R$ 50.000 | R$ 100.000 | R$ 300.000 | **+R$ 90k** |
+
+> TTP Ultra **substitui consultoria externa pontual**, não Atoll.
+
+### Perfil 5 — Tier-1 nacional (Vivo, TIM, Claro)
+
+| Stack | Custo anual | Δ |
+|---|---:|---:|
+| Atoll + Planet + CelPlan + 8–15 FTE (status quo) | R$ 5–15 M | — |
+| + TTP Custom (piloto experimental) | + R$ 60–200k | **economia ≈ R$ 0** |
+
+> TTP **não substitui nada** neste stack. Confirmado fora do ICP — ver `notes/tier1-roadmap.md`.
+
+## Resumo: Δ de economia por concorrente
+
+### Onde TTP **substitui** o concorrente
+
+| Concorrente substituído | Quem migra | Economia anual mediana |
+|---|---|---:|
+| Consultoria RF terceirizada (volume) | WISP, ISP regional | **R$ 150–250k** |
+| Google Earth + planilha (DIY) | WISP pequeno-médio | **R$ 110k** |
+| Planet (Infovista) "tático" | ISP regional grande migrando de Tier-1 herdado | **R$ 690k** |
+| Atoll seat ocioso (não-Tier-1) | ISP regional, consultoria pequena | **R$ 140k** |
+| EDX SignalPro | ISP regional, integradores | **R$ 90k** |
+
+### Onde TTP **complementa** (sem substituir)
+
+| Concorrente complementado | Quem combina | Economia incremental |
+|---|---|---:|
+| Pathloss (link PtP fino) | Consultoria RF | **R$ 105k** (margem extra via 3× capacidade) |
+| Atoll on-prem | Tier-2/3 regional | **R$ 220k** (corta consultoria externa) |
+| iBwave Design (indoor) | Integrador de prédios | **R$ 50–80k** (outdoor passa para TTP) |
+
+### Regra de bolso
+
+- **WISP ou ISP regional?** TTP entrega R$ 100–700k/ano de economia. Qualquer concorrente custa mais e entrega menos para esse caso.
+- **Consultoria RF?** TTP + Pathloss vence Pathloss + Atoll em margem (3× capacidade > +20% precisão).
+- **Tier-2/3 regional com Atoll?** TTP Ultra paga ~6× ao cortar consultoria externa.
+- **Tier-1?** TTP não economiza nada. Mantenha o stack atual.
+
 ## TTP vs Atoll (Forsk) — comparação direta
 
 | Dimensão | Atoll | TTP |
