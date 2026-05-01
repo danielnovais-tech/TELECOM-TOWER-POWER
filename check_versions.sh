@@ -15,7 +15,7 @@ get_version() {
 export -f get_version
 
 echo "--- Pinned Comparison ---"
-printf "fastapi 0.136.0\nuvicorn 0.44.0\naiohttp 3.13.5\npydantic 2.13.2\npython-multipart 0.0.26\nreportlab 4.4.10\nstreamlit 1.56.0\nrequests 2.33.1\nfolium 0.20.0\nstreamlit-folium 0.27.1\npandas 2.2.3\nmangum >=0.19.0\n" | xargs -P 10 -n 2 bash -c 'get_version "$0" "$1"'
+printf "fastapi 0.136.1\nuvicorn 0.46.0\naiohttp 3.13.5\npydantic 2.13.3\npython-multipart 0.0.27\nreportlab 4.5.0\nstreamlit 1.57.0\nrequests 2.33.1\nfolium 0.20.0\nstreamlit-folium 0.27.2\npandas 3.0.2\nmangum >=0.19.0\n" | xargs -P 10 -n 2 bash -c 'get_version "$0" "$1"'
 
 echo "--- Unpinned Latest ---"
 printf "stripe\nprometheus-client\nprometheus-fastapi-instrumentator\npsycopg2-binary\npython-json-logger\nalembic\nsqlalchemy\nasyncpg\naiosqlite\nredis\nrq\nboto3\naiofiles\nopenpyxl\ngeopy\nmatplotlib\nnumpy\nwebsockets\n" | xargs -P 10 -n 1 bash -c 'get_version "$0"'
