@@ -122,6 +122,219 @@ def redact_for_log(value: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Envelope encryption (KMS) for ``metadata_json``
+# ---------------------------------------------------------------------------
+#
+# Even after HMAC-pseudonymising the obvious ``tower_id`` field, audit
+# rows accumulate free-form ``metadata`` that may carry sensitive
+# fragments (admin justifications, IP hints, request payloads). To
+# keep ``audit_log.metadata_json`` readable only by the running app
+# (not by anyone with cold DB / backup access), we wrap each row's
+# JSON with AWS KMS envelope encryption:
+#
+#   * GenerateDataKey returns a 256-bit DEK (plaintext + KMS-wrapped).
+#   * The DEK is cached in process memory for ``KMS_DEK_TTL_SECONDS``
+#     (default 3600) and used to AES-GCM-encrypt up to
+#     ``KMS_DEK_MAX_USES`` rows (default 1000) before rotating, so KMS
+#     calls stay below ~25 / day at typical traffic.
+#   * Each row stores ``"kms:v1:" + base64(wrapped_len(2) || wrapped ||
+#     nonce(12) || ciphertext+tag)``. The wrapped DEK is co-located so
+#     a row can be decrypted independently of the cache state.
+#
+# Decryption caches plaintext DEKs by their wrapped-bytes key so a
+# scan of N rows (e.g. ``recent_for_key``) only triggers a small
+# constant number of KMS Decrypt calls.
+#
+# Disabled in dev / CI: when ``AUDIT_KMS_KEY_ID`` is unset the
+# serializer falls back to plain JSON. Existing cleartext rows remain
+# readable; the ``scripts/audit_log_encrypt.py`` CLI migrates them
+# in-place.
+#
+# IAM requirement: the API task role needs ``kms:GenerateDataKey`` and
+# ``kms:Decrypt`` on the configured CMK.
+
+_KMS_KEY_ID = os.getenv("AUDIT_KMS_KEY_ID", "").strip()
+_KMS_REGION = os.getenv("AUDIT_KMS_REGION", os.getenv("AWS_REGION", "")).strip()
+_KMS_DEK_TTL = float(os.getenv("KMS_DEK_TTL_SECONDS", "3600"))
+_KMS_DEK_MAX_USES = int(os.getenv("KMS_DEK_MAX_USES", "1000"))
+
+_KMS_PREFIX = "kms:v1:"
+
+_kms_lock = threading.Lock()
+_kms_dek_cache: Dict[str, Tuple[bytes, float]] = {}  # wrapped -> (plaintext, exp_ts)
+_kms_active: Optional[Tuple[bytes, bytes, float, int]] = None  # (wrapped, plaintext, exp_ts, uses_left)
+
+
+def _kms_client():
+    """Return a boto3 KMS client, or None if boto3 / creds unavailable.
+
+    Caches per-process. Best-effort: if KMS access fails for any reason
+    (missing creds, network, permissions) the encryptor degrades to
+    plain JSON and emits a warning so monitoring catches it.
+    """
+    try:
+        import boto3  # type: ignore
+    except Exception:
+        return None
+    kwargs: Dict[str, Any] = {}
+    if _KMS_REGION:
+        kwargs["region_name"] = _KMS_REGION
+    try:
+        return boto3.client("kms", **kwargs)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("KMS client init failed: %s", exc)
+        return None
+
+
+def _get_active_dek() -> Optional[Tuple[bytes, bytes]]:
+    """Return ``(wrapped, plaintext)`` for the current write-side DEK.
+
+    Generates a new DEK via ``kms:GenerateDataKey`` when the cached one
+    is missing, expired, or exhausted. Returns None when KMS is
+    unavailable, signalling the caller to fall back to plain JSON.
+    """
+    global _kms_active
+    if not _KMS_KEY_ID:
+        return None
+    now = time.time()
+    with _kms_lock:
+        if _kms_active is not None:
+            wrapped, plaintext, exp, uses_left = _kms_active
+            if exp > now and uses_left > 0:
+                _kms_active = (wrapped, plaintext, exp, uses_left - 1)
+                return wrapped, plaintext
+        client = _kms_client()
+        if client is None:
+            return None
+        try:
+            resp = client.generate_data_key(
+                KeyId=_KMS_KEY_ID,
+                KeySpec="AES_256",
+                EncryptionContext={"purpose": "audit_log.metadata_json"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("kms:GenerateDataKey failed: %s", exc)
+            return None
+        wrapped = bytes(resp["CiphertextBlob"])
+        plaintext = bytes(resp["Plaintext"])
+        exp = now + _KMS_DEK_TTL
+        _kms_active = (wrapped, plaintext, exp, _KMS_DEK_MAX_USES - 1)
+        # Also seed the read-side cache so a same-process decrypt is free.
+        _kms_dek_cache[wrapped] = (plaintext, exp)
+        return wrapped, plaintext
+
+
+def _decrypt_dek(wrapped: bytes) -> Optional[bytes]:
+    """Unwrap ``wrapped`` via KMS, with an in-process cache.
+
+    Returns None if KMS is unavailable; the caller should leave the row
+    metadata as ``{"_decrypt_error": True}`` rather than 500ing.
+    """
+    now = time.time()
+    with _kms_lock:
+        cached = _kms_dek_cache.get(wrapped)
+        if cached and cached[1] > now:
+            return cached[0]
+        client = _kms_client()
+        if client is None:
+            return None
+        try:
+            resp = client.decrypt(
+                CiphertextBlob=wrapped,
+                EncryptionContext={"purpose": "audit_log.metadata_json"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("kms:Decrypt failed: %s", exc)
+            return None
+        plaintext = bytes(resp["Plaintext"])
+        _kms_dek_cache[wrapped] = (plaintext, now + _KMS_DEK_TTL)
+        return plaintext
+
+
+def _encrypt_metadata_blob(plaintext_json: str) -> Optional[str]:
+    """Envelope-encrypt a JSON string into the ``"kms:v1:..."`` token.
+
+    Returns None when KMS is not configured or unavailable, signalling
+    the caller to store the original JSON in cleartext.
+    """
+    pair = _get_active_dek()
+    if pair is None:
+        return None
+    wrapped, dek = pair
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except Exception:
+        return None
+    nonce = os.urandom(12)
+    try:
+        ct = AESGCM(dek).encrypt(nonce, plaintext_json.encode("utf-8"), None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("AES-GCM encrypt failed: %s", exc)
+        return None
+    import base64 as _b64
+    if len(wrapped) > 0xFFFF:
+        # Should never happen with KMS (typical wrapped DEK is ~150-300 bytes).
+        return None
+    blob = len(wrapped).to_bytes(2, "big") + wrapped + nonce + ct
+    return _KMS_PREFIX + _b64.b64encode(blob).decode("ascii")
+
+
+def _decrypt_metadata_blob(token: str) -> Optional[str]:
+    """Reverse of :func:`_encrypt_metadata_blob`. Returns the JSON string.
+
+    Returns None on any failure (caller should substitute a sentinel
+    like ``{"_decrypt_error": true}`` so reads never raise).
+    """
+    if not token or not token.startswith(_KMS_PREFIX):
+        return None
+    import base64 as _b64
+    try:
+        raw = _b64.b64decode(token[len(_KMS_PREFIX):], validate=True)
+    except Exception:
+        return None
+    if len(raw) < 2 + 12 + 16:
+        return None
+    wrapped_len = int.from_bytes(raw[:2], "big")
+    if len(raw) < 2 + wrapped_len + 12 + 16:
+        return None
+    wrapped = raw[2:2 + wrapped_len]
+    nonce = raw[2 + wrapped_len:2 + wrapped_len + 12]
+    ct = raw[2 + wrapped_len + 12:]
+    dek = _decrypt_dek(wrapped)
+    if dek is None:
+        return None
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        pt = AESGCM(dek).decrypt(nonce, ct, None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("AES-GCM decrypt failed: %s", exc)
+        return None
+    try:
+        return pt.decode("utf-8")
+    except Exception:
+        return None
+
+
+def _decrypt_row_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Mutate ``row`` in place so ``metadata_json`` is decrypted JSON.
+
+    Rows written before KMS was enabled keep their cleartext JSON
+    untouched. Decrypt failures yield a sentinel so reads stay
+    deterministic and the caller can surface "not decryptable" to ops.
+    """
+    val = row.get("metadata_json")
+    if isinstance(val, str) and val.startswith(_KMS_PREFIX):
+        decrypted = _decrypt_metadata_blob(val)
+        if decrypted is None:
+            row["metadata_json"] = json.dumps(
+                {"_decrypt_error": True}, separators=(",", ":")
+            )
+        else:
+            row["metadata_json"] = decrypted
+    return row
+
+
+# ---------------------------------------------------------------------------
 # Retention policy
 # ---------------------------------------------------------------------------
 #
@@ -166,11 +379,15 @@ def _truncate_meta(meta: Optional[Dict[str, Any]]) -> Optional[str]:
         return None
     if len(s) > _META_MAX_BYTES:
         # Truncate but stay valid JSON: replace with a stub object.
-        return json.dumps(
+        s = json.dumps(
             {"_truncated": True, "_orig_size": len(s)},
             separators=(",", ":"),
         )
-    return s
+    # Envelope-encrypt with KMS when configured. Falls through to the
+    # cleartext JSON when KMS is unset or transiently unavailable so a
+    # KMS outage doesn't kill audit writes.
+    encrypted = _encrypt_metadata_blob(s)
+    return encrypted if encrypted is not None else s
 
 
 def _row(
@@ -261,7 +478,7 @@ def _pg_recent(api_key: str, limit: int) -> List[Dict[str, Any]]:
                 """,
                 (api_key, int(limit)),
             )
-            return [dict(r) for r in cur.fetchall()]
+            return [_decrypt_row_metadata(dict(r)) for r in cur.fetchall()]
     except Exception as exc:  # noqa: BLE001
         logger.warning("audit_log read failed: %s", exc)
         return []
@@ -325,7 +542,7 @@ def recent_for_key(api_key: str, limit: int = 100) -> List[Dict[str, Any]]:
     with _mem_lock:
         snapshot = [dict(r) for r in _mem if r["api_key"] == api_key]
     snapshot.sort(key=lambda r: r["ts"], reverse=True)
-    return snapshot[:limit]
+    return [_decrypt_row_metadata(r) for r in snapshot[:limit]]
 
 
 def top_actors(since_ts: float, limit: int = 20) -> List[Dict[str, Any]]:

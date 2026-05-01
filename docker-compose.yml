@@ -109,6 +109,14 @@ services:
       - SAGEMAKER_COVERAGE_ENDPOINT=${SAGEMAKER_COVERAGE_ENDPOINT:-}
       - COVERAGE_MODEL_PATH=${COVERAGE_MODEL_PATH:-/app/coverage_model.npz}
       - COVERAGE_MODEL_S3_URI=${COVERAGE_MODEL_S3_URI:-}
+      # KMS envelope encryption for audit_log.metadata_json. Leave
+      # AUDIT_KMS_KEY_ID empty in dev to disable (rows stay in
+      # cleartext JSON). The IAM creds mounted via aws_*_id secrets
+      # need kms:GenerateDataKey + kms:Decrypt on this CMK.
+      - AUDIT_KMS_KEY_ID=${AUDIT_KMS_KEY_ID:-}
+      - AUDIT_KMS_REGION=${AUDIT_KMS_REGION:-}
+      - KMS_DEK_TTL_SECONDS=${KMS_DEK_TTL_SECONDS:-3600}
+      - KMS_DEK_MAX_USES=${KMS_DEK_MAX_USES:-1000}
     secrets:
       - database_url
       - aws_access_key_id

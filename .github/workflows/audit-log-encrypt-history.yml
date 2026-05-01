@@ -1,0 +1,113 @@
+name: Audit Log Encrypt History (one-shot)
+
+# Re-encrypt historical audit_log.metadata_json cleartext rows under
+# the configured KMS CMK. Once new writes are encrypted by the API
+# (AUDIT_KMS_KEY_ID set), this workflow brings legacy rows up to the
+# same protection level. Idempotent: re-running on already-encrypted
+# rows is a no-op.
+#
+# Manual trigger only — there's no cron for this; once the backlog is
+# zero the job has nothing to do.
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'Rows per transaction'
+        required: false
+        default: '200'
+      max_rows:
+        description: 'Hard cap on rows touched in this run (0 = unlimited)'
+        required: false
+        default: '0'
+      dry_run:
+        description: 'Report backlog count only; do not write'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: audit-log-encrypt-history
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  encrypt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Whitelist runner IP in EC2 SG
+        id: sg
+        env:
+          EC2_SG_ID: ${{ secrets.EC2_SG_ID }}
+        run: |
+          : "${EC2_SG_ID:?EC2_SG_ID secret not set}"
+          RUNNER_IP=$(curl -sSf https://checkip.amazonaws.com | tr -d '\r\n')
+          echo "runner_ip=${RUNNER_IP}" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${EC2_SG_ID}" \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" \
+            --tag-specifications "ResourceType=security-group-rule,Tags=[{Key=Name,Value=gh-actions-ephemeral},{Key=Workflow,Value=audit-log-encrypt-history}]" \
+            2>&1 | grep -v "InvalidPermission.Duplicate" || true
+
+      - name: Push SSH key via EC2 Instance Connect
+        run: |
+          ssh-keygen -t rsa -b 2048 -f /tmp/ec2_key -N "" -q
+          aws ec2-instance-connect send-ssh-public-key \
+            --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+            --instance-os-user ubuntu \
+            --ssh-public-key file:///tmp/ec2_key.pub
+
+      - name: Run encrypt-history on EC2
+        env:
+          BATCH_SIZE: ${{ github.event.inputs.batch_size }}
+          MAX_ROWS: ${{ github.event.inputs.max_rows }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} \
+            "BATCH_SIZE='${BATCH_SIZE}' MAX_ROWS='${MAX_ROWS}' DRY_RUN='${DRY_RUN}' bash -s" << 'ENCRYPT'
+          set -euo pipefail
+          cd /home/ubuntu/TELECOM-TOWER-POWER
+
+          ARGS=()
+          [ -n "${BATCH_SIZE:-}" ] && ARGS+=( --batch-size "${BATCH_SIZE}" )
+          [ -n "${MAX_ROWS:-}" ]   && ARGS+=( --max-rows   "${MAX_ROWS}" )
+          [ "${DRY_RUN:-false}" = "true" ] && ARGS+=( --dry-run )
+
+          # Run inside the api container so DATABASE_URL, AWS creds and
+          # AUDIT_KMS_KEY_ID are already wired up.
+          OUT=$(docker compose exec -T api sh -lc \
+            ". /app/load_secrets.sh && python /app/scripts/audit_log_encrypt.py ${ARGS[*]:-}")
+          echo "$OUT"
+          echo "$OUT" | tail -1 >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          ENCRYPT
+
+      - name: Revoke runner IP
+        if: always()
+        env:
+          EC2_SG_ID: ${{ secrets.EC2_SG_ID }}
+          RUNNER_IP: ${{ steps.sg.outputs.runner_ip }}
+        run: |
+          [ -z "${RUNNER_IP:-}" ] && exit 0
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${EC2_SG_ID}" \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" \
+            2>&1 | grep -v "InvalidPermission.NotFound" || true

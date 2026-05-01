@@ -73,6 +73,7 @@ COPY load_secrets.sh .
 
 # Operational scripts (e.g. audit_log_prune.py for the daily retention job).
 COPY scripts/audit_log_prune.py scripts/audit_log_prune.py
+COPY scripts/audit_log_encrypt.py scripts/audit_log_encrypt.py
 
 # Copy built React frontend
 COPY --from=frontend-build /app/dist frontend_dist/
