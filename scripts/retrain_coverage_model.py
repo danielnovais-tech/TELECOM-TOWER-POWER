@@ -145,8 +145,15 @@ def main() -> int:
             historical=historical,
             save_to=out_path,
         )
-        logger.info("trained: rmse=%.2f dB n_train=%d version=%s",
-                    model.rmse_db, model.n_train, model.version)
+        logger.info(
+            "trained: rmse=%.2f dB cv_rmse=%.2f±%.2f dB (k=%d) n_train=%d version=%s",
+            model.rmse_db, model.cv_rmse_db, model.cv_rmse_std_db,
+            model.cv_folds, model.n_train, model.version,
+        )
+        if model.rmse_by_morphology:
+            logger.info("per-morphology RMSE: %s", model.rmse_by_morphology)
+        if model.rmse_by_band:
+            logger.info("per-band RMSE: %s", model.rmse_by_band)
 
         if args.dry_run:
             logger.info("dry-run; not uploading")
@@ -156,6 +163,9 @@ def main() -> int:
                     f.write(
                         f"retrained=false\nobservations={current}\ndelta={delta}\n"
                         f"rmse_db={model.rmse_db:.4f}\nn_train={model.n_train}\n"
+                        f"cv_rmse_db={model.cv_rmse_db:.4f}\n"
+                        f"cv_rmse_std_db={model.cv_rmse_std_db:.4f}\n"
+                        f"cv_folds={model.cv_folds}\n"
                     )
             return 0
 
@@ -170,6 +180,11 @@ def main() -> int:
         "rmse_db": model.rmse_db,
         "n_train": model.n_train,
         "version": model.version,
+        "cv_rmse_db": model.cv_rmse_db,
+        "cv_rmse_std_db": model.cv_rmse_std_db,
+        "cv_folds": model.cv_folds,
+        "rmse_by_morphology": model.rmse_by_morphology,
+        "rmse_by_band": model.rmse_by_band,
     }
     _write_marker(s3, bucket, marker_key, payload)
     logger.info("wrote marker s3://%s/%s", bucket, marker_key)
@@ -180,6 +195,9 @@ def main() -> int:
             f.write(
                 f"retrained=true\nobservations={current}\ndelta={delta}\n"
                 f"rmse_db={model.rmse_db:.4f}\nn_train={model.n_train}\n"
+                f"cv_rmse_db={model.cv_rmse_db:.4f}\n"
+                f"cv_rmse_std_db={model.cv_rmse_std_db:.4f}\n"
+                f"cv_folds={model.cv_folds}\n"
             )
     return 0
 

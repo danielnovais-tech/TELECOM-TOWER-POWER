@@ -117,6 +117,7 @@ nav:
       - Arquitetura: operations/architecture.md
       - Runbook: operations/runbook.md
       - O que está em produção: operations/whats-shipped.md
+      - Validação do modelo: operations/model-validation.md
   - Casos de uso:
       - ISP regional brasileiro: case-studies/regional-isp-brazil.md
       - ROI por segmento: case-studies/roi-by-segment.md

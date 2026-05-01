@@ -215,8 +215,14 @@ class CoverageModel:
     feature_std: np.ndarray                # shape (F,)
     version: str = "ridge-v1"
     trained_at: float = field(default_factory=time.time)
-    rmse_db: float = 0.0
+    rmse_db: float = 0.0                   # in-sample (training) RMSE
     n_train: int = 0
+    # ── Calibration metrics (added 2026-05) ────────────────────────────
+    cv_rmse_db: float = 0.0                # mean k-fold holdout RMSE
+    cv_rmse_std_db: float = 0.0            # stddev across folds
+    cv_folds: int = 0                      # k value used (0 = not evaluated)
+    rmse_by_morphology: Dict[str, float] = field(default_factory=dict)
+    rmse_by_band: Dict[str, float] = field(default_factory=dict)
 
     # ---- prediction --------------------------------------------------------
 
@@ -239,13 +245,19 @@ class CoverageModel:
                     "trained_at": self.trained_at,
                     "rmse_db": self.rmse_db,
                     "n_train": self.n_train,
+                    "cv_rmse_db": self.cv_rmse_db,
+                    "cv_rmse_std_db": self.cv_rmse_std_db,
+                    "cv_folds": self.cv_folds,
+                    "rmse_by_morphology": self.rmse_by_morphology,
+                    "rmse_by_band": self.rmse_by_band,
                     "feature_names": list(_FEATURE_NAMES),
                 }).encode("utf-8"),
                 dtype=np.uint8,
             ),
         )
-        logger.info("Saved coverage model to %s (rmse=%.2f dB, n=%d)",
-                    path, self.rmse_db, self.n_train)
+        logger.info("Saved coverage model to %s (rmse=%.2f dB, cv=%.2f±%.2f dB, n=%d)",
+                    path, self.rmse_db, self.cv_rmse_db, self.cv_rmse_std_db,
+                    self.n_train)
 
     @classmethod
     def load(cls, path: str) -> "CoverageModel":
@@ -263,6 +275,11 @@ class CoverageModel:
                 trained_at=meta.get("trained_at", 0.0),
                 rmse_db=meta.get("rmse_db", 0.0),
                 n_train=meta.get("n_train", 0),
+                cv_rmse_db=meta.get("cv_rmse_db", 0.0),
+                cv_rmse_std_db=meta.get("cv_rmse_std_db", 0.0),
+                cv_folds=meta.get("cv_folds", 0),
+                rmse_by_morphology=dict(meta.get("rmse_by_morphology", {}) or {}),
+                rmse_by_band=dict(meta.get("rmse_by_band", {}) or {}),
             )
 
 
@@ -461,8 +478,17 @@ def train_model(
     l2: float = 1.0,
     seed: int = 42,
     save_to: Optional[str] = None,
+    kfold: int = 5,
 ) -> CoverageModel:
-    """Train the ridge regression model and (optionally) persist it."""
+    """Train the ridge regression model and (optionally) persist it.
+
+    With ``kfold >= 2`` (default 5) the function also performs k-fold
+    cross-validation **on the synthetic dataset only** (real
+    ``link_observations`` rows are too few + too valuable to hold out
+    in early-stage training) and reports holdout RMSE plus per-band /
+    per-morphology breakdown. Set ``kfold=0`` to skip CV (useful for
+    unit tests where determinism + speed matter).
+    """
     random.seed(seed)
     np.random.seed(seed)
 
@@ -490,12 +516,32 @@ def train_model(
     preds = Xn_b @ w
     rmse = float(np.sqrt(np.mean((preds - y) ** 2)))
 
+    # ── K-fold cross-validation on synthetic data ───────────────────────
+    cv_rmse = 0.0
+    cv_std = 0.0
+    cv_used = 0
+    rmse_by_morph: Dict[str, float] = {}
+    rmse_by_band: Dict[str, float] = {}
+    if kfold and kfold >= 2 and len(X_syn) >= kfold * 10:
+        cv_used = int(kfold)
+        cv_rmse, cv_std, rmse_by_morph, rmse_by_band = _kfold_evaluate(
+            X_syn, y_syn, l2=l2, k=cv_used, seed=seed,
+        )
+        logger.info(
+            "K-fold CV (k=%d): test RMSE = %.2f ± %.2f dB", cv_used, cv_rmse, cv_std,
+        )
+
     model = CoverageModel(
         weights=w,
         feature_mean=mean,
         feature_std=std_safe,
         rmse_db=rmse,
         n_train=len(X),
+        cv_rmse_db=float(cv_rmse),
+        cv_rmse_std_db=float(cv_std),
+        cv_folds=cv_used,
+        rmse_by_morphology=rmse_by_morph,
+        rmse_by_band=rmse_by_band,
     )
     if save_to:
         model.save(save_to)
@@ -503,6 +549,106 @@ def train_model(
         global _model_cache
         _model_cache = model
     return model
+
+
+# ---------------------------------------------------------------------------
+# Cross-validation helpers
+# ---------------------------------------------------------------------------
+
+# Morphology buckets are derived from terrain_std_m (column index 9 in
+# _FEATURE_NAMES). Thresholds chosen to align with how field engineers
+# describe Brazilian terrain — see notes/tier1-roadmap.md.
+_TERRAIN_STD_IDX = _FEATURE_NAMES.index("terrain_std_m")
+_LOG_F_IDX = _FEATURE_NAMES.index("log_f_ghz")
+
+
+def _morphology_label(terrain_std_m: float) -> str:
+    if terrain_std_m < 5.0:
+        return "open_or_flat"
+    if terrain_std_m < 15.0:
+        return "rural_rolling"
+    return "rural_mountainous"
+
+
+def _band_label(log_f_ghz: float) -> str:
+    f_ghz = math.exp(log_f_ghz)
+    # Bucket to nominal commercial band names (closest match).
+    bands = [
+        (0.7, "700MHz"), (0.85, "850MHz"), (0.9, "900MHz"),
+        (1.8, "1800MHz"), (2.1, "2100MHz"), (2.6, "2600MHz"),
+        (3.5, "3500MHz"),
+    ]
+    return min(bands, key=lambda b: abs(b[0] - f_ghz))[1]
+
+
+def _fit_ridge(X: np.ndarray, y: np.ndarray, l2: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Returns (weights, feature_mean, feature_std_safe)."""
+    mean = X.mean(axis=0)
+    std = X.std(axis=0)
+    std_safe = np.where(std == 0, 1.0, std)
+    Xn = (X - mean) / std_safe
+    Xn_b = np.hstack([Xn, np.ones((len(Xn), 1))])
+    F = Xn_b.shape[1]
+    reg = l2 * np.eye(F)
+    reg[-1, -1] = 0.0
+    w = np.linalg.solve(Xn_b.T @ Xn_b + reg, Xn_b.T @ y)
+    return w, mean, std_safe
+
+
+def _kfold_evaluate(
+    X: np.ndarray, y: np.ndarray, *, l2: float, k: int, seed: int = 42,
+) -> Tuple[float, float, Dict[str, float], Dict[str, float]]:
+    """K-fold CV. Returns (mean_rmse, std_rmse, rmse_by_morph, rmse_by_band).
+
+    Per-morphology / per-band RMSE is computed on the **concatenated
+    holdout predictions** across all folds, so each row gets exactly one
+    out-of-fold prediction.
+    """
+    rng = np.random.RandomState(seed)
+    n = len(X)
+    idx = rng.permutation(n)
+    fold_size = n // k
+
+    fold_rmses: List[float] = []
+    holdout_pred = np.zeros(n)
+    holdout_y = np.zeros(n)
+
+    for f in range(k):
+        start = f * fold_size
+        end = (f + 1) * fold_size if f < k - 1 else n
+        test_idx = idx[start:end]
+        train_idx = np.concatenate([idx[:start], idx[end:]])
+
+        w, m, s = _fit_ridge(X[train_idx], y[train_idx], l2=l2)
+        Xtest_n = (X[test_idx] - m) / s
+        Xtest_b = np.hstack([Xtest_n, np.ones((len(Xtest_n), 1))])
+        preds = Xtest_b @ w
+
+        fold_rmses.append(float(np.sqrt(np.mean((preds - y[test_idx]) ** 2))))
+        holdout_pred[test_idx] = preds
+        holdout_y[test_idx] = y[test_idx]
+
+    cv_mean = float(np.mean(fold_rmses))
+    cv_std = float(np.std(fold_rmses))
+
+    # Per-morphology RMSE on out-of-fold predictions
+    morph_groups: Dict[str, List[int]] = {}
+    band_groups: Dict[str, List[int]] = {}
+    for i in range(n):
+        morph_groups.setdefault(_morphology_label(X[i, _TERRAIN_STD_IDX]), []).append(i)
+        band_groups.setdefault(_band_label(X[i, _LOG_F_IDX]), []).append(i)
+
+    def _grouped_rmse(groups: Dict[str, List[int]]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for label, ids in groups.items():
+            if len(ids) < 5:
+                continue  # too few points to be meaningful
+            ids_arr = np.asarray(ids)
+            err = holdout_pred[ids_arr] - holdout_y[ids_arr]
+            out[label] = round(float(np.sqrt(np.mean(err ** 2))), 4)
+        return out
+
+    return cv_mean, cv_std, _grouped_rmse(morph_groups), _grouped_rmse(band_groups)
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,9 @@ jobs:
       delta: ${{ steps.train.outputs.delta }}
       rmse_db: ${{ steps.train.outputs.rmse_db }}
       n_train: ${{ steps.train.outputs.n_train }}
+      cv_rmse_db: ${{ steps.train.outputs.cv_rmse_db }}
+      cv_rmse_std_db: ${{ steps.train.outputs.cv_rmse_std_db }}
+      cv_folds: ${{ steps.train.outputs.cv_folds }}
     steps:
       - uses: actions/checkout@v6
 
@@ -118,7 +121,10 @@ jobs:
             echo "| retrained | ${{ steps.train.outputs.retrained || 'false' }} |"
             echo "| observations | ${{ steps.train.outputs.observations || 'n/a' }} |"
             echo "| delta vs last | ${{ steps.train.outputs.delta || 'n/a' }} |"
-            echo "| rmse_db | ${{ steps.train.outputs.rmse_db || 'n/a' }} |"
+            echo "| rmse_db (train) | ${{ steps.train.outputs.rmse_db || 'n/a' }} |"
+            echo "| cv_rmse_db (holdout) | ${{ steps.train.outputs.cv_rmse_db || 'n/a' }} |"
+            echo "| cv_rmse_std_db | ${{ steps.train.outputs.cv_rmse_std_db || 'n/a' }} |"
+            echo "| cv_folds | ${{ steps.train.outputs.cv_folds || 'n/a' }} |"
             echo "| n_train | ${{ steps.train.outputs.n_train || 'n/a' }} |"
             echo "| dry_run | ${{ inputs.dry_run || 'false' }} |"
           } >> "$GITHUB_STEP_SUMMARY"

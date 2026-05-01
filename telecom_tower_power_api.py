@@ -204,6 +204,31 @@ COVERAGE_MODEL_TRAINED_AT = Gauge(
     "coverage_model_trained_at",
     "Unix epoch seconds when the loaded coverage model was trained",
 )
+# Cross-validation metrics (added 2026-05) — exposed so Grafana panels
+# and tier-1 procurement audits can read out-of-fold accuracy directly,
+# not just in-sample training RMSE.
+COVERAGE_MODEL_CV_RMSE_DB = Gauge(
+    "coverage_model_cv_rmse_db",
+    "Mean k-fold holdout RMSE (dB) of the loaded coverage model",
+)
+COVERAGE_MODEL_CV_RMSE_STD_DB = Gauge(
+    "coverage_model_cv_rmse_std_db",
+    "Stddev across folds of holdout RMSE (dB)",
+)
+COVERAGE_MODEL_CV_FOLDS = Gauge(
+    "coverage_model_cv_folds",
+    "Number of k-fold splits used to evaluate the loaded coverage model",
+)
+COVERAGE_MODEL_RMSE_BY_MORPHOLOGY_DB = Gauge(
+    "coverage_model_rmse_by_morphology_db",
+    "Out-of-fold RMSE (dB) bucketed by terrain morphology",
+    labelnames=["morphology"],
+)
+COVERAGE_MODEL_RMSE_BY_BAND_DB = Gauge(
+    "coverage_model_rmse_by_band_db",
+    "Out-of-fold RMSE (dB) bucketed by commercial band",
+    labelnames=["band"],
+)
 
 # ------------------------------------------------------------
 # Core domain models (same as before, with minor enhancements)
@@ -2136,11 +2161,23 @@ async def coverage_model_info(
             "n_train": model.n_train,
             "trained_at": model.trained_at,
             "feature_count": int(len(model.feature_mean)),
+            "cv_rmse_db": round(model.cv_rmse_db, 4),
+            "cv_rmse_std_db": round(model.cv_rmse_std_db, 4),
+            "cv_folds": int(model.cv_folds),
+            "rmse_by_morphology": dict(model.rmse_by_morphology or {}),
+            "rmse_by_band": dict(model.rmse_by_band or {}),
         }
         try:
             COVERAGE_MODEL_RMSE_DB.set(model.rmse_db)
             COVERAGE_MODEL_N_TRAIN.set(model.n_train)
             COVERAGE_MODEL_TRAINED_AT.set(model.trained_at)
+            COVERAGE_MODEL_CV_RMSE_DB.set(model.cv_rmse_db)
+            COVERAGE_MODEL_CV_RMSE_STD_DB.set(model.cv_rmse_std_db)
+            COVERAGE_MODEL_CV_FOLDS.set(model.cv_folds)
+            for morph, val in (model.rmse_by_morphology or {}).items():
+                COVERAGE_MODEL_RMSE_BY_MORPHOLOGY_DB.labels(morphology=morph).set(val)
+            for band, val in (model.rmse_by_band or {}).items():
+                COVERAGE_MODEL_RMSE_BY_BAND_DB.labels(band=band).set(val)
         except Exception:
             logger.debug("coverage_model gauge update failed", exc_info=True)
     return payload
