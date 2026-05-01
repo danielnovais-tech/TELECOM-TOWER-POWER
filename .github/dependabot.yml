@@ -1,0 +1,83 @@
+# Dependabot configuration
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+updates:
+  # ── Python: main app ─────────────────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      patch-and-minor:
+        update-types:
+          - "patch"
+          - "minor"
+
+  # ── Python: docs site (mkdocs) ───────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/docs-site"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docs"
+    commit-message:
+      prefix: "chore(docs-deps)"
+      include: "scope"
+    groups:
+      docs-patch-and-minor:
+        update-types:
+          - "patch"
+          - "minor"
+
+  # ── GitHub Actions ───────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci(deps)"
+      include: "scope"
+    groups:
+      actions-all:
+        update-types:
+          - "patch"
+          - "minor"
+          - "major"
+
+  # ── Docker (root Dockerfile + compose) ───────────────────────────
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "chore(docker)"
+      include: "scope"
