@@ -1,6 +1,7 @@
 import { useState } from "react";
 import LoginWithSSO from "./LoginWithSSO";
 import Pricing from "./Pricing";
+import RoiCalculator from "./RoiCalculator";
 
 const COPY = {
   pt: {
@@ -235,6 +236,10 @@ export default function Landing({ onSignup, onLogin }) {
             </div>
           ))}
         </div>
+      </section>
+
+      <section style={styles.sectionAlt}>
+        <RoiCalculator lang={lang} />
       </section>
 
       <section id="pricing" style={styles.section}>

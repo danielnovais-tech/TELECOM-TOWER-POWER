@@ -112,3 +112,30 @@ Os 20 contras são quase todos verdadeiros e não-removíveis sem reconstruir o 
 - Receita ARR cruzar R$ 1M
 - Algar ou Sercomtel virar case study fechado
 - Mudança regulatória ANATEL que mude jogo (ex: obrigatoriedade de SaaS auditável para leilões)
+
+## Anexo: ROI por segmento (estimativa, 2026-04-30)
+
+Premissas:
+
+- Eng. RF sênior CLT carregado: R$ 180/h
+- Consultor RF PJ: R$ 250-400/h
+- Visita técnica de scouting: R$ 800-2.500
+- Licença Atoll seat: R$ 80-150k/ano
+- Licença Pathloss amortizada: R$ 8-15k/ano
+
+| Segmento | Plano TTP | ARR cliente | Economia anual líquida | ROI cliente | Quantos no BR |
+|---|---|---:|---:|:---:|---:|
+| WISP regional (5-30k assinantes) | Pro | R$ 4,2k | ~R$ 115k | **27×** | ~3.000 |
+| Consultoria RF (1-3 consultores) | Business | R$ 15,6k | ~R$ 110k margem extra | **7×** | ~500-1.000 |
+| ISP regional grande (50-200k) | Enterprise | R$ 22,7k | ~R$ 660k | **29×** | ~50-100 |
+| Algar / Sercomtel / Brisanet | Ultra | R$ 34,8k | ~R$ 220k | **6×** | ~5-10 |
+| TIM (sub-departamento isolado) | Custom | R$ 60-200k | ~R$ 100-280k | 1-2× | 1 |
+| Vivo / Claro | Custom | R$ 60-200k | ~R$ 100-280k | **1-2×** | 2 |
+
+**Conclusão operacional:**
+
+- WISPs e ISPs regionais grandes têm ROI 26-29× — payback em ~14 dias. Marketing pode usar como mensagem central.
+- Tier-1 BR tem ROI 1-2× para o cliente **e** ROI negativo para o vendedor (custo de venda R$ 1-2M para fechar R$ 60-200k/ano). Não buscar.
+- Tier-2/3 regional (Algar, Sercomtel, Brisanet) tem ROI 6× — aceitável, e o ticket Ultra cobre o esforço de venda. **Buscar após Fase 1**.
+
+Detalhamento por linha de economia em [docs-site/docs/case-studies/roi-by-segment.md](../docs-site/docs/case-studies/roi-by-segment.md).
