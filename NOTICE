@@ -33,6 +33,17 @@ Apache-2.0, MIT, BSD, ISC, PSF, Zlib, 0BSD, CC0 components
 A complete inventory of dependency licenses (auto-generated) is published
 as a CI artefact by .github/workflows/license-scan.yml on every build.
 
+================================================================================
+Packages with missing PyPI License metadata (verified manually)
+================================================================================
+
+Some packages ship wheel METADATA without a License field. The license has
+been verified manually from the upstream repository and is recorded here for
+audit purposes. Each entry is allowlisted in .github/workflows/license-scan.yml.
+
+  - streamlit-folium        MIT  https://github.com/randyzwitch/streamlit-folium
+                                 (verified via GitHub API license endpoint)
+
 This NOTICE file is required to be reproduced in any redistribution of
 the components above where their original license requires preservation
 of attribution and license notices.

@@ -124,10 +124,20 @@ jobs:
       - name: Fail on UNKNOWN licenses
         run: |
           set -euo pipefail
+          # Packages whose wheel METADATA is missing the License field
+          # but whose actual upstream license has been verified manually.
+          # Each entry MUST be documented in NOTICE with the verified SPDX
+          # identifier and source.
+          UNKNOWN_ALLOWLIST=(
+            "streamlit-folium"  # MIT (verified via GitHub API on randyzwitch/streamlit-folium)
+          )
           unknown=$(
             jq -r '.[] | select((.License // "UNKNOWN") | ascii_upcase == "UNKNOWN") | "\(.Name)\t\(.Version)"' \
               artifacts/licenses.json
           )
+          for pkg in "${UNKNOWN_ALLOWLIST[@]}"; do
+            unknown=$(echo "$unknown" | grep -viE "^${pkg}[[:space:]]" || true)
+          done
           if [[ -n "$unknown" ]]; then
             echo "::error::Packages with UNKNOWN license metadata:"
             echo "$unknown"
