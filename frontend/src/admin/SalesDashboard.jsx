@@ -76,11 +76,28 @@ export default function SalesDashboard() {
 
   const loadTenant = useCallback(
     async (prefix) => {
+      // Step-up MFA + justification required for /admin/sales/tenants/*.
+      // Prompt the operator inline so the existing dashboard keeps working
+      // without a multi-screen redesign. Authenticator apps like Google
+      // Authenticator / 1Password / Authy emit the 6-digit code.
+      const totp = window.prompt("Enter your 6-digit admin TOTP code:");
+      if (!totp) return; // operator cancelled
+      const justification = window.prompt(
+        "Justification (10-500 chars) — recorded in the audit log:"
+      );
+      if (!justification) return;
       try {
         const res = await fetch(`/admin/sales/tenants/${prefix}`, {
-          headers: { "X-API-Key": adminKey },
+          headers: {
+            "X-API-Key": adminKey,
+            "X-Admin-TOTP": totp.trim(),
+            "X-Admin-Justification": justification.trim(),
+          },
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          const detail = await res.text().catch(() => "");
+          throw new Error(`HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+        }
         setSelectedTenant(await res.json());
       } catch (e) {
         setError(String(e));

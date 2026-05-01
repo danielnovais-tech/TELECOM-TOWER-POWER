@@ -103,6 +103,24 @@ def hmac_target(value: Any, api_key: Optional[str] = None) -> str:
     return f"h:{digest[:16]}"
 
 
+def redact_for_log(value: Any) -> str:
+    """Return a non-reversible short token suitable for stdout / CloudWatch logs.
+
+    Differs from :func:`hmac_target` in that it does NOT take a per-tenant
+    ``api_key`` (call sites in worker / coverage code don't have one handy)
+    and produces an even shorter prefix to keep log lines compact. When the
+    pepper is unset, returns the literal ``"<redacted>"`` so dev logs do not
+    accidentally leak data when secrets are missing.
+    """
+    if value is None or value == "":
+        return ""
+    s = str(value)
+    if not _HMAC_PEPPER:
+        return "<redacted>"
+    digest = hmac.new(_HMAC_PEPPER, s.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"r:{digest[:10]}"
+
+
 # ---------------------------------------------------------------------------
 # Retention policy
 # ---------------------------------------------------------------------------

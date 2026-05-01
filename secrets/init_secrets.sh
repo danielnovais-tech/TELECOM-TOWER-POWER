@@ -23,7 +23,8 @@ for name in \
     grafana_admin_password \
     pagerduty_routing_key \
     admin_api_keys \
-    audit_target_hmac_pepper
+    audit_target_hmac_pepper \
+    admin_totp_secrets
 do
     if [ ! -f "$name" ]; then
         touch "$name"

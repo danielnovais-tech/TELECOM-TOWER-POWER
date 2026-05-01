@@ -43,6 +43,7 @@ cd .. && docker compose up -d
 | `valid_api_keys`        | `VALID_API_KEYS`           |
 | `slack_webhook_url`     | `SLACK_WEBHOOK_URL`        |
 | `audit_target_hmac_pepper` | `AUDIT_TARGET_HMAC_PEPPER` |
+| `admin_totp_secrets`    | `ADMIN_TOTP_SECRETS`       |
 
 > **Security**: All files are git-ignored. Never commit secret values.
 
@@ -60,6 +61,23 @@ cd .. && docker compose up -d
 >
 > Leaving the file empty disables HMACing (cleartext logging) — only
 > acceptable in local dev / CI.
+
+> **`admin_totp_secrets`** holds the per-admin TOTP seeds used by the
+> step-up MFA on `/admin/impersonate/*` and `/admin/sales/tenants/*`.
+> Format: comma-separated `email:base32secret` pairs. Generate a new
+> base32 secret per admin and provision it into an authenticator app
+> (Google Authenticator, 1Password, Authy). To create / rotate one entry:
+>
+> ```bash
+> SECRET=$(python3 -c 'import base64,os;print(base64.b32encode(os.urandom(20)).decode().rstrip("="))')
+> echo "ops@example.com:${SECRET}" > secrets/admin_totp_secrets
+> chmod 600 secrets/admin_totp_secrets
+> # show otpauth:// URI for the admin to scan in their authenticator
+> python3 -c "from urllib.parse import quote;print(f'otpauth://totp/TelecomTowerPower:ops@example.com?secret=${SECRET}&issuer=TelecomTowerPower')"
+> ```
+>
+> If the file is empty or the admin's email is not present, both routes
+> return 503/403 — the operator must enrol before they can impersonate.
 
 ## Production sync (EC2)
 

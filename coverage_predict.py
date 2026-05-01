@@ -831,7 +831,10 @@ async def predict_coverage_grid(
         try:
             return await elevation_service.get_profile(tx_lat, tx_lon, rx_lat, rx_lon)
         except Exception:
-            logger.debug("elevation profile failed for %s,%s", rx_lat, rx_lon, exc_info=True)
+            # NOTE: do not log rx_lat / rx_lon — a debug log of every receiver
+            # coordinate would replicate the same competitive-intelligence
+            # leak that audit_log.hmac_target() guards against.
+            logger.debug("elevation profile failed (coords redacted)", exc_info=True)
             return []
 
     import asyncio

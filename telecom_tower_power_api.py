@@ -11,6 +11,7 @@ Run: uvicorn telecom_tower_power_api:app --reload
 import collections
 import csv
 import hashlib
+import hmac
 import io
 import logging
 import math
@@ -30,7 +31,7 @@ import aiohttp
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Tuple, Any
 from enum import Enum
-from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Request, WebSocket, WebSocketDisconnect, Header
 from fastapi.security import APIKeyHeader
 from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -2443,6 +2444,133 @@ def _admin_email_for(api_key: str) -> str:
         rec = {}
     return rec.get("email") or rec.get("owner") or f"admin:{api_key[:12]}"
 
+
+# ─────────────────────────────────────────────────────────────────────
+# Step-up MFA + textual justification for sensitive admin endpoints
+# ─────────────────────────────────────────────────────────────────────
+# Holding an admin API key alone is not enough to impersonate a tenant
+# or read their per-tenant detail panel. The operator must additionally:
+#
+#   1. Present a current TOTP code from an authenticator app whose secret
+#      is registered for that admin (env ``ADMIN_TOTP_SECRETS`` or the
+#      Docker secret ``admin_totp_secrets``, format
+#      ``email1:base32secret1,email2:base32secret2``). The lookup key is
+#      the value returned by ``_admin_email_for`` so it works for both
+#      tenant-backed admins (real email) and bootstrap admins
+#      (``admin:<prefix>``).
+#   2. Provide a free-text ``justification`` explaining *why* (10-500
+#      chars, e.g. "Customer ticket TT-1234 — investigating PDF render
+#      failure"). The text is recorded verbatim in the audit metadata
+#      so a future reviewer can challenge inappropriate access.
+#
+# The TOTP verifier is implemented in stdlib (RFC 6238, SHA-1, 6 digits,
+# 30s step) — no extra runtime dependency, no external auth call. A
+# 1-step window each side absorbs clock drift between the operator
+# device and the server.
+
+import base64 as _b64
+import struct as _struct
+
+
+def _load_admin_totp_secrets() -> Dict[str, str]:
+    """Parse ``email1:secret1,email2:secret2`` into a dict.
+
+    Reads the Docker secret file first, falling back to the env var so
+    secret rotation matches the pattern used by other secrets.
+    """
+    raw = ""
+    secret_file = "/run/secrets/admin_totp_secrets"
+    try:
+        if os.path.exists(secret_file):
+            with open(secret_file, "r") as fh:
+                raw = fh.read().strip()
+    except Exception:  # noqa: BLE001
+        raw = ""
+    if not raw:
+        raw = os.getenv("ADMIN_TOTP_SECRETS", "").strip()
+    out: Dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry or ":" not in entry:
+            continue
+        email, secret = entry.split(":", 1)
+        email = email.strip().lower()
+        secret = secret.strip().replace(" ", "").upper()
+        if email and secret:
+            out[email] = secret
+    return out
+
+
+_ADMIN_TOTP_SECRETS: Dict[str, str] = _load_admin_totp_secrets()
+
+
+def _totp_at(secret_b32: str, counter: int) -> str:
+    """Compute a 6-digit RFC 6238 TOTP for the given step counter."""
+    # base32 secrets are sometimes stored with padding stripped; pad up
+    # to a multiple of 8 chars before decoding.
+    pad = "=" * ((8 - len(secret_b32) % 8) % 8)
+    try:
+        key = _b64.b32decode(secret_b32 + pad, casefold=True)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("invalid base32 TOTP secret") from exc
+    msg = _struct.pack(">Q", counter)
+    h = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = h[-1] & 0x0F
+    code = ((h[offset] & 0x7F) << 24
+            | (h[offset + 1] & 0xFF) << 16
+            | (h[offset + 2] & 0xFF) << 8
+            | (h[offset + 3] & 0xFF))
+    return f"{code % 1_000_000:06d}"
+
+
+def _verify_admin_totp(admin_key: str, code: str) -> None:
+    """Raise HTTPException unless ``code`` matches the admin's TOTP secret.
+
+    Accepts the current step ±1 (≈90 s window) to absorb clock drift.
+    Uses :func:`hmac.compare_digest` for constant-time comparison.
+    """
+    if not _ADMIN_TOTP_SECRETS:
+        # Hard fail rather than silently bypassing — refusing to operate
+        # without MFA configured is the safer default for sensitive routes.
+        raise HTTPException(
+            status_code=503,
+            detail="step-up MFA not configured; set ADMIN_TOTP_SECRETS",
+        )
+    email = _admin_email_for(admin_key).lower()
+    secret = _ADMIN_TOTP_SECRETS.get(email)
+    if not secret:
+        raise HTTPException(
+            status_code=403,
+            detail=f"step-up MFA not enrolled for admin '{email}'",
+        )
+    if not code or not code.isdigit() or len(code) != 6:
+        raise HTTPException(status_code=400, detail="TOTP code must be 6 digits")
+    now_step = int(time.time()) // 30
+    for delta in (-1, 0, 1):
+        try:
+            expected = _totp_at(secret, now_step + delta)
+        except ValueError:
+            raise HTTPException(status_code=500, detail="invalid TOTP secret on server")
+        if hmac.compare_digest(expected, code):
+            return
+    raise HTTPException(status_code=403, detail="invalid TOTP code")
+
+
+def _validate_justification(text: Optional[str]) -> str:
+    """Trim and length-check the operator-supplied justification."""
+    s = (text or "").strip()
+    if len(s) < 10:
+        raise HTTPException(
+            status_code=400,
+            detail="justification must be at least 10 characters",
+        )
+    if len(s) > 500:
+        raise HTTPException(
+            status_code=400,
+            detail="justification must be at most 500 characters",
+        )
+    return s
+
 # Approximate per-tier monthly revenue in BRL for MRR calculation.
 # Mirrors frontend/src/Pricing.jsx; intentionally simple — the source of
 # truth for billing remains Stripe.
@@ -2574,10 +2702,17 @@ async def admin_sales_tenant_detail(
     api_key_prefix: str,
     request: Request,
     admin_key: str = Depends(require_admin),
+    x_admin_totp: Optional[str] = Header(default=None, alias="X-Admin-TOTP"),
+    x_admin_justification: Optional[str] = Header(
+        default=None, alias="X-Admin-Justification",
+    ),
 ) -> Dict:
     """Per-tenant sales detail — usage, billing cycle, SSO/white-label state."""
     if len(api_key_prefix) < 6:
         raise HTTPException(status_code=400, detail="api_key_prefix must be ≥6 chars")
+    # Step-up MFA + justification — holding the admin key is not enough.
+    _verify_admin_totp(admin_key, x_admin_totp or "")
+    justification = _validate_justification(x_admin_justification)
     try:
         all_keys = _key_store_db.get_all_keys() or {}
     except Exception:
@@ -2598,6 +2733,7 @@ async def admin_sales_tenant_detail(
         target=f"tenant:{api_key[:12]}",
         ip=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
+        metadata={"justification": justification, "step_up": "totp"},
     )
     # Last 100 audit entries for this tenant.
     try:
@@ -2628,9 +2764,21 @@ async def admin_sales_tenant_detail(
     }
 
 
+class _ImpersonateRequest(BaseModel):
+    """Step-up payload for POST /admin/impersonate/{api_key_prefix}."""
+    totp: str = Field(..., min_length=6, max_length=6, description="6-digit TOTP code")
+    justification: str = Field(
+        ...,
+        min_length=10,
+        max_length=500,
+        description="Free-text reason for impersonation (recorded in audit log)",
+    )
+
+
 @app.post("/admin/impersonate/{api_key_prefix}")
 async def admin_impersonate(
     api_key_prefix: str,
+    body: _ImpersonateRequest,
     request: Request,
     admin_key: str = Depends(require_admin),
 ) -> Dict:
@@ -2648,6 +2796,10 @@ async def admin_impersonate(
     """
     if len(api_key_prefix) < 6:
         raise HTTPException(status_code=400, detail="api_key_prefix must be ≥6 chars")
+    # Step-up MFA + justification — enforced *before* we even look up the
+    # tenant, so a brute-force prefix scan can't piggy-back on this route.
+    _verify_admin_totp(admin_key, body.totp)
+    justification = _validate_justification(body.justification)
     try:
         all_keys = _key_store_db.get_all_keys() or {}
     except Exception:
@@ -2673,7 +2825,11 @@ async def admin_impersonate(
         target=f"tenant:{target_key[:12]}",
         ip=ip,
         user_agent=ua,
-        metadata={"admin_key_prefix": admin_key[:12]},
+        metadata={
+            "admin_key_prefix": admin_key[:12],
+            "justification": justification,
+            "step_up": "totp",
+        },
     )
     # Audit row #2: appears in the *admin's* own timeline.
     await _audit.log(
@@ -2684,6 +2840,7 @@ async def admin_impersonate(
         target=f"tenant:{target_key[:12]}",
         ip=ip,
         user_agent=ua,
+        metadata={"justification": justification, "step_up": "totp"},
     )
     return {
         "api_key": target_key,

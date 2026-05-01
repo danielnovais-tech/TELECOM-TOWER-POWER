@@ -323,7 +323,14 @@ def process_job(job: dict, tower_store: TowerStore,  # type: ignore[type-arg]
     """
     job_id = job["id"]
     tower_id = job["tower_id"]
-    logger.info("Processing job %s  tower=%s  total=%d", job_id, tower_id, job["total"])
+    # tower_id is a competitive-intel signal (reveals which area a tenant is
+    # planning around). Redact in stdout/CloudWatch via the audit pepper.
+    try:
+        from audit_log import redact_for_log as _redact
+        _tower_tag = _redact(tower_id)
+    except Exception:  # noqa: BLE001
+        _tower_tag = "<redacted>"
+    logger.info("Processing job %s  tower=%s  total=%d", job_id, _tower_tag, job["total"])
     start_time = time.monotonic()
     BATCH_JOBS_ACTIVE.inc()
 

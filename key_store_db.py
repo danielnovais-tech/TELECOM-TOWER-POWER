@@ -100,7 +100,8 @@ class _PgBackend:
             try:
                 rec["branding"] = json.loads(raw_branding) if isinstance(raw_branding, str) else raw_branding
             except (TypeError, ValueError):
-                logger.warning("could not decode branding JSON for api_key=%s", row.get("api_key"))
+                _ak = (row.get("api_key") or "")[:8]
+                logger.warning("could not decode branding JSON for api_key=%s...", _ak)
         return rec
 
     def get_all_keys(self) -> Dict[str, Dict]:
@@ -233,7 +234,7 @@ class _PgBackend:
                 )
                 conn.commit()
         except Exception as exc:  # noqa: BLE001
-            logger.warning("set_sso_mapping failed for %s: %s", api_key, exc)
+            logger.warning("set_sso_mapping failed for %s...: %s", (api_key or "")[:8], exc)
 
     def consume_pdf_quota(self, api_key: str, period: str, limit: int) -> int:
         """Atomically increment-or-create the (api_key, period) PDF counter.
