@@ -8,6 +8,12 @@
 Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER").
 All rights reserved.
 
+> **Nota sobre o Licenciante.** Enquanto a constituição de pessoa jurídica
+> está em curso, o Licenciante é **Daniel Azevedo Novais**, pessoa física,
+> operando sob o nome empresarial "TELECOM-TOWER-POWER". Os contratos
+> serão automaticamente cedidos à PJ após sua constituição, sem
+> necessidade de aditivo, mediante mera notificação ao Licenciado.
+
 ## 1. Partes
 
 - **Licenciante**: TELECOM-TOWER-POWER (titular dos direitos sobre o

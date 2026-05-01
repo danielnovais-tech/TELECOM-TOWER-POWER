@@ -10,6 +10,12 @@
 Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER").
 All rights reserved.
 
+> **Nota sobre o Operador.** Enquanto a constituição de pessoa jurídica
+> está em curso, o Operador é **Daniel Azevedo Novais**, pessoa física,
+> operando sob o nome empresarial "TELECOM-TOWER-POWER". A condição de
+> Operador (Art. 5º VII LGPD) será automaticamente assumida pela PJ após
+> sua constituição, com notificação ao Controlador.
+
 ## 1. Definições
 
 Os termos abaixo seguem o Art. 5º da LGPD:
@@ -78,7 +84,7 @@ Controlador.
 | Suboperador | Finalidade | Localização primária | Salvaguardas |
 |---|---|---|---|
 | Amazon Web Services (AWS) | Infraestrutura (ECS Fargate, RDS, S3, Lambda, SQS, Cognito) | sa-east-1 (São Paulo) | Cláusulas DPA AWS; ISO 27001/27017/27018, SOC 2 |
-| Amazon Bedrock | Inferência LLM | us-east-1 ou region equivalente conforme modelo | Cláusulas DPA AWS; *no model training* on customer data |
+| Amazon Bedrock | Inferência LLM | **us-east-1 (EUA)** — vide Seção 8 sobre transferência internacional | Cláusulas DPA AWS; *no model training* on customer data |
 | Stripe Payments | Faturamento e cobrança | Estados Unidos / Irlanda | Cláusulas DPA Stripe; PCI-DSS Nível 1 |
 | Railway (failover) | Hospedagem warm-failover | Region declarada no plano | Acordo de nível operador |
 | GitHub | CI/CD, build, deploy artefatos | Estados Unidos | DPA GitHub; SOC 2 |
@@ -179,8 +185,8 @@ contrário.
 ## 13. Encarregado (DPO)
 
 - O Operador designa **Encarregado pelo Tratamento de Dados Pessoais**,
-  contato disponível em <https://telecomtowerpower.com.br/legal/dpo>
-  ou via e-mail informado no Order Form.
+  contato:
+  - E-mail: <danielnovaisnutricionista@gmail.com>
 - O Cliente deve manter atualizado seu próprio Encarregado, quando
   obrigatório.
 
