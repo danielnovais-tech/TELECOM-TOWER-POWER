@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Contains some shared types for properties"""
 
 from collections.abc import Mapping, MutableMapping

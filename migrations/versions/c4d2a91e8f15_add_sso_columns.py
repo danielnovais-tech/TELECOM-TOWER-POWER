@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """add SSO columns to api_keys
 
 Revision ID: c4d2a91e8f15

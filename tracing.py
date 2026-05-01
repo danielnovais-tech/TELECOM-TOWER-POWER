@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """
 tracing.py
 Distributed tracing bootstrap for the TELECOM TOWER POWER API.

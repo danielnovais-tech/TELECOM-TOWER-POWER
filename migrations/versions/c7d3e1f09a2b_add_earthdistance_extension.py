@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """add cube and earthdistance extensions for deduplication
 
 Revision ID: c7d3e1f09a2b

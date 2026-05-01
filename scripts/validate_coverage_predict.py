@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Compare /coverage/predict vs /analyze on a known obstructed link.
 
 Link: São Bernardo do Campo (SP plateau, ~760 m AMSL) → Cubatão (~10 m AMSL).

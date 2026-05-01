@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Load ANATEL towers from S3 CSV into Railway PostgreSQL."""
 import csv, gzip, io, os, sys, tempfile
 import psycopg2

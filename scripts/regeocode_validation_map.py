@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """
 regeocode_validation_map.py – Interactive HTML map showing before vs after
 coordinates for ANATEL towers that were re-geocoded.

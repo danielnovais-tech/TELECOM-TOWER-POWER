@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """
 load_brazil_towers.py – Unified pipeline to load ALL Brazilian cell towers
 from both OpenCelliD and ANATEL data sources.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 import os, sys, boto3
 client = boto3.client("bedrock-runtime", region_name="us-east-1")
 # Trying with one of the specific IDs listed earlier

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 import boto3
 client = boto3.client("bedrock-runtime", region_name="us-east-1")
 model_id = "amazon.nova-micro-v1:0"

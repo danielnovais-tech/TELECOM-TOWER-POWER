@@ -752,7 +752,21 @@ TELECOM-TOWER-POWER/
 
 ## License
 
-Copyright (c) 2025 DANIEL AZEVEDO NOVAIS. All rights reserved.
+> **This repository is licensed under the TELECOM-TOWER-POWER Proprietary
+> Business License — see [LICENSE.md](LICENSE.md). It is NOT open source.**
 
-This software is proprietary. Commercial use requires a signed license agreement.
-See [LICENSE](LICENSE) for details.
+Copyright (c) 2026 TELECOM-TOWER-POWER. All rights reserved.
+
+- **Code**: Proprietary Business License with automatic conversion to
+  Apache-2.0 on **2028-05-01** (see [LICENSE.md](LICENSE.md)).
+- **Trained models, geocode caches and derived datasets**: governed by
+  [LICENSE-DATA.md](LICENSE-DATA.md) — separate terms, **not** covered by the
+  code license.
+- **Contributions**: require sign-off per [CONTRIBUTING.md](CONTRIBUTING.md)
+  (DCO).
+- **Production use, SLAs and enterprise integrations**: require a signed
+  License Agreement.
+
+The previous commercial terms (pre-2026-05-01) are preserved for historical
+reference in [LICENSE.previous-commercial.md](LICENSE.previous-commercial.md)
+and have been **superseded** by [LICENSE.md](LICENSE.md).

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 import os, sys, boto3
 tok = os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "")
 print(f"token_len={len(tok)}")

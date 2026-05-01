@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER").
+# Licensed under the Apache License, Version 2.0. See http://www.apache.org/licenses/LICENSE-2.0
 """
 api_client.py
 Typed Python client for the TELECOM TOWER POWER API.

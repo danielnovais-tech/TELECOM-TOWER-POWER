@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """
 load_anatel.py – Import Brazilian cell tower data from ANATEL (Agência Nacional
 de Telecomunicações) into the platform.

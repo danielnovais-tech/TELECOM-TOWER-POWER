@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Retrain the coverage model when enough new ground-truth observations
 have accumulated, then publish the new ``coverage_model.npz`` to S3.
 

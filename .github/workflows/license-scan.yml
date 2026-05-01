@@ -1,0 +1,136 @@
+name: License Scan
+
+# Fails the build if any Python dependency is distributed under a license
+# that is incompatible with the TELECOM-TOWER-POWER Proprietary Business
+# License (GPL/AGPL/SSPL family, "no commercial use" clauses, etc.).
+#
+# See LICENSE.md and CONTRIBUTING.md for the licensing policy.
+
+on:
+  pull_request:
+    paths:
+      - "requirements*.txt"
+      - "packages_*.txt"
+      - ".github/workflows/license-scan.yml"
+  push:
+    branches: [main]
+    paths:
+      - "requirements*.txt"
+      - "packages_*.txt"
+      - ".github/workflows/license-scan.yml"
+  schedule:
+    # Weekly drift check: catches transitive deps whose license changed
+    # upstream without a requirements.txt edit.
+    - cron: "17 06 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: license-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install runtime deps + license scanner
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Install runtime deps so pip-licenses sees the actual installed set
+          pip install -r requirements.txt
+          # 5.5+ is required to parse PEP 639 "License-Expression" metadata
+          # (numpy, urllib3, attrs, etc. now use it; older versions report UNKNOWN).
+          pip install pip-licenses==5.5.5
+
+      - name: Generate license inventory
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          pip-licenses \
+            --format=json \
+            --with-urls \
+            --with-license-file \
+            --no-license-path \
+            > artifacts/licenses.json
+          pip-licenses --format=markdown > artifacts/licenses.md
+          echo "Total packages: $(jq 'length' artifacts/licenses.json)"
+
+      - name: Fail on disallowed licenses
+        run: |
+          set -euo pipefail
+          # Disallowed: copyleft incompatible with proprietary distribution
+          # and "no commercial use" / source-available-only families.
+          # We match on substring (case-insensitive) of the License field.
+          DISALLOWED='GPL-2.0|GPL-3.0|GNU General Public License|AGPL|Affero|SSPL|Server Side Public License|CC-BY-NC|Commons Clause|BUSL|Business Source|EUPL|RPL|Reciprocal Public License'
+          # Allow LGPL (dynamic-link OK for our use), MIT, BSD, Apache, ISC,
+          # MPL-2.0, PSF, Python-2.0, Unlicense, 0BSD, CC0, CC-BY-4.0.
+
+          # Known-good packages whose metadata is misreported. Keep this list
+          # MINIMAL and review entries on every renewal.
+          # Format: "<package-name-lowercase>"
+          ALLOWLIST=()
+
+          violations=$(
+            jq -r --arg deny "$DISALLOWED" '
+              .[] |
+              select(
+                (.License // "") | test($deny; "i")
+              ) |
+              "\(.Name)\t\(.Version)\t\(.License)\t\(.URL // "")"
+            ' artifacts/licenses.json
+          )
+
+          if [[ -n "$ALLOWLIST" ]]; then
+            for pkg in "${ALLOWLIST[@]}"; do
+              violations=$(echo "$violations" | grep -viE "^${pkg}\b" || true)
+            done
+          fi
+
+          if [[ -n "$violations" ]]; then
+            echo "::error::Disallowed license(s) detected in dependency tree."
+            echo "Disallowed package    Version    License    URL"
+            echo "----------------------------------------------------"
+            echo "$violations"
+            echo ""
+            echo "Policy: see LICENSE.md and CONTRIBUTING.md §1."
+            echo "If a package is mis-reported, add it to ALLOWLIST after"
+            echo "verifying the actual upstream license."
+            exit 1
+          fi
+
+          echo "No disallowed licenses found."
+
+      - name: Fail on UNKNOWN licenses
+        run: |
+          set -euo pipefail
+          unknown=$(
+            jq -r '.[] | select((.License // "UNKNOWN") | ascii_upcase == "UNKNOWN") | "\(.Name)\t\(.Version)"' \
+              artifacts/licenses.json
+          )
+          if [[ -n "$unknown" ]]; then
+            echo "::error::Packages with UNKNOWN license metadata:"
+            echo "$unknown"
+            echo ""
+            echo "Pin a version with proper metadata, or document an"
+            echo "explicit decision in NOTICE before allowlisting."
+            exit 1
+          fi
+
+      - name: Upload license inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-inventory
+          path: artifacts/
+          retention-days: 90

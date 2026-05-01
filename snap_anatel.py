@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """
 snap_anatel.py – Improve ANATEL geocoding precision by snapping each
 ANATEL tower to the nearest OpenCelliD tower of the same operator within

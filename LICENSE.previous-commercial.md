@@ -1,5 +1,11 @@
 # Commercial License Agreement – TELECOM TOWER POWER
 
+> **SUPERSEDED — 2026-05-01.** This document is preserved for historical
+> reference only. The current license is the **TELECOM-TOWER-POWER Proprietary
+> Business License** in [LICENSE.md](LICENSE.md). Any clone or distribution
+> obtained on or after 2026-05-01 is governed by [LICENSE.md](LICENSE.md), not
+> by these prior terms.
+
 ## Copyright
 Copyright (c) 2025 DANIEL AZEVEDO NOVAIS. All rights reserved.
 

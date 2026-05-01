@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Bulk-load real RF measurements into ``link_observations``.
 
 This is the **only** real-data path the coverage model can learn from

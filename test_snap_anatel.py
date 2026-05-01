@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Tests for snap_anatel.py — the geocoding-precision pass that snaps each
 ANATEL tower to its nearest same-operator OpenCelliD tower within 5 km.
 """

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 import boto3
 client = boto3.client("bedrock", region_name="us-east-1")
 model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"

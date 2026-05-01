@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Tests for the predicted-vs-measured Prometheus instrumentation
 exposed at /metrics after a /coverage/observations POST."""
 

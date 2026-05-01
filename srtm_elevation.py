@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """
 srtm_elevation.py
 Read SRTM .hgt files (SRTM3: 3 arc-sec ~90 m resolution) for offline

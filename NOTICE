@@ -1,0 +1,38 @@
+TELECOM-TOWER-POWER
+Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER")
+
+This product includes software developed by third parties under the
+licenses listed below. The full text of each license is available at the
+URLs cited or in the corresponding distribution package on PyPI.
+
+For the proprietary terms applicable to this product itself, see
+LICENSE.md and LICENSE-DATA.md.
+
+================================================================================
+LGPL components (used as dynamically-linked libraries)
+================================================================================
+
+The following packages are distributed under the GNU Lesser General Public
+License. They are imported as Python libraries and are not modified or
+statically linked. End users of the TELECOM-TOWER-POWER hosted service may
+obtain the corresponding source from PyPI:
+
+  - psycopg2-binary         LGPL                  https://pypi.org/project/psycopg2-binary/
+  - simplekml               LGPLv3+               https://pypi.org/project/simplekml/
+
+================================================================================
+MPL-2.0 components
+================================================================================
+
+  - certifi                 MPL-2.0               https://pypi.org/project/certifi/
+
+================================================================================
+Apache-2.0, MIT, BSD, ISC, PSF, Zlib, 0BSD, CC0 components
+================================================================================
+
+A complete inventory of dependency licenses (auto-generated) is published
+as a CI artefact by .github/workflows/license-scan.yml on every build.
+
+This NOTICE file is required to be reproduced in any redistribution of
+the components above where their original license requires preservation
+of attribution and license notices.

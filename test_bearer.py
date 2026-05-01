@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 import os, boto3, requests
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest

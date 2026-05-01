@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Backend abstraction for the /plan_repeater async job state.
 
 Picks a Redis-backed store when REDIS_URL is set (production / multi-task
