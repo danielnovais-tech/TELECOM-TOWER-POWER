@@ -57,6 +57,7 @@ plugins:
             Casos de uso: Case studies
             ISP regional brasileiro: Brazilian regional ISP
             ROI por segmento: ROI by segment
+            TTP vs alternativas: TTP vs alternatives
             Compliance: Compliance
             SOC 2 — Visão geral: SOC 2 — Overview
             SOC 2 — Matriz de controles: SOC 2 — Control matrix
@@ -119,6 +120,7 @@ nav:
   - Casos de uso:
       - ISP regional brasileiro: case-studies/regional-isp-brazil.md
       - ROI por segmento: case-studies/roi-by-segment.md
+      - TTP vs alternativas: case-studies/ttp-vs-alternatives.md
   - Compliance:
       - SOC 2 — Visão geral: compliance/soc2/README.md
       - SOC 2 — Matriz de controles: compliance/soc2/control-matrix.md
