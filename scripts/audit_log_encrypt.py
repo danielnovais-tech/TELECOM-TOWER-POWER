@@ -90,7 +90,7 @@ def main() -> int:
                 cur.execute(
                     "SELECT id, metadata_json FROM audit_log "
                     " WHERE metadata_json IS NOT NULL "
-                    "   AND metadata_json NOT LIKE 'kms:v1:%' "
+                    "   AND metadata_json NOT LIKE 'kms:v1:%%' "
                     " ORDER BY id ASC "
                     " LIMIT %s",
                     (limit,),
