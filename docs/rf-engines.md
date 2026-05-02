@@ -42,7 +42,7 @@ this repo is wired into the registry for future revival but reports
 1. Forks `thebracket/rf-signals` and pins a buildable Rust toolchain.
 2. Maps the actual public API in `rf-signal-algorithms/src/rfcalc/`
    (ITWOM3, HATA, COST/HATA, ECC33, EGLI, FSPL) onto the JSON shim
-   schema in [`scripts/rf_signals_cli/src/main.rs`](../scripts/rf_signals_cli/src/main.rs).
+   schema documented in `rf_engines/rf_signals_engine.py` (`_call_subprocess`).
 3. Validates outputs against ITU-R P.1812 on the coverage-diff golden
    set for at least 7 nights before flipping the engine on.
 

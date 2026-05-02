@@ -54,20 +54,17 @@ jobs:
           # invokes rf_engines.compare directly, no API server.
           pip install numpy pydantic
 
-      - name: Install rust toolchain (for rf-signals build)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build rf-signals CLI
-        continue-on-error: true   # robot still runs without rf-signals
-        run: bash scripts/build_rf_signals.sh "$HOME/.local"
-
       - name: Build Cloud-RF Signal-Server
         continue-on-error: true
         run: bash scripts/build_signal_server.sh "$HOME/.local"
 
+      # rf-signals: intentionally NOT built in CI — upstream is
+      # unmaintained (5y), GPL-2.0, requires nightly Rust 2020. The
+      # registry tolerates an unavailable engine; revive when a fork
+      # exists. See docs/rf-engines.md.
+
       - name: Run coverage diff
         env:
-          RF_SIGNALS_BIN: ${{ github.workspace }}/../.local/bin/rfsignals-cli
           SIGNAL_SERVER_BIN: ${{ github.workspace }}/../.local/bin/signalserverHD
         run: |
           python scripts/coverage_diff_robot.py \

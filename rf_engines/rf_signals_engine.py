@@ -1,31 +1,41 @@
 # SPDX-License-Identifier: LicenseRef-TTP-Proprietary
 # Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
-"""rf-signals (Rust) engine adapter.
+"""rf-signals (Rust) engine adapter — PLACEHOLDER.
 
 `thebracket/rf-signals <https://github.com/thebracket/rf-signals>`_ is a
-pure-Rust port of the Signal Server / SPLAT! propagation algorithms,
-optimised for WISP planning. It ships as a Cargo workspace; the
-``rfsignals-cli`` binary speaks JSON on stdin/stdout, which we shell
-out to here.
+pure-Rust port of the Cloud-RF Signal Server / SPLAT! propagation
+algorithms (ITWOM3, HATA, COST/HATA, ECC33, EGLI, FSPL, SUI, Plane
+Earth, SOIL).
 
-We deliberately use a CLI subprocess rather than PyO3 bindings:
+.. warning::
 
-* PyO3 forces a maturin wheel into the deploy image and ABI lock-in
-  with the Python minor version — pinning to 3.11 today, brittle
-  tomorrow.
-* The CLI is faster for our access pattern (one call per Tx→Rx pair,
-  amortised by the existing P.1812 LRU + Redis caches).
-* The same binary can be reused unchanged by ``scripts/qgis_to_atoll.py``
-  and the ``coverage-diff`` GitHub Actions robot.
+    The upstream repo has been **unmaintained for ~5 years**, requires
+    nightly Rust from 2020 + old Rocket, and is **GPL-2.0** licensed.
+    Linking it into a proprietary process would contaminate the
+    platform; we therefore use a *subprocess* shim binary
+    (``rfsignals-cli``) that the Python side shells out to. The
+    binary is **never bundled** in the TTP container image — ops
+    builds it from a maintained fork and provisions it via S3.
 
-Configure with:
+    No working ``rfsignals-cli`` is shipped with this repo. Reviving
+    the engine requires forking upstream, pinning a buildable
+    toolchain, and mapping the real ``rf_signal_algorithms::rfcalc``
+    functions onto the JSON wire schema below. Until that lands,
+    :meth:`is_available` returns ``False`` and the registry simply
+    skips this engine — see ``docs/rf-engines.md``.
 
-* ``RF_SIGNALS_BIN`` — absolute path to ``rfsignals-cli`` (default
-  ``/usr/local/bin/rfsignals-cli``). If unset or missing the engine
-  reports unavailable.
+Wire schema (when revived)
+--------------------------
+The adapter sends a JSON envelope on stdin and expects a JSON object
+on stdout containing ``basic_loss_db`` (float, dB) and optional
+``confidence`` / ``model`` / ``version`` fields. Subprocess timeouts
+and non-zero exits are treated as ``None`` (fail-closed).
+
+Environment variables:
+
+* ``RF_SIGNALS_BIN`` — absolute path to a shim binary. If unset / not
+  executable / not on PATH, the engine reports unavailable.
 * ``RF_SIGNALS_TIMEOUT_S`` — subprocess wall-clock cap (default 5 s).
-
-Build instructions: ``scripts/build_rf_signals.sh``.
 """
 from __future__ import annotations
 
@@ -88,9 +98,9 @@ class RfSignalsEngine(RFEngine):
             return None
 
         payload = {
-            # Schema mirrors rfsignals-cli's `predict-loss` subcommand
-            # (see scripts/build_rf_signals.sh for the patched version
-            # we ship). Distances in km, heights AGL/AMSL in m, freq Hz.
+            # Schema mirrors a future rfsignals-cli `predict-loss`
+            # subcommand (see docs/rf-engines.md for the revival plan).
+            # Distances in km, heights AGL/AMSL in m, freq Hz.
             "command": "predict-loss",
             "frequency_hz": float(f_hz),
             "distances_km": d_list,
