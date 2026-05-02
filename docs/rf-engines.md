@@ -9,18 +9,45 @@ ITU-R P.1812 wrapper, without any commercial licence.
 | Engine          | Source                                       | Licence    | Status            |
 | --------------- | -------------------------------------------- | ---------- | ----------------- |
 | `itu-p1812`     | `eeveetza/Py1812` (already in platform)      | MIT        | **available**     |
-| `rf-signals`    | [`thebracket/rf-signals`][rfs]               | MIT        | needs build (Rust)|
+| `itmlogic`      | [`edwardoughton/itmlogic`][itm] (NTIA ITM)   | MIT-style  | **available** (pip) |
+| `rf-signals`    | [`thebracket/rf-signals`][rfs]               | **GPL-2.0**| placeholder — see note |
 | `signal-server` | [`Cloud-RF/Signal-Server`][css]              | **GPLv3**  | needs build (C++) |
 | `sionna`        | NVIDIA Sionna (learned model)                | Apache 2.0 | scaffolding only  |
 
 [rfs]: https://github.com/thebracket/rf-signals
 [css]: https://github.com/Cloud-RF/Signal-Server
+[itm]: https://github.com/edwardoughton/itmlogic
 
-GPLv3 reminder: the Signal-Server binary **must not** be bundled into
-the platform's container images. Operators build it on the host (or a
-sidecar) via [scripts/build_signal_server.sh](../scripts/build_signal_server.sh)
-and provision it via S3 — same posture as the ITU digital maps and
-MapBiomas raster.
+### Copyleft posture (rf-signals + signal-server)
+
+Both `rf-signals` (GPL-2.0) and `signal-server` (GPLv3) are **viral**
+copyleft licences. The platform stays clean because:
+
+* the Python adapter talks to each engine via **subprocess** (separate
+  process boundary) — no static linking, no FFI inside the API process;
+* the resulting binaries (`rfsignals-cli`, `signalserverHD`) are
+  **never bundled** in the proprietary container image. Operators build
+  them on the ECS host (or a build sidecar), upload to S3, and the
+  task downloads them at boot — same posture as ITU digital maps and
+  MapBiomas rasters.
+
+### ⚠️ rf-signals status (placeholder)
+
+The upstream repo `thebracket/rf-signals` has been **unmaintained for
+~5 years**, requires nightly Rust from 2020, an old Rocket release,
+Google Maps API key, and LiDAR conversion via PROJ. The adapter in
+this repo is wired into the registry for future revival but reports
+`is_available() = False` until someone:
+
+1. Forks `thebracket/rf-signals` and pins a buildable Rust toolchain.
+2. Maps the actual public API in `rf-signal-algorithms/src/rfcalc/`
+   (ITWOM3, HATA, COST/HATA, ECC33, EGLI, FSPL) onto the JSON shim
+   schema in [`scripts/rf_signals_cli/src/main.rs`](../scripts/rf_signals_cli/src/main.rs).
+3. Validates outputs against ITU-R P.1812 on the coverage-diff golden
+   set for at least 7 nights before flipping the engine on.
+
+Until step 3 lands, treat any rf-signals output as research-only —
+the `coverage-diff` workflow already excludes it via `is_available()`.
 
 ## Endpoints
 
@@ -40,15 +67,15 @@ propagation models.
 ## Build
 
 ```bash
-# rf-signals (Rust) — ~5 minutes, no root needed
-bash scripts/build_rf_signals.sh ~/.local
-
 # Signal-Server (C++, GPLv3) — ~3 minutes
 bash scripts/build_signal_server.sh ~/.local
 
 # Then on the ECS task:
-export RF_SIGNALS_BIN=/usr/local/bin/rfsignals-cli
 export SIGNAL_SERVER_BIN=/usr/local/bin/signalserverHD
+
+# rf-signals: NOT shipped — see "rf-signals status" above. To revive,
+# fork the upstream crate, pin the toolchain, fix the JSON shim, then
+# re-add a build_rf_signals.sh that actually compiles.
 ```
 
 `GET /coverage/engines` will start reporting `available=true` for each
@@ -81,6 +108,30 @@ engine whose binary is on `$PATH` (or whose explicit env var resolves).
 The engine **must** return `None` from `predict_basic_loss` on any
 failure (missing dep, out of domain, subprocess timeout) — the
 registry never propagates engine errors to the API caller.
+
+## itmlogic (Longley-Rice / ITM)
+
+Pure-Python NTIA ITM v1.2.2 wrapper, installed via `pip install itmlogic`.
+The adapter replicates the orchestration in upstream's `scripts/p2p.py`
+(`qlrpfl` → `lrprop` → `avar`) so the engine is self-contained — we
+do **not** depend on the upstream scripts/ folder.
+
+Env config: `ITMLOGIC_CLIMATE` (default 5 = continental temperate),
+`ITMLOGIC_NS0` (default 314 N-units), `ITMLOGIC_EPS` (default 15),
+`ITMLOGIC_SGM` (default 0.005). Brazilian guidance: Amazon → 1
+(equatorial), Cerrado/DF → 2, NE coast → 3.
+
+The `scripts/optimize_sites.py` GA optimizer uses this engine by
+default (configurable via `--engine`). See module docstring for
+runtime budgets.
+
+The optimizer accepts either an explicit `--aoi=lat_min,lon_min,lat_max,lon_max`
+or, when `--aoi` is omitted, derives the AOI automatically from the
+receivers' bounding box padded by `--aoi-margin-deg` (default 0.2°
+≈ 22 km). For dense receiver sets this is the recommended path: it
+removes the manual step of picking a search box and avoids the failure
+mode where receivers near a corner of a tight AOI cannot be reached
+because no candidate tower position is close enough.
 
 ## Sionna / IA engine
 

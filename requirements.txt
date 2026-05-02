@@ -52,3 +52,7 @@ opentelemetry-sdk>=1.27.0
 opentelemetry-exporter-otlp-proto-grpc>=1.27.0
 opentelemetry-instrumentation-fastapi>=0.48b0
 opentelemetry-instrumentation-requests>=0.48b0
+
+# rf_engines optional adapters
+itmlogic==1.2            # NTIA Longley-Rice/ITM wrapper (Oughton 2020, JOSS)
+deap==1.4.4              # GA framework used by scripts/optimize_sites.py

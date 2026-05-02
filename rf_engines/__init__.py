@@ -69,6 +69,7 @@ def _autoregister() -> None:
     log = logging.getLogger(__name__)
     for mod in (
         "rf_engines.itu_p1812_engine",
+        "rf_engines.itmlogic_engine",
         "rf_engines.rf_signals_engine",
         "rf_engines.signal_server_engine",
         "rf_engines.sionna_engine",

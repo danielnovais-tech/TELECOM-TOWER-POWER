@@ -236,3 +236,7 @@ docker-compose.override.yml
 
 # MkDocs build output
 docs-site/site/
+
+# GA optimizer run outputs (generated artefacts, not source)
+output/
+
