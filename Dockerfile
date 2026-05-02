@@ -23,7 +23,13 @@ WORKDIR /app
 # Note: BuildKit --mount=type=cache is avoided because Railpack rejects it
 # without its internal cacheKey prefix on the id.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    # The ITU-R P.1812 digital maps (P1812.npz) are downloaded at boot
+    # by entrypoint.sh into the Py1812 install dir. Make that dir
+    # writable by the non-root runtime user.
+    if python -c "import Py1812" 2>/dev/null; then \
+        chown -R 1000:1000 "$(python -c 'import os, Py1812; print(os.path.dirname(Py1812.__file__))')"; \
+    fi
 
 # Copy application code
 COPY telecom_tower_power_db.py .
