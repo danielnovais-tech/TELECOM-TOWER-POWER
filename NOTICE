@@ -19,6 +19,8 @@ obtain the corresponding source from PyPI:
 
   - psycopg2-binary         LGPL                  https://pypi.org/project/psycopg2-binary/
   - simplekml               LGPLv3+               https://pypi.org/project/simplekml/
+  - moocore                 LGPL-2.1-or-later     https://pypi.org/project/moocore/
+                            (transitive via deap; GA site-placement optimizer)
 
 ================================================================================
 MPL-2.0 components

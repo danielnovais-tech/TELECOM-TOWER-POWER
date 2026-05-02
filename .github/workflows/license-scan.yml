@@ -89,6 +89,13 @@ jobs:
             # modification, no static linking. See NOTICE §"LGPL components".
             "psycopg2-binary"
             "simplekml"
+            # moocore is a transitive dep of `deap` (used by the GA
+            # site-placement optimizer in scripts/optimize_sites.py). It
+            # provides multi-objective indicators that we DO NOT modify and
+            # invoke only via DEAP's standard Python API (dynamic import).
+            # LGPL-2.1-or-later is permitted under our policy for
+            # dynamically-linked optimization libraries.
+            "moocore"
           )
 
           violations=$(
