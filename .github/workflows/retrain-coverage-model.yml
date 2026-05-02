@@ -35,6 +35,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   AWS_REGION: sa-east-1
   S3_URI: s3://telecom-tower-power-results/models/coverage_model.npz
+  BANDS_S3_PREFIX: s3://telecom-tower-power-results/models/bands
   ECS_CLUSTER: telecom-tower-power
   ECS_SERVICE: telecom-tower-power
 
@@ -53,6 +54,7 @@ jobs:
       cv_rmse_db: ${{ steps.train.outputs.cv_rmse_db }}
       cv_rmse_std_db: ${{ steps.train.outputs.cv_rmse_std_db }}
       cv_folds: ${{ steps.train.outputs.cv_folds }}
+      bands_uploaded: ${{ steps.train.outputs.bands_uploaded }}
     steps:
       - uses: actions/checkout@v6
 
@@ -88,6 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(--s3-uri "$S3_URI" --threshold "${{ inputs.threshold || '1000' }}")
+          ARGS+=(--bands-s3-prefix "$BANDS_S3_PREFIX")
           if [[ "${{ inputs.force || 'false' }}" == "true" ]]; then
             ARGS+=(--force)
           fi
@@ -126,5 +129,6 @@ jobs:
             echo "| cv_rmse_std_db | ${{ steps.train.outputs.cv_rmse_std_db || 'n/a' }} |"
             echo "| cv_folds | ${{ steps.train.outputs.cv_folds || 'n/a' }} |"
             echo "| n_train | ${{ steps.train.outputs.n_train || 'n/a' }} |"
+            echo "| bands_uploaded | ${{ steps.train.outputs.bands_uploaded || '0' }} |"
             echo "| dry_run | ${{ inputs.dry_run || 'false' }} |"
           } >> "$GITHUB_STEP_SUMMARY"

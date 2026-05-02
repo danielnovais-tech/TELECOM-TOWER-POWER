@@ -71,6 +71,10 @@ MODEL_S3_URI = os.getenv("COVERAGE_MODEL_S3_URI", "")  # e.g. s3://bucket/models
 # When set and at least one band model is present we prefer band-specific
 # coefficients over the single global model. See ``BandAwareCoverageModel``.
 BAND_MODEL_DIR = os.getenv("COVERAGE_BAND_MODEL_DIR", "")
+# Optional S3 prefix that mirrors BAND_MODEL_DIR. Files under this prefix
+# (coverage_model_<MHz>.npz, coverage_model_global.npz, manifest.json) are
+# downloaded into BAND_MODEL_DIR on container start.
+BAND_MODELS_S3_PREFIX = os.getenv("COVERAGE_BAND_MODELS_S3_PREFIX", "")
 SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_COVERAGE_ENDPOINT", "")
 SAGEMAKER_REGION = os.getenv("SAGEMAKER_REGION", os.getenv("AWS_REGION", "us-east-1"))
 
@@ -509,6 +513,61 @@ def refresh_from_s3() -> bool:
     if not MODEL_S3_URI:
         return True
     return _download_from_s3(MODEL_S3_URI, MODEL_PATH)
+
+
+def refresh_band_models_from_s3() -> bool:
+    """Sync ``s3://<prefix>/coverage_model_*.npz`` into ``BAND_MODEL_DIR``.
+
+    Returns True on success (or when no prefix is configured — same
+    semantics as :func:`refresh_from_s3`). Failures are logged and
+    return False so the entrypoint can decide whether to abort.
+    """
+    if not BAND_MODELS_S3_PREFIX or not BAND_MODEL_DIR:
+        return True
+    if not BAND_MODELS_S3_PREFIX.startswith("s3://"):
+        logger.warning(
+            "COVERAGE_BAND_MODELS_S3_PREFIX must start with s3:// (got %r)",
+            BAND_MODELS_S3_PREFIX,
+        )
+        return False
+    try:
+        import boto3
+        bucket, _, prefix = BAND_MODELS_S3_PREFIX[len("s3://"):].partition("/")
+        if not bucket:
+            logger.warning("Malformed COVERAGE_BAND_MODELS_S3_PREFIX: %r",
+                           BAND_MODELS_S3_PREFIX)
+            return False
+        prefix = prefix.rstrip("/")
+        os.makedirs(BAND_MODEL_DIR, exist_ok=True)
+        s3 = boto3.client("s3")
+        # Whitelist of keys we expect to find under the prefix; resists a
+        # tampered bucket from injecting arbitrary files into BAND_MODEL_DIR.
+        wanted = (
+            [f"coverage_model_{b}.npz" for b in _NOMINAL_BANDS_MHZ]
+            + ["coverage_model_global.npz", "manifest.json"]
+        )
+        downloaded = 0
+        for name in wanted:
+            key = f"{prefix}/{name}" if prefix else name
+            dest = os.path.join(BAND_MODEL_DIR, name)
+            try:
+                s3.download_file(bucket, key, dest)
+                downloaded += 1
+            except Exception:
+                # Missing keys are common (e.g. no global fallback) — not
+                # an error. Log at debug, not warning.
+                logger.debug("band artefact %s not present in S3", key)
+        logger.info(
+            "Synced %d band artefacts from %s to %s",
+            downloaded, BAND_MODELS_S3_PREFIX, BAND_MODEL_DIR,
+        )
+        # Bust the cache so the next get_band_model() call sees fresh files.
+        global _band_model_cache
+        _band_model_cache = None
+        return downloaded > 0
+    except Exception:
+        logger.exception("Failed to sync band models from %s", BAND_MODELS_S3_PREFIX)
+        return False
 
 
 def get_model(refresh: bool = False) -> Optional[CoverageModel]:

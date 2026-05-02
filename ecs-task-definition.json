@@ -69,6 +69,14 @@
           "value": "s3://telecom-tower-power-results/models/coverage_model.npz"
         },
         {
+          "name": "COVERAGE_BAND_MODEL_DIR",
+          "value": "/app/band_models"
+        },
+        {
+          "name": "COVERAGE_BAND_MODELS_S3_PREFIX",
+          "value": "s3://telecom-tower-power-results/models/bands"
+        },
+        {
           "name": "SQS_QUEUE_URL",
           "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-prod"
         },

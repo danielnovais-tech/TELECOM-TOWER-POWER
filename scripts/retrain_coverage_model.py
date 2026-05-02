@@ -102,6 +102,16 @@ def main() -> int:
                    help="Retrain even if delta < threshold.")
     p.add_argument("--dry-run", action="store_true",
                    help="Train and report metrics but do not upload to S3.")
+    p.add_argument(
+        "--bands-s3-prefix", default="",
+        help=(
+            "Optional S3 prefix to also publish per-band ridge artefacts to "
+            "(e.g. s3://bucket/models/bands). When set, "
+            "train_band_aware_model() runs after the global ridge and the "
+            "resulting coverage_model_<MHz>.npz files + manifest.json are "
+            "uploaded under this prefix."
+        ),
+    )
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -130,7 +140,8 @@ def main() -> int:
     # Train (uses observation_store + synthetic samples)
     # ------------------------------------------------------------------
     from coverage_predict import (
-        load_historical_from_stores, train_model, MODEL_PATH,
+        load_historical_from_stores, train_model, train_band_aware_model,
+        MODEL_PATH,
     )
 
     historical = load_historical_from_stores(
@@ -173,6 +184,41 @@ def main() -> int:
                        ExtraArgs={"ContentType": "application/octet-stream"})
         logger.info("uploaded s3://%s/%s", bucket, model_key)
 
+        # ── Optional: band-aware companion artefacts ───────────────────
+        bands_uploaded = 0
+        if args.bands_s3_prefix:
+            if not args.bands_s3_prefix.startswith("s3://"):
+                raise SystemExit(
+                    f"--bands-s3-prefix must be s3:// (got {args.bands_s3_prefix!r})"
+                )
+            band_bucket, _, band_prefix = (
+                args.bands_s3_prefix[len("s3://"):].partition("/")
+            )
+            band_prefix = band_prefix.rstrip("/")
+            band_dir = os.path.join(tmp, "bands")
+            ba = train_band_aware_model(
+                n_synthetic=args.n_synthetic,
+                historical=historical,
+                save_to_dir=band_dir,
+                train_global_fallback=True,
+            )
+            for fname in sorted(os.listdir(band_dir)):
+                src = os.path.join(band_dir, fname)
+                key = f"{band_prefix}/{fname}" if band_prefix else fname
+                ctype = (
+                    "application/json" if fname.endswith(".json")
+                    else "application/octet-stream"
+                )
+                s3.upload_file(
+                    src, band_bucket, key, ExtraArgs={"ContentType": ctype},
+                )
+                bands_uploaded += 1
+            logger.info(
+                "uploaded %d band artefacts to %s (%d band ridges, %s global)",
+                bands_uploaded, args.bands_s3_prefix, len(ba.models),
+                "with" if ba.global_model is not None else "no",
+            )
+
     payload = {
         "count": current,
         "delta": delta,
@@ -198,6 +244,7 @@ def main() -> int:
                 f"cv_rmse_db={model.cv_rmse_db:.4f}\n"
                 f"cv_rmse_std_db={model.cv_rmse_std_db:.4f}\n"
                 f"cv_folds={model.cv_folds}\n"
+                f"bands_uploaded={bands_uploaded}\n"
             )
     return 0
 

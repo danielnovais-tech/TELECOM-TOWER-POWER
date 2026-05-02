@@ -106,6 +106,25 @@ sys.exit(0 if ok else 1)'
     unset _COV_REFRESH_CMD _COV_RC
 fi
 
+# Sync per-band ridge artefacts (700/850/.../3500 MHz) when configured.
+# Independent of the global model above so a partial S3 setup is OK:
+# missing band files just fall back to the global ridge.
+if [ -n "${COVERAGE_BAND_MODELS_S3_PREFIX:-}" ] && [ -n "${COVERAGE_BAND_MODEL_DIR:-}" ]; then
+    echo "Syncing per-band coverage models from ${COVERAGE_BAND_MODELS_S3_PREFIX} (30s timeout)..."
+    _BAND_REFRESH_CMD='import sys, coverage_predict as c
+ok = c.refresh_band_models_from_s3()
+ba = c.get_band_model(refresh=True)
+if ba is not None:
+    print(f"Band-aware coverage model active: {len(ba.models)} bands ({sorted(ba.models)})")
+sys.exit(0 if ok else 1)'
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 30 python -c "$_BAND_REFRESH_CMD" || echo "WARN: band model sync failed (exit $?), continuing with global ridge"
+    else
+        python -c "$_BAND_REFRESH_CMD" || echo "WARN: band model sync failed (exit $?), continuing with global ridge"
+    fi
+    unset _BAND_REFRESH_CMD
+fi
+
 if [ "${SERVICE_TYPE:-}" = "webhook" ]; then
     echo "SERVICE_TYPE=webhook → starting stripe_webhook_service"
     exec uvicorn stripe_webhook_service:app --host 0.0.0.0 --port "${PORT:-8080}"
