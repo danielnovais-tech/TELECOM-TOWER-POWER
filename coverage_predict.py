@@ -1252,6 +1252,13 @@ class PredictionResult:
     source: str              # "sagemaker" | "local-model" | "physics-fallback"
     model_version: str
     features: Dict[str, float]
+    # ── Optional clutter metadata (MapBiomas LULC, added 2026-05) ────────
+    # ``None`` when no raster is configured or rx coordinates were not
+    # supplied; otherwise the integer MapBiomas class code + human label
+    # at the receiver location. Future training runs can incorporate
+    # this as a one-hot feature; today it is exposed as observability.
+    clutter_class: Optional[int] = None
+    clutter_label: Optional[str] = None
 
 
 def predict_signal(
@@ -1267,8 +1274,16 @@ def predict_signal(
     tx_ground_elev_m: float = 0.0,
     rx_ground_elev_m: float = 0.0,
     feasibility_threshold_dbm: float = -95.0,
+    rx_lat: Optional[float] = None,
+    rx_lon: Optional[float] = None,
 ) -> PredictionResult:
-    """Predict received signal strength for a single tx → rx link."""
+    """Predict received signal strength for a single tx → rx link.
+
+    When ``rx_lat`` and ``rx_lon`` are provided and a MapBiomas raster
+    is configured (``MAPBIOMAS_RASTER_PATH``), the result is annotated
+    with the LULC clutter class at the receiver — best-effort, never
+    raises.
+    """
     feats = build_features(
         d_km=d_km, f_hz=f_hz, tx_h_m=tx_h_m, rx_h_m=rx_h_m,
         tx_power_dbm=tx_power_dbm, tx_gain_dbi=tx_gain_dbi,
@@ -1318,6 +1333,20 @@ def predict_signal(
     rssi = float(np.clip(rssi, _FLOOR_DBM, 30.0))
     feature_dict = {name: float(feats[i]) for i, name in enumerate(_FEATURE_NAMES)}
 
+    clutter_code: Optional[int] = None
+    clutter_label_v: Optional[str] = None
+    if rx_lat is not None and rx_lon is not None:
+        try:
+            from mapbiomas_clutter import (
+                clutter_class_to_label,
+                get_extractor,
+            )
+            clutter_code = get_extractor().get_clutter_class(rx_lat, rx_lon)
+            if clutter_code is not None:
+                clutter_label_v = clutter_class_to_label(clutter_code)
+        except Exception as exc:  # noqa: BLE001 — clutter is best-effort
+            logger.debug("mapbiomas lookup failed: %s", exc)
+
     return PredictionResult(
         signal_dbm=round(rssi, 2),
         feasible=rssi >= feasibility_threshold_dbm,
@@ -1325,6 +1354,8 @@ def predict_signal(
         source=source,
         model_version=version,
         features=feature_dict,
+        clutter_class=clutter_code,
+        clutter_label=clutter_label_v,
     )
 
 

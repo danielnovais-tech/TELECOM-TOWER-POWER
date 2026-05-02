@@ -1830,6 +1830,8 @@ async def coverage_predict(
         tx_ground_elev_m=tx_ground,
         rx_ground_elev_m=rx_ground,
         feasibility_threshold_dbm=body.feasibility_threshold_dbm,
+        rx_lat=body.rx_lat,
+        rx_lon=body.rx_lon,
     )
 
     response: Dict[str, Any] = {
@@ -1843,6 +1845,8 @@ async def coverage_predict(
         "model_source": result.source,
         "model_version": result.model_version,
         "features": result.features,
+        "clutter_class": result.clutter_class,
+        "clutter_label": result.clutter_label,
     }
     if body.explain:
         response["explanation"] = _cp.explain(response)

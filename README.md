@@ -592,6 +592,9 @@ The Caddyfile uses a `host` matcher to identify `api.*` traffic (which arrives v
 | `COVERAGE_MODEL_S3_URI` | *(none)* | Optional `s3://bucket/key` fallback — downloaded once on first request when the local file is missing (no rebuild required for model updates) |
 | `COVERAGE_BAND_MODEL_DIR` | *(none)* | Local directory holding per-band ridge artefacts (`coverage_model_<MHz>.npz` + `manifest.json`). When populated, `/coverage/predict` automatically dispatches to the closest-band ridge and falls back to the global model |
 | `COVERAGE_BAND_MODELS_S3_PREFIX` | *(none)* | Optional `s3://bucket/prefix` to hydrate `COVERAGE_BAND_MODEL_DIR` on container boot (entrypoint syncs whitelisted files only) |
+| `MAPBIOMAS_RASTER_PATH` | *(none)* | Path to a MapBiomas LULC GeoTIFF (Collection 9, single-band uint8). When set + readable + `rasterio` installed, `/coverage/predict` (point mode) returns `clutter_class` + `clutter_label` at the rx coordinate. Lookups are cached in Redis (`MAPBIOMAS_REDIS_URL` → falls back to `REDIS_URL` → in-memory LRU) |
+| `MAPBIOMAS_REDIS_URL` | *(falls back to `REDIS_URL`)* | Override Redis endpoint for the clutter cache. Set to empty string to disable Redis (LRU only) |
+| `MAPBIOMAS_REDIS_TTL_S` | `2592000` (30d) | TTL for cached clutter lookups |
 | `SAGEMAKER_COVERAGE_ENDPOINT` | *(none → local model)* | Real-time SageMaker endpoint name; when set, `/coverage/predict` routes to it. Falls back to local model and finally physics if absent / unreachable |
 | `SAGEMAKER_REGION` | `$AWS_REGION` or `us-east-1` | AWS region of the SageMaker endpoint |
 
