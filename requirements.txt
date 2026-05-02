@@ -44,7 +44,7 @@ rasterio>=1.3,<2.0
 # returns None and predict_signal() falls back to the ridge model.
 Py1812 @ https://github.com/eeveetza/Py1812/archive/refs/heads/main.tar.gz
 # ── GraphQL (side-by-side with REST) ─────────────────────────
-strawberry-graphql[fastapi]>=0.235.0
+strawberry-graphql[fastapi]>=0.315.3
 # ── OpenTelemetry (distributed tracing, evaluation mode) ─────
 # Only loaded when OTEL_ENABLED=true; see tracing.py.
 opentelemetry-api>=1.27.0
