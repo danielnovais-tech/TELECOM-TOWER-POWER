@@ -590,6 +590,8 @@ The Caddyfile uses a `host` matcher to identify `api.*` traffic (which arrives v
 | `BEDROCK_MODEL_ID` | `amazon.nova-micro-v1:0` | Foundation model used by `/bedrock/*` and `/coverage/predict?explain=true` |
 | `COVERAGE_MODEL_PATH` | `coverage_model.npz` | Path to the local ridge-regression model artefact (`python -m coverage_predict train`) |
 | `COVERAGE_MODEL_S3_URI` | *(none)* | Optional `s3://bucket/key` fallback — downloaded once on first request when the local file is missing (no rebuild required for model updates) |
+| `COVERAGE_BAND_MODEL_DIR` | *(none)* | Local directory holding per-band ridge artefacts (`coverage_model_<MHz>.npz` + `manifest.json`). When populated, `/coverage/predict` automatically dispatches to the closest-band ridge and falls back to the global model |
+| `COVERAGE_BAND_MODELS_S3_PREFIX` | *(none)* | Optional `s3://bucket/prefix` to hydrate `COVERAGE_BAND_MODEL_DIR` on container boot (entrypoint syncs whitelisted files only) |
 | `SAGEMAKER_COVERAGE_ENDPOINT` | *(none → local model)* | Real-time SageMaker endpoint name; when set, `/coverage/predict` routes to it. Falls back to local model and finally physics if absent / unreachable |
 | `SAGEMAKER_REGION` | `$AWS_REGION` or `us-east-1` | AWS region of the SageMaker endpoint |
 
