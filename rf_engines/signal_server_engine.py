@@ -1,17 +1,33 @@
 # SPDX-License-Identifier: LicenseRef-TTP-Proprietary
 # Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
-"""Cloud-RF Signal-Server engine adapter.
+"""Signal-Server engine adapter — PLACEHOLDER.
 
-`Cloud-RF/Signal-Server <https://github.com/Cloud-RF/Signal-Server>`_
-is the open-source C++ propagation engine that backs the cloudrf.com
-service. We invoke the ``signalserverHD`` binary in *single-link* mode
-via stdin/stdout — same wire pattern as :mod:`rf_engines.rf_signals_engine`.
+`Cloud-RF/Signal-Server` is the open-source C++ propagation engine
+that backed cloudrf.com from 2012 to 2018. **The upstream repo was
+deleted in 2023**; the GitHub URL now resolves to a historical README
+only. Active community forks include
+`W3AXL/Signal-Server <https://github.com/W3AXL/Signal-Server>`_
+(updated 2025, GPL-2.0) and `N9OZB/Signal-Server` (2019).
+
+.. warning::
+
+    The upstream binary is **flag-based** (``-sdf -lat -lon -txh -f
+    -erp -pm ...``) and emits PPM bitmaps + text reports keyed off
+    ``-o basename``. It does **not** speak JSON. The wire schema
+    below assumes a hypothetical ``--json`` shim that no public fork
+    ships — same posture as :mod:`rf_engines.rf_signals_engine`.
+
+    Until either upstream is patched or this adapter is rewritten to
+    invoke the flag-based CLI in PPA mode and parse
+    ``<basename>-site_report.txt``, :meth:`is_available` returns
+    ``False`` and the registry skips this engine. See
+    ``docs/rf-engines.md`` for the revival plan.
 
 The binary is built from source by ``scripts/build_signal_server.sh``
-and produces a single executable. Distribution is GPLv3, so we do not
-bundle the binary in the platform image; ops provisions it onto the
-ECS task at boot via S3 (same pattern as the ITU digital maps and
-MapBiomas raster).
+(now points at W3AXL fork; cmake-based). Distribution is GPL-2.0, so
+we do not bundle the binary in the platform image; ops provisions it
+onto the ECS task at boot via S3 (same pattern as the ITU digital
+maps and MapBiomas raster).
 
 Configure with:
 
@@ -41,6 +57,10 @@ _BIN_ENV = "SIGNAL_SERVER_BIN"
 _DEFAULT_BIN = "/usr/local/bin/signalserverHD"
 _TIMEOUT_S = float(os.getenv("SIGNAL_SERVER_TIMEOUT_S", "8.0"))
 _MODEL = os.getenv("SIGNAL_SERVER_MODEL", "itm").lower()
+# Explicit opt-in. The wire format below assumes a `--json`-aware fork
+# that no public Signal-Server build provides; without this env var
+# the engine self-disables to keep the registry honest.
+_JSON_FORK = os.getenv("SIGNAL_SERVER_JSON_FORK", "").lower() in {"1", "true", "yes"}
 _MODEL_FLAGS = {
     "itm": "1", "itwom": "2", "hata": "3", "ericsson": "4",
     "cost-hata": "5", "sui": "6", "fspl": "7",
@@ -58,7 +78,15 @@ class SignalServerEngine(RFEngine):
     name = "signal-server"
 
     def is_available(self) -> bool:
-        return _resolve_bin() is not None and _MODEL in _MODEL_FLAGS
+        # Triple gate: binary must exist, model must be known, AND the
+        # operator must explicitly assert their build understands the
+        # `--json file.json` shim. Default upstream binaries fail this
+        # assertion; see module docstring for the revival plan.
+        return (
+            _JSON_FORK
+            and _resolve_bin() is not None
+            and _MODEL in _MODEL_FLAGS
+        )
 
     def predict_basic_loss(
         self,

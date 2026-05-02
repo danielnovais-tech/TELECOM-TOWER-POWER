@@ -8,20 +8,20 @@ ITU-R P.1812 wrapper, without any commercial licence.
 
 | Engine          | Source                                       | Licence    | Status            |
 | --------------- | -------------------------------------------- | ---------- | ----------------- |
-| `itu-p1812`     | `eeveetza/Py1812` (already in platform)      | MIT        | **available**     |
+| `itu-p1812`     | `eeveetza/Py1812` (already in platform)      | ITU permissive | **available** |
 | `itmlogic`      | [`edwardoughton/itmlogic`][itm] (NTIA ITM)   | MIT-style  | **available** (pip) |
 | `rf-signals`    | [`thebracket/rf-signals`][rfs]               | **GPL-2.0**| placeholder — see note |
-| `signal-server` | [`Cloud-RF/Signal-Server`][css]              | **GPLv3**  | needs build (C++) |
+| `signal-server` | [`W3AXL/Signal-Server`][css] (active fork)   | **GPL-2.0**| placeholder — see note |
 | `sionna`        | NVIDIA Sionna (learned model)                | Apache 2.0 | scaffolding only  |
 
 [rfs]: https://github.com/thebracket/rf-signals
-[css]: https://github.com/Cloud-RF/Signal-Server
+[css]: https://github.com/W3AXL/Signal-Server
 [itm]: https://github.com/edwardoughton/itmlogic
 
 ### Copyleft posture (rf-signals + signal-server)
 
-Both `rf-signals` (GPL-2.0) and `signal-server` (GPLv3) are **viral**
-copyleft licences. The platform stays clean because:
+Both `rf-signals` and `signal-server` are **GPL-2.0** — viral
+copyleft. The platform stays clean because:
 
 * the Python adapter talks to each engine via **subprocess** (separate
   process boundary) — no static linking, no FFI inside the API process;
@@ -49,6 +49,24 @@ this repo is wired into the registry for future revival but reports
 Until step 3 lands, treat any rf-signals output as research-only —
 the `coverage-diff` workflow already excludes it via `is_available()`.
 
+### ⚠️ signal-server status (placeholder)
+
+The original `Cloud-RF/Signal-Server` repo was **deleted by upstream
+in 2023**; the GitHub URL now resolves to a historical README only.
+The build script in this repo points at the active community fork
+[`W3AXL/Signal-Server`](https://github.com/W3AXL/Signal-Server) (GPL-2.0,
+last update 2025), but the Python adapter expects a `--json file.json`
+shim that **no public Signal-Server build provides** — upstream is
+flag-based (`-sdf -lat -lon -txh -f -erp -pm ...`) and writes PPM
+bitmaps + a `<basename>-site_report.txt` rather than JSON to stdout.
+
+The adapter therefore self-disables (`is_available() = False`) until
+`SIGNAL_SERVER_JSON_FORK=1` is set, which the operator may only do
+after either (a) patching their fork to add a JSON envelope mode, or
+(b) replacing `_call_subprocess` with a flag-based call that parses
+the site-report. See `rf_engines/signal_server_engine.py` for the
+wire schema the adapter currently sends.
+
 ## Endpoints
 
 After deploy the API exposes (auth required, same key as `/analyze`):
@@ -67,7 +85,7 @@ propagation models.
 ## Build
 
 ```bash
-# Signal-Server (C++, GPLv3) — ~3 minutes
+# Signal-Server (C++, GPL-2.0) — ~3 minutes
 bash scripts/build_signal_server.sh ~/.local
 
 # Then on the ECS task:
