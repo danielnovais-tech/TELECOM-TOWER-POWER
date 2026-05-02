@@ -1,6 +1,6 @@
 # What's Shipped
 
-> Cumulative inventory of every production feature and security item shipped to **TELECOM TOWER POWER**. All items below are live, tested, and documented as of April 2026.
+> Cumulative inventory of every production feature and security item shipped to **TELECOM TOWER POWER**. All items below are live, tested, and documented as of May 2026.
 
 ## Platform posture
 
@@ -23,6 +23,8 @@
 - **Hop-viability Redis cache** — terrain LoS results memoized; `/plan_repeater` latency drops below 100 ms on warm cache.
 - **Real-time AI coverage heatmap** — Server-Sent Events stream coverage tiles as they're computed; per-tier grid-resolution caps.
 - **Geo exports** — KML, Shapefile, and GeoJSON downloads for any analyzed region.
+- **Coverage model validation, public** — `GET /coverage/model/info` returns rmse_db (in-sample), cv_rmse_db (k-fold holdout), per-morphology RMSE (open_or_flat / rural_rolling / rural_mountainous) and per-band RMSE (700/850/900/1800/2100/2600/3500 MHz). All values exposed as Prometheus gauges. Methodology page: [Validação do modelo](model-validation.md).
+- **Drive-test CSV importer** — `POST /coverage/observations/drivetest` ingests TEMS / G-NetTrack / QualiPoc / Anatel exports with auto-detection of column aliases (Latitude/lat, RSRP/RxLev/signal_dbm, Frequency [MHz]/band, etc.). Persisted with `source='drive_test'` so the daily retrain picks them up automatically.
 
 ## Operations
 

@@ -25,6 +25,7 @@ import secrets
 import time
 import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import aiohttp
@@ -1457,8 +1458,8 @@ async def _stale_job_reaper(interval_seconds: int = 60,
             logger.exception("Stale job reaper encountered an error")
 
 
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
     # ── Security: validate critical config at boot ────────────────
     # 1. Stripe webhook secret must be set whenever a Stripe API key is
     #    set, otherwise webhooks would be processed without signature
@@ -1529,8 +1530,9 @@ async def startup():
         name="batch-queue-metrics-updater",
     )
 
-@app.on_event("shutdown")
-async def shutdown():
+    yield
+
+    # ── Shutdown ──────────────────────────────────────────────────
     _reaper_shutdown.set()
     if _reaper_task:
         _reaper_task.cancel()
@@ -1545,6 +1547,11 @@ async def shutdown():
         except asyncio.CancelledError:
             pass
     await platform.close()
+
+
+# Wire the lifespan after definition (avoids forward-reference at FastAPI() construction).
+app.router.lifespan_context = _lifespan
+
 
 @app.post("/towers", status_code=201)
 async def add_tower(request: Request, tower: TowerInput, key_data: Dict = Depends(verify_api_key)):
@@ -1653,7 +1660,7 @@ async def analyze_link(tower_id: str, receiver: ReceiverInput, key_data: Dict = 
     tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
-    rx = Receiver(**receiver.dict())
+    rx = Receiver(**receiver.model_dump())
     result = await platform.analyze_link(tower, rx, terrain_profile=None)
     return LinkAnalysisResponse(**asdict(result))
 
@@ -2090,7 +2097,7 @@ async def submit_coverage_observation(
     from observation_store import ObservationStore
     store = ObservationStore()
     submitter = _caller_owner(request, key_data)
-    obs_id = store.insert_observation({**body.dict(), "submitted_by": submitter})
+    obs_id = store.insert_observation({**body.model_dump(), "submitted_by": submitter})
     _record_coverage_accuracy_metrics(body)
     return {"id": obs_id, "status": "stored"}
 
@@ -2105,7 +2112,7 @@ async def submit_coverage_observations_batch(
     from observation_store import ObservationStore
     store = ObservationStore()
     submitter = _caller_owner(request, key_data)
-    rows = [{**o.dict(), "submitted_by": submitter} for o in body.observations]
+    rows = [{**o.model_dump(), "submitted_by": submitter} for o in body.observations]
     n = store.insert_observations_many(rows)
     for o in body.observations:
         _record_coverage_accuracy_metrics(o)
@@ -3289,7 +3296,7 @@ async def plan_repeater(tower_id: str, receiver: ReceiverInput, max_hops: int = 
     tower = platform.get_tower(tower_id)
     if not tower:
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
-    rx = Receiver(**receiver.dict())
+    rx = Receiver(**receiver.model_dump())
     chain = await platform.plan_repeater_chain(tower, rx, max_hops)
     return {"repeater_chain": [asdict(t) for t in chain]}
 
@@ -3347,7 +3354,7 @@ async def plan_repeater_async(
         raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
     if not (1 <= max_hops <= 6):
         raise HTTPException(status_code=400, detail="max_hops must be in [1, 6]")
-    rx = Receiver(**receiver.dict())
+    rx = Receiver(**receiver.model_dump())
 
     await _reap_repeater_jobs()
     job_id = uuid.uuid4().hex
