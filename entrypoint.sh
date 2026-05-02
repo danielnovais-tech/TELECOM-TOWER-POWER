@@ -144,15 +144,24 @@ if [ -n "${MAPBIOMAS_RASTER_S3_URI:-}" ] && [ -n "${MAPBIOMAS_RASTER_PATH:-}" ];
     fi
     if [ "$_MB_NEEDS_DL" -eq 1 ]; then
         echo "Downloading MapBiomas raster ${MAPBIOMAS_RASTER_S3_URI} → ${MAPBIOMAS_RASTER_PATH} (5min timeout)..."
+        _MB_DL_CMD='import os, sys, boto3
+from urllib.parse import urlparse
+uri = os.environ["MAPBIOMAS_RASTER_S3_URI"]
+dst = os.environ["MAPBIOMAS_RASTER_PATH"]
+u = urlparse(uri)
+if u.scheme != "s3" or not u.netloc or not u.path:
+    print(f"ERROR: invalid MAPBIOMAS_RASTER_S3_URI: {uri}", file=sys.stderr); sys.exit(2)
+bucket, key = u.netloc, u.path.lstrip("/")
+boto3.client("s3").download_file(bucket, key, dst)
+print(f"MapBiomas raster ready ({os.path.getsize(dst)} bytes)")'
         if command -v timeout >/dev/null 2>&1; then
-            timeout 300 aws s3 cp "${MAPBIOMAS_RASTER_S3_URI}" "${MAPBIOMAS_RASTER_PATH}" --no-progress \
-                && echo "MapBiomas raster ready" \
+            timeout 300 python -c "$_MB_DL_CMD" \
                 || echo "WARN: MapBiomas raster download failed, clutter feature disabled"
         else
-            aws s3 cp "${MAPBIOMAS_RASTER_S3_URI}" "${MAPBIOMAS_RASTER_PATH}" --no-progress \
-                && echo "MapBiomas raster ready" \
+            python -c "$_MB_DL_CMD" \
                 || echo "WARN: MapBiomas raster download failed, clutter feature disabled"
         fi
+        unset _MB_DL_CMD
     fi
     unset _MB_DIR _MB_NEEDS_DL
 fi
