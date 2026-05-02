@@ -1,0 +1,77 @@
+TTP Signal-Server JSON-stdout shim
+===================================
+
+SPDX-License-Identifier: GPL-2.0-or-later
+Upstream:  https://github.com/W3AXL/Signal-Server
+Base SHA:  7f6242afb3685ff31d9ad14062b80d692ee56327 (master, 2025)
+Purpose:   Add `-json` CLI flag that, in PPA mode, emits a single-line
+           JSON document to stdout containing the computed path loss.
+           This is a thin shim to bridge Signal-Server with the
+           TELECOM-TOWER-POWER `signal_server_engine` adapter without
+           altering any existing behaviour. Without `-json` the binary
+           is byte-for-byte identical to upstream.
+
+Validation status: PATCH WRITTEN AGAINST UPSTREAM SOURCE READ;
+                   NOT YET BUILT LOCALLY (cmake unavailable in dev env).
+                   Operator MUST verify `cmake ../src && make` succeeds
+                   AND that `signalserver -json -lat ... -lon ... -rla
+                   ... -rlo ... -txh ... -rxh ... -f ... -pm ... -sdf
+                   <dir> -o <basename>` prints a JSON line as the LAST
+                   line of stdout, before relying on it in production.
+
+Apply with:  git apply scripts/signal_server_json.patch
+
+diff --git a/src/main.cc b/src/main.cc
+index 3778286..f46ad22 100644
+--- a/src/main.cc
++++ b/src/main.cc
+@@ -64,7 +64,7 @@ long bzbuf_pointer = 0L, bzbytes_read, gzbuf_pointer = 0L, gzbytes_read;
+ 
+ unsigned char got_elevation_pattern, got_azimuth_pattern, metric = 0, dbm = 0;
+ 
+-bool to_stdout = false, cropping = true;
++bool to_stdout = false, cropping = true, emit_json = false;
+ 
+ __thread double *elev;
+ __thread struct path path;
+@@ -1375,6 +1375,11 @@ int main(int argc, char *argv[])
+             }
+         }
+ 
++        /* TTP-JSON-PATCH: emit single-line JSON with computed path loss to stdout */
++        if (strcmp(argv[x], "-json") == 0) {
++            emit_json = true;
++        }
++
+         if (strcmp(argv[x], "-rt") == 0) {
+             z = x + 1;
+ 
+diff --git a/src/outputs.cc b/src/outputs.cc
+index 2211220..11166ea 100644
+--- a/src/outputs.cc
++++ b/src/outputs.cc
+@@ -21,6 +21,9 @@
+ #include "models/sui.hh"
+ #include "image.hh"
+ 
++/* TTP-JSON-PATCH: defined in main.cc */
++extern bool emit_json;
++
+ void DoPathLoss(char *filename, unsigned char geo, unsigned char kml,
+ 		unsigned char ngs, struct site *xmtr, unsigned char txsites)
+ {
+@@ -1531,6 +1534,14 @@ void PathReport(struct site source, struct site destination, char *name,
+ 
+ 		fprintf(fd2, "Computed path loss: %.2f dB\n", loss);
+ 
++		/* TTP-JSON-PATCH: emit single-line JSON to stdout for adapter parsing */
++		if (emit_json) {
++			fprintf(stdout,
++				"{\"basic_loss_db\": %.2f, \"free_space_loss_db\": %.2f, \"distance\": %.3f, \"frequency_mhz\": %.3f, \"model\": %d, \"engine\": \"signal-server\"}\n",
++				loss, free_space_loss, distance, LR.frq_mhz, (int)propmodel);
++			fflush(stdout);
++		}
++
+ 
+         if((loss*1.5) < free_space_loss){
+ 			fprintf(fd2,"Model error! Computed loss of %.1fdB is greater than free space loss of %.1fdB. Check your inuts for model %d\n",loss,free_space_loss,propmodel);

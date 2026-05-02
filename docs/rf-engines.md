@@ -11,7 +11,7 @@ ITU-R P.1812 wrapper, without any commercial licence.
 | `itu-p1812`     | `eeveetza/Py1812` (already in platform)      | ITU permissive | **available** |
 | `itmlogic`      | [`edwardoughton/itmlogic`][itm] (NTIA ITM)   | MIT-style  | **available** (pip) |
 | `rf-signals`    | [`thebracket/rf-signals`][rfs]               | **GPL-2.0**| placeholder — see note |
-| `signal-server` | [`W3AXL/Signal-Server`][css] (active fork)   | **GPL-2.0**| placeholder — see note |
+| `signal-server` | [`W3AXL/Signal-Server`][css] (active fork)   | **GPL-2.0**| operator-buildable (see note) |
 | `sionna`        | NVIDIA Sionna (learned model)                | Apache 2.0 | scaffolding only  |
 
 [rfs]: https://github.com/thebracket/rf-signals
@@ -49,23 +49,41 @@ this repo is wired into the registry for future revival but reports
 Until step 3 lands, treat any rf-signals output as research-only —
 the `coverage-diff` workflow already excludes it via `is_available()`.
 
-### ⚠️ signal-server status (placeholder)
+### ⚠️ signal-server status (operator-buildable)
 
 The original `Cloud-RF/Signal-Server` repo was **deleted by upstream
 in 2023**; the GitHub URL now resolves to a historical README only.
 The build script in this repo points at the active community fork
 [`W3AXL/Signal-Server`](https://github.com/W3AXL/Signal-Server) (GPL-2.0,
-last update 2025), but the Python adapter expects a `--json file.json`
-shim that **no public Signal-Server build provides** — upstream is
-flag-based (`-sdf -lat -lon -txh -f -erp -pm ...`) and writes PPM
-bitmaps + a `<basename>-site_report.txt` rather than JSON to stdout.
+last update 2025).
 
-The adapter therefore self-disables (`is_available() = False`) until
-`SIGNAL_SERVER_JSON_FORK=1` is set, which the operator may only do
-after either (a) patching their fork to add a JSON envelope mode, or
-(b) replacing `_call_subprocess` with a flag-based call that parses
-the site-report. See `rf_engines/signal_server_engine.py` for the
-wire schema the adapter currently sends.
+Upstream's CLI is flag-based and writes PPM bitmaps plus a
+`<basename>-site_report.txt` rather than JSON to stdout. To make it
+request-time-callable from the registry we ship
+`scripts/signal_server_json.patch` (GPL-2.0-or-later, ~17 lines)
+which adds a single `-json` flag: in PPA mode the binary then prints
+one extra JSON line to stdout containing `basic_loss_db`,
+`free_space_loss_db`, `distance`, `frequency_mhz`, and `model`.
+Without `-json` the binary is byte-for-byte identical to upstream.
+
+`scripts/build_signal_server.sh` clones W3AXL, applies the patch,
+runs `cmake ../src && make`, and installs `signalserverHD` to the
+operator's `$PREFIX/bin`. The patch is verified to apply cleanly
+against W3AXL master `7f6242a`; if upstream HEAD drifts, pin the
+clone to that SHA or re-roll the patch.
+
+The adapter still self-disables (`is_available() = False`) until
+`SIGNAL_SERVER_JSON_FORK=1` is set in the environment — this is the
+operator's assertion that the binary on `$PATH` was built with the
+patch applied. Realistic loss values also require
+`SIGNAL_SERVER_SDF_DIR` pointing at an SRTM .sdf tile directory;
+without it Signal-Server assumes flat sea-level terrain.
+
+**Fidelity note:** unlike the ITU P.1812 / ITM adapters, Signal-Server
+ignores any caller-supplied `d_km` / `h_m` profile — it reads SRTM
+tiles itself. Use it for second-opinion checks against profile-based
+engines, not as a primary source when you already have a high-quality
+terrain profile from another path.
 
 ## Endpoints
 

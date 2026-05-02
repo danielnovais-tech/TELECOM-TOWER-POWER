@@ -1,48 +1,59 @@
 # SPDX-License-Identifier: LicenseRef-TTP-Proprietary
 # Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
-"""Signal-Server engine adapter — PLACEHOLDER.
+"""Signal-Server engine adapter.
 
-`Cloud-RF/Signal-Server` is the open-source C++ propagation engine
-that backed cloudrf.com from 2012 to 2018. **The upstream repo was
-deleted in 2023**; the GitHub URL now resolves to a historical README
-only. Active community forks include
-`W3AXL/Signal-Server <https://github.com/W3AXL/Signal-Server>`_
-(updated 2025, GPL-2.0) and `N9OZB/Signal-Server` (2019).
+Bridges the GPL-2.0 ``Signal-Server`` C++ engine into the rf_engines
+registry. Upstream ``Cloud-RF/Signal-Server`` was deleted in 2023; we
+build from `W3AXL/Signal-Server <https://github.com/W3AXL/Signal-Server>`_
+(active fork, last updated 2025) via :mod:`scripts.build_signal_server`.
 
-.. warning::
+WIRE FORMAT
+-----------
+Upstream's CLI is flag-based and writes a text site-report keyed off
+``-o basename``. To make it usable as a request-time backend we apply
+``scripts/signal_server_json.patch`` which adds a single ``-json``
+flag: in PPA mode the binary then prints one extra JSON line to
+stdout::
 
-    The upstream binary is **flag-based** (``-sdf -lat -lon -txh -f
-    -erp -pm ...``) and emits PPM bitmaps + text reports keyed off
-    ``-o basename``. It does **not** speak JSON. The wire schema
-    below assumes a hypothetical ``--json`` shim that no public fork
-    ships — same posture as :mod:`rf_engines.rf_signals_engine`.
+    {"basic_loss_db": 132.4, "free_space_loss_db": 110.1,
+     "distance": 12.345, "frequency_mhz": 900.0,
+     "model": 1, "engine": "signal-server"}
 
-    Until either upstream is patched or this adapter is rewritten to
-    invoke the flag-based CLI in PPA mode and parse
-    ``<basename>-site_report.txt``, :meth:`is_available` returns
-    ``False`` and the registry skips this engine. See
-    ``docs/rf-engines.md`` for the revival plan.
+Without ``-json`` the binary is byte-for-byte upstream behaviour.
+The patch is GPL-2.0-or-later (see its header) and is applied at
+build time only — we never bundle the resulting binary into the
+container image.
 
-The binary is built from source by ``scripts/build_signal_server.sh``
-(now points at W3AXL fork; cmake-based). Distribution is GPL-2.0, so
-we do not bundle the binary in the platform image; ops provisions it
-onto the ECS task at boot via S3 (same pattern as the ITU digital
-maps and MapBiomas raster).
+CAVEATS
+~~~~~~~
+* The adapter cannot pass an arbitrary terrain profile — Signal-Server
+  reads its own SRTM .sdf tiles via ``-sdf <dir>``. The ``d_km`` /
+  ``h_m`` arguments from :class:`RFEngine` are therefore *ignored*
+  here; provide them to ITM/P.1812 if you need profile-based fidelity.
+* PPA mode requires a writable ``-o <basename>`` directory because
+  PathReport still emits the ``.txt`` site-report alongside the JSON
+  line.
+* Operator must opt in via ``SIGNAL_SERVER_JSON_FORK=1`` so the
+  registry only enables this adapter when a patched binary is actually
+  installed.
 
-Configure with:
-
-* ``SIGNAL_SERVER_BIN`` — path (default ``/usr/local/bin/signalserverHD``).
-* ``SIGNAL_SERVER_TIMEOUT_S`` — wall-clock cap (default 8 s; the C++
-  engine is slower than rf-signals on long profiles).
-* ``SIGNAL_SERVER_MODEL`` — propagation model id, one of
-  ``itm`` (Longley-Rice, default), ``itwom``, ``ericsson``, ``hata``,
-  ``cost-hata``, ``sui``, ``fspl``. Mapped onto the binary's ``-pm`` flag.
+ENV VARS
+~~~~~~~~
+* ``SIGNAL_SERVER_BIN`` — path (default ``/usr/local/bin/signalserverHD``)
+* ``SIGNAL_SERVER_SDF_DIR`` — path to .sdf tiles (required for any
+  realistic loss; without it Signal-Server assumes flat sea-level).
+* ``SIGNAL_SERVER_TIMEOUT_S`` — wall-clock cap (default ``8.0``)
+* ``SIGNAL_SERVER_MODEL`` — ``itm`` (default), ``itwom``, ``hata``,
+  ``ericsson``, ``cost-hata``, ``sui``, ``fspl``
+* ``SIGNAL_SERVER_JSON_FORK`` — set to ``1`` to assert that the
+  installed binary was built with ``signal_server_json.patch`` applied.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -57,14 +68,19 @@ _BIN_ENV = "SIGNAL_SERVER_BIN"
 _DEFAULT_BIN = "/usr/local/bin/signalserverHD"
 _TIMEOUT_S = float(os.getenv("SIGNAL_SERVER_TIMEOUT_S", "8.0"))
 _MODEL = os.getenv("SIGNAL_SERVER_MODEL", "itm").lower()
-# Explicit opt-in. The wire format below assumes a `--json`-aware fork
-# that no public Signal-Server build provides; without this env var
-# the engine self-disables to keep the registry honest.
+_SDF_DIR = os.getenv("SIGNAL_SERVER_SDF_DIR", "")
 _JSON_FORK = os.getenv("SIGNAL_SERVER_JSON_FORK", "").lower() in {"1", "true", "yes"}
+
+# Mapping to the binary's `-pm` integer. Must match the order documented
+# in W3AXL/Signal-Server upstream README.
 _MODEL_FLAGS = {
     "itm": "1", "itwom": "2", "hata": "3", "ericsson": "4",
     "cost-hata": "5", "sui": "6", "fspl": "7",
 }
+
+# Match a JSON object on a single line of stdout that contains
+# "basic_loss_db". Tolerant of additional log lines from spdlog around it.
+_JSON_LINE_RE = re.compile(rb'^\s*\{[^\n]*"basic_loss_db"[^\n]*\}\s*$')
 
 
 def _resolve_bin() -> Optional[str]:
@@ -74,14 +90,30 @@ def _resolve_bin() -> Optional[str]:
     return shutil.which("signalserverHD") or shutil.which("signalserver")
 
 
+def _extract_json_line(stdout: bytes) -> Optional[dict]:
+    """Find the JSON line emitted by signal_server_json.patch.
+
+    Signal-Server prints various spdlog progress lines; our patch
+    emits a single object on its own line. Scan from the end (last
+    match wins, which is what PathReport's emit_json branch produces).
+    """
+    for raw in reversed(stdout.splitlines()):
+        if _JSON_LINE_RE.match(raw):
+            try:
+                return json.loads(raw.decode("utf-8", "replace"))
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
 class SignalServerEngine(RFEngine):
     name = "signal-server"
 
     def is_available(self) -> bool:
-        # Triple gate: binary must exist, model must be known, AND the
-        # operator must explicitly assert their build understands the
-        # `--json file.json` shim. Default upstream binaries fail this
-        # assertion; see module docstring for the revival plan.
+        # Triple gate: opt-in env var + binary on disk + known model.
+        # Default upstream binaries fail the JSON_FORK assertion; only
+        # ones built via scripts/build_signal_server.sh (which applies
+        # signal_server_json.patch) should set the env var.
         return (
             _JSON_FORK
             and _resolve_bin() is not None
@@ -106,53 +138,38 @@ class SignalServerEngine(RFEngine):
         time_pct: Optional[float] = None,
         loc_pct: Optional[float] = None,
     ) -> Optional[LossEstimate]:
+        del d_km, h_m, clutter_heights_m, pol, zone, time_pct, loc_pct
         binary = _resolve_bin()
         if binary is None:
             return None
-        d_list = [float(x) for x in d_km]
-        h_list = [float(x) for x in h_m]
-        if len(d_list) < 2 or len(d_list) != len(h_list):
+        model_flag = _MODEL_FLAGS.get(_MODEL)
+        if model_flag is None:
             return None
 
-        # Signal-Server's "single link" mode reads a JSON envelope when
-        # invoked with --json (custom build flag in our patched fork —
-        # see scripts/build_signal_server.sh). The upstream binary
-        # expects a parameter file + SDF tiles; we wrap that path with
-        # a lightweight harness so the same call site works for both.
-        payload = {
-            "transmitter": {
-                "lat": float(phi_t), "lon": float(lam_t),
-                "alt_agl_m": float(htg), "tx_power_dbm": 0.0,
-                "antenna_gain_dbi": 0.0,
-            },
-            "receiver": {
-                "lat": float(phi_r), "lon": float(lam_r),
-                "alt_agl_m": float(hrg), "antenna_gain_dbi": 0.0,
-            },
-            "frequency_mhz": float(f_hz) / 1e6,
-            "model": _MODEL_FLAGS[_MODEL],
-            "polarisation": int(pol or 2),
-            "climate_zone": int(zone or 4),
-            "reliability_pct": float(time_pct if time_pct is not None else 50.0),
-            "location_pct": float(loc_pct if loc_pct is not None else 50.0),
-            "terrain_profile_m": h_list,
-            "distances_km": d_list,
-            "clutter_profile_m": (
-                [float(c) for c in clutter_heights_m]
-                if clutter_heights_m is not None else []
-            ),
-            "want": "basic_loss_db",
-        }
+        with tempfile.TemporaryDirectory(prefix="ss-") as workdir:
+            basename = os.path.join(workdir, "link")
+            argv = [
+                binary,
+                "-lat", f"{float(phi_t):.6f}",
+                "-lon", f"{float(lam_t):.6f}",
+                "-rla", f"{float(phi_r):.6f}",
+                "-rlo", f"{float(lam_r):.6f}",
+                "-txh", f"{float(htg):.2f}",
+                "-rxh", f"{float(hrg):.2f}",
+                "-f", f"{float(f_hz) / 1e6:.3f}",
+                "-erp", "0",
+                "-pm", model_flag,
+                "-m",
+                "-o", basename,
+                "-json",
+            ]
+            if _SDF_DIR:
+                argv.extend(["-sdf", _SDF_DIR])
 
-        with tempfile.NamedTemporaryFile(
-            "w+", suffix=".json", delete=True
-        ) as tf:
-            json.dump(payload, tf)
-            tf.flush()
             try:
                 proc = subprocess.run(
-                    [binary, "--json", tf.name],
-                    capture_output=True, timeout=_TIMEOUT_S, check=False,
+                    argv, capture_output=True,
+                    timeout=_TIMEOUT_S, check=False,
                 )
             except (subprocess.TimeoutExpired, OSError) as exc:
                 logger.warning("signal-server subprocess failed: %s", exc)
@@ -164,20 +181,27 @@ class SignalServerEngine(RFEngine):
                 proc.returncode, proc.stderr[:512].decode("utf-8", "replace"),
             )
             return None
-        try:
-            out = json.loads(proc.stdout.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            logger.warning("signal-server returned non-JSON stdout")
+
+        out = _extract_json_line(proc.stdout)
+        if out is None:
+            logger.warning(
+                "signal-server stdout did not contain JSON loss line; "
+                "is the binary built with signal_server_json.patch?"
+            )
             return None
 
-        loss = out.get("basic_loss_db") or out.get("path_loss_db")
+        loss = out.get("basic_loss_db")
         if loss is None:
             return None
         return LossEstimate(
             basic_loss_db=float(loss),
             engine=self.name,
             confidence=0.9,
-            extra={"model": _MODEL, "version": out.get("version", "unknown")},
+            extra={
+                "model": _MODEL,
+                "free_space_loss_db": out.get("free_space_loss_db"),
+                "distance": out.get("distance"),
+            },
         )
 
 
