@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Tests for the site-placement GA.
 
 Covers two regressions hit on 2026-05-02:
