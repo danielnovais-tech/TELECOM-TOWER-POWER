@@ -237,3 +237,104 @@ def test_coveragemodel_persists_feature_names(tmp_path):
     reloaded = cp.CoverageModel.load(str(out))
     assert reloaded.feature_names == model.feature_names
     assert len(reloaded.feature_names) == len(cp.feature_names())
+
+
+# ---------------------------------------------------------------------------
+# ITU-R P.1812 hybrid (Py1812 mocked — no native install in CI)
+# ---------------------------------------------------------------------------
+
+def _install_fake_p1812(returned_lb: float = 130.0):
+    import sys
+    import types
+    pkg = types.ModuleType("Py1812")
+    sub = types.ModuleType("Py1812.P1812")
+    sub.bt_loss = lambda *a, **k: (returned_lb, 60.0)
+    pkg.P1812 = sub  # type: ignore[attr-defined]
+    sys.modules["Py1812"] = pkg
+    sys.modules["Py1812.P1812"] = sub
+
+
+def test_predict_signal_model_itu_uses_p1812(monkeypatch, tmp_path):
+    import itu_p1812
+    itu_p1812._reset_for_tests()
+    _install_fake_p1812(returned_lb=130.0)
+
+    monkeypatch.setattr(cp, "MODEL_PATH", str(tmp_path / "missing.npz"))
+    monkeypatch.setattr(cp, "BAND_MODEL_DIR", str(tmp_path / "missing-bands"))
+    monkeypatch.setattr(cp, "_model_cache", None, raising=False)
+    monkeypatch.setattr(cp, "_band_model_cache", None, raising=False)
+    monkeypatch.setattr(cp, "SAGEMAKER_ENDPOINT", "")
+
+    result = cp.predict_signal(
+        d_km=2.0, f_hz=900e6, tx_h_m=30, rx_h_m=10,
+        tx_power_dbm=43, tx_gain_dbi=17, rx_gain_dbi=12,
+        terrain_profile=[100, 110, 120, 110, 100],
+        tx_lat=-23.50, tx_lon=-46.60,
+        rx_lat=-23.51, rx_lon=-46.59,
+        model="itu",
+    )
+    assert result.source == "itu-p1812"
+    # RSSI = Ptx + Gtx + Grx − Lb = 43 + 17 + 12 − 130 = -58 dBm.
+    assert result.signal_dbm == pytest.approx(-58.0, abs=0.01)
+
+    itu_p1812._reset_for_tests()
+    import sys
+    sys.modules.pop("Py1812", None)
+    sys.modules.pop("Py1812.P1812", None)
+
+
+def test_predict_signal_model_hybrid_blends_ml_and_itu(monkeypatch, tmp_path):
+    import itu_p1812
+    itu_p1812._reset_for_tests()
+    _install_fake_p1812(returned_lb=140.0)
+
+    out = tmp_path / "model.npz"
+    cp.train_model(n_synthetic=400, save_to=str(out), seed=7, kfold=0)
+    monkeypatch.setattr(cp, "MODEL_PATH", str(out))
+    monkeypatch.setattr(cp, "_model_cache", None, raising=False)
+    monkeypatch.setattr(cp, "SAGEMAKER_ENDPOINT", "")
+
+    result = cp.predict_signal(
+        d_km=2.0, f_hz=900e6, tx_h_m=30, rx_h_m=10,
+        tx_power_dbm=43, tx_gain_dbi=17, rx_gain_dbi=12,
+        terrain_profile=[100, 110, 120, 110, 100],
+        tx_lat=-23.50, tx_lon=-46.60,
+        rx_lat=-23.51, rx_lon=-46.59,
+        model="hybrid",
+    )
+    assert result.source == "hybrid-ml-itu"
+    assert "itu-r-p.1812-8" in result.model_version
+    assert "w_ml=" in result.model_version
+
+    itu_p1812._reset_for_tests()
+    import sys
+    sys.modules.pop("Py1812", None)
+    sys.modules.pop("Py1812.P1812", None)
+
+
+def test_predict_signal_model_ml_skips_p1812_even_if_available(monkeypatch, tmp_path):
+    import itu_p1812
+    itu_p1812._reset_for_tests()
+    _install_fake_p1812(returned_lb=130.0)
+
+    out = tmp_path / "model.npz"
+    cp.train_model(n_synthetic=400, save_to=str(out), seed=7, kfold=0)
+    monkeypatch.setattr(cp, "MODEL_PATH", str(out))
+    monkeypatch.setattr(cp, "_model_cache", None, raising=False)
+    monkeypatch.setattr(cp, "SAGEMAKER_ENDPOINT", "")
+
+    result = cp.predict_signal(
+        d_km=2.0, f_hz=900e6, tx_h_m=30, rx_h_m=10,
+        tx_power_dbm=43, tx_gain_dbi=17, rx_gain_dbi=12,
+        terrain_profile=[100, 110, 120, 110, 100],
+        tx_lat=-23.50, tx_lon=-46.60,
+        rx_lat=-23.51, rx_lon=-46.59,
+        model="ml",
+    )
+    assert result.source == "local-model"
+    assert "itu" not in result.model_version
+
+    itu_p1812._reset_for_tests()
+    import sys
+    sys.modules.pop("Py1812", None)
+    sys.modules.pop("Py1812.P1812", None)

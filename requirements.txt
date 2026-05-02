@@ -36,6 +36,13 @@ pyshp>=2.3.1
 # Heavy native deps (GDAL); only used when MAPBIOMAS_RASTER_PATH is set.
 # Module gracefully degrades to a no-op when this package is absent.
 rasterio>=1.3,<2.0
+# ── ITU-R P.1812-8 propagation model (eeveetza/Py1812).
+# Pure-Python translation maintained by the same author who delivered
+# the official MATLAB reference to ITU-R Working Party 3K. Lazy-imported
+# from itu_p1812.py — when the package or the digital maps
+# (P1812.npz, derived from N050.TXT/DN50.TXT) are absent, the wrapper
+# returns None and predict_signal() falls back to the ridge model.
+Py1812 @ git+https://github.com/eeveetza/Py1812@main
 # ── GraphQL (side-by-side with REST) ─────────────────────────
 strawberry-graphql[fastapi]>=0.235.0
 # ── OpenTelemetry (distributed tracing, evaluation mode) ─────

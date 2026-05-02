@@ -85,6 +85,10 @@
           "value": "s3://telecom-tower-power-results/mapbiomas/brazil_cover_2022.tif"
         },
         {
+          "name": "ITU_P1812_NPZ_S3_URI",
+          "value": "s3://telecom-tower-power-results/itu/P1812.npz"
+        },
+        {
           "name": "SQS_QUEUE_URL",
           "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-prod"
         },

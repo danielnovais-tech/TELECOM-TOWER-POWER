@@ -166,6 +166,40 @@ print(f"MapBiomas raster ready ({os.path.getsize(dst)} bytes)")'
     unset _MB_DIR _MB_NEEDS_DL
 fi
 
+# ITU-R P.1812 digital maps (Py1812). Optional. The maps file
+# ``P1812.npz`` is derived offline from N050.TXT + DN50.TXT (ITU
+# digital products, redistribution forbidden). We host the derived
+# .npz in a private S3 bucket and copy it into the Py1812 install
+# directory so ``Py1812.P1812.bt_loss`` works without re-running
+# initiate_digital_maps.py inside the container.
+# Skipped silently when the env var is unset; on failure the API
+# still serves predictions via the ridge model.
+if [ -n "${ITU_P1812_NPZ_S3_URI:-}" ]; then
+    _P1812_DL_CMD='import os, sys, boto3
+from urllib.parse import urlparse
+try:
+    import Py1812
+except Exception as exc:
+    print(f"INFO: Py1812 not installed ({exc}); skipping P.1812 maps", flush=True)
+    sys.exit(0)
+uri = os.environ["ITU_P1812_NPZ_S3_URI"]
+u = urlparse(uri)
+if u.scheme != "s3" or not u.netloc or not u.path:
+    print(f"ERROR: invalid ITU_P1812_NPZ_S3_URI: {uri}", file=sys.stderr); sys.exit(2)
+bucket, key = u.netloc, u.path.lstrip("/")
+dst = os.path.join(os.path.dirname(Py1812.__file__), "P1812.npz")
+boto3.client("s3").download_file(bucket, key, dst)
+print(f"ITU-R P.1812 digital maps ready at {dst} ({os.path.getsize(dst)} bytes)")'
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 120 python -c "$_P1812_DL_CMD" \
+            || echo "WARN: ITU P.1812 maps download failed, hybrid model disabled"
+    else
+        python -c "$_P1812_DL_CMD" \
+            || echo "WARN: ITU P.1812 maps download failed, hybrid model disabled"
+    fi
+    unset _P1812_DL_CMD
+fi
+
 if [ "${SERVICE_TYPE:-}" = "webhook" ]; then
     echo "SERVICE_TYPE=webhook → starting stripe_webhook_service"
     exec uvicorn stripe_webhook_service:app --host 0.0.0.0 --port "${PORT:-8080}"

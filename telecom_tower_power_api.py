@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 from dataclasses import dataclass, asdict
-from typing import List, Optional, Dict, Tuple, Any, Iterable
+from typing import List, Literal, Optional, Dict, Tuple, Any, Iterable
 from enum import Enum
 from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect, Header
 from fastapi.security import APIKeyHeader
@@ -1714,6 +1714,13 @@ class CoveragePredictRequest(BaseModel):
     feasibility_threshold_dbm: float = -95.0
     explain: bool = False
 
+    # Predictor selector: see ``coverage_predict.predict_signal``.
+    # "auto" (default) blends ridge + ITU-R P.1812 when both are
+    # available; "ml" forces the ridge / band-aware path; "itu" forces
+    # P.1812 physics; "hybrid" is an explicit alias of auto with both
+    # predictors required.
+    model: Literal["auto", "ml", "itu", "hybrid"] = "auto"
+
 
 @app.post("/coverage/predict")
 async def coverage_predict(
@@ -1832,6 +1839,9 @@ async def coverage_predict(
         feasibility_threshold_dbm=body.feasibility_threshold_dbm,
         rx_lat=body.rx_lat,
         rx_lon=body.rx_lon,
+        tx_lat=tx_lat,
+        tx_lon=tx_lon,
+        model=body.model,
     )
 
     response: Dict[str, Any] = {

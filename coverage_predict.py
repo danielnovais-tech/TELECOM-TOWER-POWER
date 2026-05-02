@@ -1327,6 +1327,9 @@ def predict_signal(
     feasibility_threshold_dbm: float = -95.0,
     rx_lat: Optional[float] = None,
     rx_lon: Optional[float] = None,
+    tx_lat: Optional[float] = None,
+    tx_lon: Optional[float] = None,
+    model: str = "auto",
 ) -> PredictionResult:
     """Predict received signal strength for a single tx → rx link.
 
@@ -1338,6 +1341,22 @@ def predict_signal(
     If the loaded model artefact was trained with clutter
     (``feature_names`` length > 17), the rx coords are also injected
     into the feature vector. Older v1 artefacts ignore the coords.
+
+    The ``model`` parameter selects the predictor:
+
+    - ``"ml"``: ridge / band-aware / SageMaker only (legacy default).
+    - ``"itu"``: pure ITU-R P.1812 physics (requires ``tx_lat``/``tx_lon``,
+      ``rx_lat``/``rx_lon`` and a terrain profile; ``Py1812`` package
+      installed; ITU digital maps provisioned). Falls back to ridge
+      when prerequisites are missing.
+    - ``"hybrid"``: weighted blend ML × P.1812. The blend weight is
+      driven by the ridge model's reported confidence — when the
+      empirical model is well-calibrated we lean on it; when it is
+      uncertain (sparse drive-test obs in the band) we lean on the
+      physics prior. Falls back gracefully to whichever component is
+      available.
+    - ``"auto"`` (default): hybrid when both predictors are available,
+      otherwise ml.
     """
     feats = build_features(
         d_km=d_km, f_hz=f_hz, tx_h_m=tx_h_m, rx_h_m=rx_h_m,
@@ -1360,17 +1379,17 @@ def predict_signal(
             with_clutter=True, rx_lat=rx_lat, rx_lon=rx_lon,
         )
 
-    rssi: Optional[float] = None
-    source = "physics-fallback"
-    version = "physics-v1"
-    confidence = 0.4
+    rssi_ml: Optional[float] = None
+    source_ml = "physics-fallback"
+    version_ml = "physics-v1"
+    confidence_ml = 0.4
 
     sm = _predict_sagemaker(feats)
     if sm is not None:
-        rssi = sm
-        source = "sagemaker"
-        version = f"sagemaker:{SAGEMAKER_ENDPOINT}"
-        confidence = 0.85
+        rssi_ml = sm
+        source_ml = "sagemaker"
+        version_ml = f"sagemaker:{SAGEMAKER_ENDPOINT}"
+        confidence_ml = 0.85
     else:
         # Prefer band-aware (per-frequency) ridge when configured —
         # path-loss exponent and shadowing differ enough between 700 MHz
@@ -1379,25 +1398,78 @@ def predict_signal(
         if band_model is not None:
             picked, band_used = band_model.pick(f_hz)
             if picked is not None:
-                rssi = picked.predict(_features_for(picked))
-                source = "local-model-band"
-                version = f"{picked.version}:band-{band_used}MHz"
-                confidence = max(
+                rssi_ml = picked.predict(_features_for(picked))
+                source_ml = "local-model-band"
+                version_ml = f"{picked.version}:band-{band_used}MHz"
+                confidence_ml = max(
                     0.3, min(0.9, 1.0 - (picked.rmse_db - 8.0) / 20.0)
                 )
-        if rssi is None:
-            model = get_model()
-            if model is not None:
-                rssi = model.predict(_features_for(model))
-                source = "local-model"
-                version = model.version
+        if rssi_ml is None:
+            ridge = get_model()
+            if ridge is not None:
+                rssi_ml = ridge.predict(_features_for(ridge))
+                source_ml = "local-model"
+                version_ml = ridge.version
                 # 1 σ ≈ rmse; map to 0..1 confidence. Anchor on realistic sub-GHz
                 # NLOS propagation accuracy (Hata/Okumura class): ≤ 8 dB → 0.9
                 # (excellent), 13 dB → 0.75 (good), ≥ 18 dB → 0.4 (poor).
-                confidence = max(0.3, min(0.9, 1.0 - (model.rmse_db - 8.0) / 20.0))
+                confidence_ml = max(0.3, min(0.9, 1.0 - (ridge.rmse_db - 8.0) / 20.0))
 
-    if rssi is None:
-        rssi = _physics_fallback(feats)
+    if rssi_ml is None:
+        rssi_ml = _physics_fallback(feats)
+
+    # ── ITU-R P.1812 (optional) ─────────────────────────────────────────
+    rssi_itu: Optional[float] = None
+    want_itu = model in {"itu", "hybrid", "auto"}
+    if want_itu and tx_lat is not None and tx_lon is not None \
+            and rx_lat is not None and rx_lon is not None \
+            and terrain_profile is not None and len(terrain_profile) >= 2:
+        try:
+            import itu_p1812
+            # P.1812 wants distances in km from Tx, ascending. The internal
+            # ``terrain_profile`` is sampled uniformly between Tx and Rx, so
+            # we synthesise the distance axis from ``d_km``.
+            n = len(terrain_profile)
+            d_axis = np.linspace(0.0, float(d_km), n)
+            Lb = itu_p1812.predict_basic_loss(
+                f_hz=f_hz,
+                d_km=d_axis,
+                h_m=terrain_profile,
+                htg=float(tx_h_m),
+                hrg=float(rx_h_m),
+                phi_t=float(tx_lat), lam_t=float(tx_lon),
+                phi_r=float(rx_lat), lam_r=float(rx_lon),
+            )
+            if Lb is not None:
+                rssi_itu = float(tx_power_dbm) + float(tx_gain_dbi) \
+                    + float(rx_gain_dbi) - Lb
+        except Exception as exc:  # noqa: BLE001 — physics is best-effort
+            logger.debug("itu_p1812 lookup failed: %s", exc)
+
+    # ── Compose final RSSI per ``model`` selector ───────────────────────
+    if model == "itu" and rssi_itu is not None:
+        rssi = rssi_itu
+        source = "itu-p1812"
+        version = "itu-r-p.1812-8"
+        confidence = 0.7
+    elif model in {"hybrid", "auto"} and rssi_itu is not None and rssi_ml is not None:
+        # Dynamic blend: more weight to ML when its confidence is high.
+        # ``confidence_ml`` ≈ 0.4 when only physics-fallback is available
+        # and ≈ 0.9 with a well-calibrated band-aware ridge.
+        w_ml = max(0.0, min(1.0, (confidence_ml - 0.3) / 0.6))
+        w_itu = 1.0 - w_ml
+        rssi = w_ml * rssi_ml + w_itu * rssi_itu
+        source = "hybrid-ml-itu"
+        version = f"{version_ml}+itu-r-p.1812-8(w_ml={w_ml:.2f})"
+        # Blend confidence: take the higher of the two with a small bonus
+        # for agreement (≤ 5 dB apart).
+        agreement_bonus = 0.05 if abs(rssi_ml - rssi_itu) <= 5.0 else 0.0
+        confidence = min(0.95, max(confidence_ml, 0.7) + agreement_bonus)
+    else:
+        rssi = rssi_ml
+        source = source_ml
+        version = version_ml
+        confidence = confidence_ml
 
     rssi = float(np.clip(rssi, _FLOOR_DBM, 30.0))
     feature_dict = {name: float(feats[i]) for i, name in enumerate(_FEATURE_NAMES)}
