@@ -114,9 +114,19 @@ _FEATURE_NAMES: Tuple[str, ...] = (
 )
 
 
-def feature_names() -> Tuple[str, ...]:
-    """Public, ordered feature names accepted by the model."""
-    return _FEATURE_NAMES
+def feature_names(*, with_clutter: bool = False) -> Tuple[str, ...]:
+    """Public, ordered feature names accepted by the model.
+
+    When ``with_clutter=True``, the 10-dim MapBiomas LULC one-hot is
+    appended in canonical order (see :data:`mapbiomas_clutter.ONE_HOT_FEATURE_NAMES`).
+    """
+    if not with_clutter:
+        return _FEATURE_NAMES
+    try:
+        from mapbiomas_clutter import ONE_HOT_FEATURE_NAMES
+    except Exception:
+        return _FEATURE_NAMES
+    return _FEATURE_NAMES + ONE_HOT_FEATURE_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +203,18 @@ def build_features(
     terrain_profile: Optional[Sequence[float]] = None,
     tx_ground_elev_m: float = 0.0,
     rx_ground_elev_m: float = 0.0,
+    with_clutter: bool = False,
+    rx_lat: Optional[float] = None,
+    rx_lon: Optional[float] = None,
 ) -> np.ndarray:
-    """Return the engineered feature vector in canonical order."""
+    """Return the engineered feature vector in canonical order.
+
+    When ``with_clutter=True`` the result is extended by a 10-dim
+    MapBiomas LULC one-hot at ``(rx_lat, rx_lon)``. Without coords (or
+    with no raster configured) the one-hot collapses to the "Other"
+    slot — same column dimension either way so a model trained with
+    clutter can still score points whose receiver location is unknown.
+    """
     tx_h_asl = tx_ground_elev_m + tx_h_m
     rx_h_asl = rx_ground_elev_m + rx_h_m
     summary = _summarise_terrain(
@@ -217,7 +237,29 @@ def build_features(
         "terrain_std_x_log_d": summary["terrain_std_m"] * log_d,
     }
     raw.update(summary)
-    return np.array([raw[k] for k in _FEATURE_NAMES], dtype=float)
+    base = np.array([raw[k] for k in _FEATURE_NAMES], dtype=float)
+    if not with_clutter:
+        return base
+
+    # Append clutter one-hot. Failures (no rasterio, no raster, lookup
+    # error) collapse to the "Other" slot — same dimension, never raises.
+    try:
+        from mapbiomas_clutter import (
+            clutter_class_to_onehot,
+            get_extractor,
+        )
+        code: Optional[int] = None
+        if rx_lat is not None and rx_lon is not None:
+            try:
+                code = get_extractor().get_clutter_class(rx_lat, rx_lon)
+            except Exception:  # noqa: BLE001
+                code = None
+        onehot = clutter_class_to_onehot(code)
+    except Exception:  # noqa: BLE001
+        # mapbiomas_clutter import itself failed — emit zero vector of
+        # the expected length so feature dimension stays consistent.
+        onehot = np.zeros(10, dtype=float)
+    return np.concatenate([base, onehot])
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +281,12 @@ class CoverageModel:
     cv_folds: int = 0                      # k value used (0 = not evaluated)
     rmse_by_morphology: Dict[str, float] = field(default_factory=dict)
     rmse_by_band: Dict[str, float] = field(default_factory=dict)
+    # Feature schema baked into this artefact. Defaults to the v1 list
+    # for backward compatibility with older .npz files that didn't
+    # serialise this field. v2 = v1 + 10-dim MapBiomas one-hot.
+    feature_names: Tuple[str, ...] = field(
+        default_factory=lambda: tuple(_FEATURE_NAMES)
+    )
 
     # ---- prediction --------------------------------------------------------
 
@@ -266,7 +314,7 @@ class CoverageModel:
                     "cv_folds": self.cv_folds,
                     "rmse_by_morphology": self.rmse_by_morphology,
                     "rmse_by_band": self.rmse_by_band,
-                    "feature_names": list(_FEATURE_NAMES),
+                    "feature_names": list(self.feature_names),
                 }).encode("utf-8"),
                 dtype=np.uint8,
             ),
@@ -296,6 +344,9 @@ class CoverageModel:
                 cv_folds=meta.get("cv_folds", 0),
                 rmse_by_morphology=dict(meta.get("rmse_by_morphology", {}) or {}),
                 rmse_by_band=dict(meta.get("rmse_by_band", {}) or {}),
+                feature_names=tuple(
+                    meta.get("feature_names", list(_FEATURE_NAMES)) or _FEATURE_NAMES
+                ),
             )
 
 
@@ -1283,6 +1334,10 @@ def predict_signal(
     is configured (``MAPBIOMAS_RASTER_PATH``), the result is annotated
     with the LULC clutter class at the receiver — best-effort, never
     raises.
+
+    If the loaded model artefact was trained with clutter
+    (``feature_names`` length > 17), the rx coords are also injected
+    into the feature vector. Older v1 artefacts ignore the coords.
     """
     feats = build_features(
         d_km=d_km, f_hz=f_hz, tx_h_m=tx_h_m, rx_h_m=rx_h_m,
@@ -1290,6 +1345,20 @@ def predict_signal(
         rx_gain_dbi=rx_gain_dbi, terrain_profile=terrain_profile,
         tx_ground_elev_m=tx_ground_elev_m, rx_ground_elev_m=rx_ground_elev_m,
     )
+
+    def _features_for(model_obj: Any) -> np.ndarray:
+        """Return ``feats`` (re)built to match the model's expected dim."""
+        expected = getattr(model_obj, "feature_names", None)
+        if expected is None or len(expected) <= len(_FEATURE_NAMES):
+            return feats
+        return build_features(
+            d_km=d_km, f_hz=f_hz, tx_h_m=tx_h_m, rx_h_m=rx_h_m,
+            tx_power_dbm=tx_power_dbm, tx_gain_dbi=tx_gain_dbi,
+            rx_gain_dbi=rx_gain_dbi, terrain_profile=terrain_profile,
+            tx_ground_elev_m=tx_ground_elev_m,
+            rx_ground_elev_m=rx_ground_elev_m,
+            with_clutter=True, rx_lat=rx_lat, rx_lon=rx_lon,
+        )
 
     rssi: Optional[float] = None
     source = "physics-fallback"
@@ -1310,7 +1379,7 @@ def predict_signal(
         if band_model is not None:
             picked, band_used = band_model.pick(f_hz)
             if picked is not None:
-                rssi = picked.predict(feats)
+                rssi = picked.predict(_features_for(picked))
                 source = "local-model-band"
                 version = f"{picked.version}:band-{band_used}MHz"
                 confidence = max(
@@ -1319,7 +1388,7 @@ def predict_signal(
         if rssi is None:
             model = get_model()
             if model is not None:
-                rssi = model.predict(feats)
+                rssi = model.predict(_features_for(model))
                 source = "local-model"
                 version = model.version
                 # 1 σ ≈ rmse; map to 0..1 confidence. Anchor on realistic sub-GHz

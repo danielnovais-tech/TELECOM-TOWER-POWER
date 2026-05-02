@@ -196,3 +196,44 @@ def test_predict_signal_uses_band_aware_when_configured(monkeypatch, tmp_path):
     )
     assert result.source == "local-model-band"
     assert "band-2600MHz" in result.model_version
+
+
+# ---------------------------------------------------------------------------
+# Clutter feature schema (Step 4: future-proof model artefacts)
+# ---------------------------------------------------------------------------
+
+def test_build_features_with_clutter_extends_dimension():
+    base = cp.build_features(
+        d_km=1.0, f_hz=900e6, tx_h_m=30, rx_h_m=10,
+        tx_power_dbm=43, tx_gain_dbi=17, rx_gain_dbi=12,
+        terrain_profile=[100, 105, 110, 105, 100],
+    )
+    extended = cp.build_features(
+        d_km=1.0, f_hz=900e6, tx_h_m=30, rx_h_m=10,
+        tx_power_dbm=43, tx_gain_dbi=17, rx_gain_dbi=12,
+        terrain_profile=[100, 105, 110, 105, 100],
+        with_clutter=True,
+    )
+    assert extended.shape == (base.shape[0] + 10,)
+    # The 10 appended dims must form a one-hot (sum = 1).
+    assert extended[base.shape[0]:].sum() == pytest.approx(1.0)
+
+
+def test_feature_names_with_clutter_appends_one_hot_columns():
+    base_names = cp.feature_names()
+    extended_names = cp.feature_names(with_clutter=True)
+    assert len(extended_names) == len(base_names) + 10
+    # First 17 columns are the v1 schema, unchanged.
+    assert extended_names[: len(base_names)] == base_names
+    # Last 10 columns are clutter_*.
+    assert all(n.startswith("clutter_") for n in extended_names[len(base_names):])
+
+
+def test_coveragemodel_persists_feature_names(tmp_path):
+    out = tmp_path / "model.npz"
+    model = cp.train_model(n_synthetic=400, save_to=str(out), seed=7, kfold=0)
+    # Default schema is v1 (17 features); the artefact should round-trip
+    # the names so a future loader can detect schema upgrades.
+    reloaded = cp.CoverageModel.load(str(out))
+    assert reloaded.feature_names == model.feature_names
+    assert len(reloaded.feature_names) == len(cp.feature_names())

@@ -32,6 +32,10 @@ PyJWT[crypto]>=2.8.0
 # ── Geo-format exports (KML for QGIS/Google Earth, Shapefile for AutoCAD/QGIS)
 simplekml>=1.3.6
 pyshp>=2.3.1
+# ── MapBiomas LULC raster sampling (clutter classification at rx points).
+# Heavy native deps (GDAL); only used when MAPBIOMAS_RASTER_PATH is set.
+# Module gracefully degrades to a no-op when this package is absent.
+rasterio>=1.3,<2.0
 # ── GraphQL (side-by-side with REST) ─────────────────────────
 strawberry-graphql[fastapi]>=0.235.0
 # ── OpenTelemetry (distributed tracing, evaluation mode) ─────

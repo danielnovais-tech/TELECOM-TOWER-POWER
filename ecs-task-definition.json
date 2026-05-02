@@ -77,6 +77,14 @@
           "value": "s3://telecom-tower-power-results/models/bands"
         },
         {
+          "name": "MAPBIOMAS_RASTER_PATH",
+          "value": "/app/mapbiomas/brazil_cover_2022.tif"
+        },
+        {
+          "name": "MAPBIOMAS_RASTER_S3_URI",
+          "value": "s3://telecom-tower-power-results/mapbiomas/brazil_cover_2022.tif"
+        },
+        {
           "name": "SQS_QUEUE_URL",
           "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-prod"
         },

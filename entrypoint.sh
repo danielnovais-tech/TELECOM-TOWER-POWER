@@ -125,6 +125,38 @@ sys.exit(0 if ok else 1)'
     unset _BAND_REFRESH_CMD
 fi
 
+# MapBiomas LULC raster (clutter feature). Optional. When
+# MAPBIOMAS_RASTER_S3_URI is set we mirror the GeoTIFF onto local disk
+# so the lazy rasterio.open() inside the API process is fast.
+# Footprint: a Brazil-wide Collection 9 raster is ~3-5 GB; allow a long
+# timeout (5 min) and skip the download if a local file already exists
+# and is newer than 7 days.
+if [ -n "${MAPBIOMAS_RASTER_S3_URI:-}" ] && [ -n "${MAPBIOMAS_RASTER_PATH:-}" ]; then
+    _MB_DIR=$(dirname "${MAPBIOMAS_RASTER_PATH}")
+    mkdir -p "$_MB_DIR" || true
+    _MB_NEEDS_DL=1
+    if [ -f "${MAPBIOMAS_RASTER_PATH}" ]; then
+        # Skip if file is < 7 days old.
+        if find "${MAPBIOMAS_RASTER_PATH}" -mtime -7 2>/dev/null | grep -q .; then
+            echo "MapBiomas raster present and < 7 days old, skipping download"
+            _MB_NEEDS_DL=0
+        fi
+    fi
+    if [ "$_MB_NEEDS_DL" -eq 1 ]; then
+        echo "Downloading MapBiomas raster ${MAPBIOMAS_RASTER_S3_URI} → ${MAPBIOMAS_RASTER_PATH} (5min timeout)..."
+        if command -v timeout >/dev/null 2>&1; then
+            timeout 300 aws s3 cp "${MAPBIOMAS_RASTER_S3_URI}" "${MAPBIOMAS_RASTER_PATH}" --no-progress \
+                && echo "MapBiomas raster ready" \
+                || echo "WARN: MapBiomas raster download failed, clutter feature disabled"
+        else
+            aws s3 cp "${MAPBIOMAS_RASTER_S3_URI}" "${MAPBIOMAS_RASTER_PATH}" --no-progress \
+                && echo "MapBiomas raster ready" \
+                || echo "WARN: MapBiomas raster download failed, clutter feature disabled"
+        fi
+    fi
+    unset _MB_DIR _MB_NEEDS_DL
+fi
+
 if [ "${SERVICE_TYPE:-}" = "webhook" ]; then
     echo "SERVICE_TYPE=webhook → starting stripe_webhook_service"
     exec uvicorn stripe_webhook_service:app --host 0.0.0.0 --port "${PORT:-8080}"
