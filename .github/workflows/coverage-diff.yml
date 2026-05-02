@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Coverage-diff robot.
+#
+# Nightly job that re-runs a fixed set of canonical Tx→Rx links
+# through every available RF engine (rf-signals, signal-server,
+# ITU-R P.1812, sionna when ready) and posts a delta report:
+#
+#   * dB drift per engine vs. the P.1812 reference;
+#   * regression alarm if any engine moves > $REGRESSION_DB_THRESHOLD
+#     compared to the previous nightly run;
+#   * Slack/Issue notification on regression.
+#
+# The links are stored in tests/data/coverage_diff_links.json so the
+# golden set is versioned alongside the code.
+name: coverage-diff
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC = 03:00 BRT, after nightly retrain
+  workflow_dispatch:
+    inputs:
+      regression_db_threshold:
+        description: "dB delta vs. previous run that triggers a failure"
+        required: false
+        default: "3.0"
+
+permissions:
+  contents: read
+  issues: write   # to open a regression issue
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      REGRESSION_DB_THRESHOLD: ${{ github.event.inputs.regression_db_threshold || '3.0' }}
+      # Engines toggle individually; the job tolerates any combination.
+      ITU_P1812_DISABLED: "0"
+      SIONNA_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime deps (lean subset)
+        run: |
+          python -m pip install --upgrade pip
+          # Only what the registry + engines need at compare time.
+          # We deliberately skip fastapi/sqlalchemy/etc — the robot
+          # invokes rf_engines.compare directly, no API server.
+          pip install numpy pydantic
+
+      - name: Install rust toolchain (for rf-signals build)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build rf-signals CLI
+        continue-on-error: true   # robot still runs without rf-signals
+        run: bash scripts/build_rf_signals.sh "$HOME/.local"
+
+      - name: Build Cloud-RF Signal-Server
+        continue-on-error: true
+        run: bash scripts/build_signal_server.sh "$HOME/.local"
+
+      - name: Run coverage diff
+        env:
+          RF_SIGNALS_BIN: ${{ github.workspace }}/../.local/bin/rfsignals-cli
+          SIGNAL_SERVER_BIN: ${{ github.workspace }}/../.local/bin/signalserverHD
+        run: |
+          python scripts/coverage_diff_robot.py \
+            --links tests/data/coverage_diff_links.json \
+            --previous-report artifacts/previous_diff.json \
+            --output artifacts/coverage_diff.json \
+            --threshold-db "$REGRESSION_DB_THRESHOLD"
+
+      - name: Upload report artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-diff-${{ github.run_id }}
+          path: artifacts/coverage_diff.json
+          if-no-files-found: error
+
+      - name: Open regression issue (on failure)
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = "Coverage-diff robot detected an engine regression.\n\n";
+            try {
+              body += "```json\n" + fs.readFileSync('artifacts/coverage_diff.json', 'utf8') + "\n```";
+            } catch (e) { body += "(no report file)"; }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `coverage-diff regression on ${new Date().toISOString().slice(0,10)}`,
+              body,
+              labels: ['regression', 'rf-engines'],
+            });

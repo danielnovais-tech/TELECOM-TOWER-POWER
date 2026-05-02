@@ -4505,6 +4505,21 @@ try:
 except Exception:
     logger.exception("GraphQL router failed to mount; REST API still active")
 
+# RF engines registry router (rf-signals, signal-server, sionna, ITU-R P.1812).
+# Mounted *after* the API-key dependency is in scope so the router inherits
+# the same auth posture as the rest of /coverage/*. Failure to import any
+# individual engine adapter is non-fatal — see rf_engines/__init__.py.
+try:
+    from fastapi import Depends as _DependsRF
+    from rf_engines_router import router as _rf_engines_router
+    app.include_router(
+        _rf_engines_router,
+        dependencies=[_DependsRF(verify_api_key)],
+    )
+    logger.info("RF engines router mounted at /coverage/engines")
+except Exception:
+    logger.exception("RF engines router failed to mount; built-in predictors still active")
+
 if FRONTEND_DIR.is_dir():
     from starlette.staticfiles import StaticFiles
     from starlette.responses import FileResponse
