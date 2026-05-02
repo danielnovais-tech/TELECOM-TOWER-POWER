@@ -179,12 +179,27 @@ Tier-1 não é alvo nos próximos 18 meses.
   específicos. RMSE típica reduz ~30 % em PoCs e a confiança reportada via
   `/coverage/predict` deixa de ser uma média ponderada entre regimes
   fundamentalmente diferentes.
-- ❌ **Features de clutter (vegetação, urbanização)** — terrain SRTM
-  só captura altitude, não tipo de superfície. Roadmap: integração
-  MapBiomas Coleção 9.
+- ✅ **Features de clutter (vegetação, urbanização)** — sampler de
+  uso/cobertura do solo (MapBiomas Coleção 9, single-band uint8) com
+  cache Redis (TTL 30 d) + LRU(8192) em processo, mirror de
+  `MAPBIOMAS_RASTER_S3_URI` para `MAPBIOMAS_RASTER_PATH` no boot do
+  container (~1 GB Brasil-wide, download em ~7 s). `/coverage/predict`
+  (point mode) já retorna `clutter_class` + `clutter_label` quando
+  `rx_lat`/`rx_lon` são fornecidos. O pipeline `build_features(...,
+  with_clutter=True)` anexa um one-hot de 10 dims (Forest / Savanna /
+  Grassland / Pasture / Mosaic / Urban / Bare / Water / Soybean /
+  Other) ao vetor v1; o schema é versionado em
+  `CoverageModel.feature_names` (persistido no `.npz`), portanto
+  artefatos antigos (17 dims) continuam carregando — e modelos
+  futuros treinados com clutter (27 dims) são detectados em runtime
+  via `len(feature_names)`.
+- ⚠️ **Retrain com clutter** — pendente: o flag `--with-clutter` no
+  `scripts/retrain_coverage_model.py` só faz sentido depois que
+  observações de drive-test com `rx_lat`/`rx_lon` se acumularem (dados
+  sintéticos não têm sinal de clutter para aprender).
 
-Resta o gap de clutter (MapBiomas Coleção 9 + ITU-R P.1812), Tier-2
-target.
+Próximo gap aberto: ITU-R P.1812 como blender físico para baixa
+contagem de amostras (Tier-2 target).
 
 ---
 
