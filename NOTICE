@@ -43,8 +43,12 @@ Some packages ship wheel METADATA without a License field. The license has
 been verified manually from the upstream repository and is recorded here for
 audit purposes. Each entry is allowlisted in .github/workflows/license-scan.yml.
 
-  - streamlit-folium        MIT  https://github.com/randyzwitch/streamlit-folium
-                                 (verified via GitHub API license endpoint)
+  - streamlit-folium        MIT             https://github.com/randyzwitch/streamlit-folium
+                                            (verified via GitHub API license endpoint)
+  - Py1812                  ITU permissive  https://github.com/eeveetza/Py1812/blob/main/LICENSE
+                                            (ITU-R P.1812 reference impl; permissive
+                                             "as-is" license allowing modification and
+                                             redistribution with attribution)
 
 This NOTICE file is required to be reproduced in any redistribution of
 the components above where their original license requires preservation

@@ -137,6 +137,7 @@ jobs:
           # identifier and source.
           UNKNOWN_ALLOWLIST=(
             "streamlit-folium"  # MIT (verified via GitHub API on randyzwitch/streamlit-folium)
+            "Py1812"            # ITU permissive (verified at github.com/eeveetza/Py1812/LICENSE)
           )
           unknown=$(
             jq -r '.[] | select((.License // "UNKNOWN") | ascii_upcase == "UNKNOWN") | "\(.Name)\t\(.Version)"' \
