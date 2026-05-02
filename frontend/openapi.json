@@ -83,7 +83,7 @@
       },
       "get": {
         "summary": "List Towers",
-        "description": "List towers with pagination. Use *offset* and *limit* to page through results.",
+        "description": "List towers with pagination. Use *offset* and *limit* to page through results.\n\nTenants see system-owned (public dataset) rows plus their own creations.\nCross-tenant rows are filtered out at the SQL layer.",
         "operationId": "list_towers_towers_get",
         "security": [
           {
@@ -461,6 +461,584 @@
             "APIKeyHeader": []
           }
         ]
+      }
+    },
+    "/coverage/predict/stream": {
+      "post": {
+        "summary": "Coverage Predict Stream",
+        "description": "Server-Sent-Events real-time AI heatmap.\n\nStreams ``GridPoint`` rows as soon as each cell is predicted so a\nfront-end map can paint the heatmap progressively (50x50 m cells over\na city block render in <1 s of perceived latency).\n\nUse ``cell_size_m`` (e.g. 50) to request a physical resolution rather\nthan a fixed cell count. Caps apply per tier (Pro: 2.5k cells,\nBusiness: 10k, Enterprise: 40k).\n\nEach event is JSON: ``{\"lat\",\"lon\",\"signal_dbm\",\"feasible\",\"class\"}``,\nplus a final ``event: done`` carrying summary stats.",
+        "operationId": "coverage_predict_stream_coverage_predict_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoveragePredictRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/observations": {
+      "post": {
+        "summary": "Submit Coverage Observation",
+        "description": "Submit a single ground-truth RSSI measurement.\n\nStored in ``link_observations`` and incorporated into the model on the\nnext ``python -m coverage_predict train --with-observations`` run.",
+        "operationId": "submit_coverage_observation_coverage_observations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoverageObservationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/observations/batch": {
+      "post": {
+        "summary": "Submit Coverage Observations Batch",
+        "description": "Bulk-ingest measurements (drive-test CSV uploads, etc.).",
+        "operationId": "submit_coverage_observations_batch_coverage_observations_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoverageObservationsBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/observations/drivetest": {
+      "post": {
+        "summary": "Import Drive Test Csv",
+        "description": "Bulk-ingest a drive-test CSV (TEMS / G-NetTrack / QualiPoc / Anatel).\n\nColumn aliases are auto-detected. The minimum required columns are\n``lat``/``lon`` and one of ``signal_dbm``/``rsrp``/``rscp``/``rxlev``.\nFrequency is taken from (in priority order): per-row ``freq_hz``,\nper-row ``band_mhz`` snapped to the nearest commercial band, the\n``default_band_mhz`` form field, or the tower's primary frequency\nwhen ``tower_id`` is provided.\n\nTX context resolution:\n  * ``tower_id`` \u2192 loads tower; uses its lat/lon/height/power/freq.\n  * Otherwise: ``tx_lat``, ``tx_lon``, ``tx_height_m``, ``tx_power_dbm``\n    form fields are required.\n\nRows are persisted to ``link_observations`` with ``source='drive_test'``\nso the next ``retrain-coverage-model`` pass picks them up.",
+        "operationId": "import_drive_test_csv_coverage_observations_drivetest_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_drive_test_csv_coverage_observations_drivetest_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/observations/stats": {
+      "get": {
+        "summary": "Coverage Observations Stats",
+        "description": "Return current row counts for the training stores (for ops dashboards).",
+        "operationId": "coverage_observations_stats_coverage_observations_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/model/info": {
+      "get": {
+        "summary": "Coverage Model Info",
+        "description": "Return metadata about the currently loaded coverage model.\n\n``?refresh=true`` re-reads ``coverage_model.npz`` from disk (or S3 via\n``COVERAGE_MODEL_S3_URI``) so a freshly retrained artifact can be\npicked up by a long-lived task without a full restart.",
+        "operationId": "coverage_model_info_coverage_model_info_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/coverage/predict/export": {
+      "post": {
+        "summary": "Coverage Predict Export",
+        "description": "Export a coverage grid as KML / Shapefile / GeoJSON.\n\nQGIS opens KML and Shapefile natively; AutoCAD Map 3D imports\nShapefiles. ``fmt`` is one of ``kml`` (default), ``shp``, ``geojson``.\n\nPro / Business / Enterprise only. Same per-tier cell caps as the\nreal-time heatmap.",
+        "operationId": "coverage_predict_export_coverage_predict_export_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "fmt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "kml",
+              "title": "Fmt"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoverageExportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tenant/branding": {
+      "get": {
+        "summary": "Get Tenant Branding",
+        "description": "Return the calling tenant's branding overrides (or empty dict).",
+        "operationId": "get_tenant_branding_tenant_branding_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      },
+      "put": {
+        "summary": "Set Tenant Branding",
+        "description": "Update the calling Enterprise tenant's branding (white-label).\n\nReplaces the stored branding blob with the supplied fields. URLs must\nbe https. The tenant's ``frontend_url`` is auto-allowed in CORS so\nthe white-label SPA can call this API from its own origin without an\noperator changing the CORS_ORIGINS env var.",
+        "operationId": "set_tenant_branding_tenant_branding_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantBranding"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Delete Tenant Branding",
+        "description": "Clear all branding overrides for the calling tenant.",
+        "operationId": "delete_tenant_branding_tenant_branding_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/tenant/audit": {
+      "get": {
+        "summary": "Get Tenant Audit",
+        "description": "Return the calling tenant's recent audit log entries (newest first).\n\nTenants only see their own rows; cross-tenant reads are not exposed\nvia the public API. The endpoint is available to all tiers \u2014 every\npaying customer can audit their own activity for compliance.",
+        "operationId": "get_tenant_audit_tenant_audit_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/sales/overview": {
+      "get": {
+        "summary": "Admin Sales Overview",
+        "description": "Sales-facing aggregated view: tenants by tier, MRR estimate, signups.\n\nReturns a single JSON document with everything the sales dashboard\nneeds in one round-trip, so the React UI doesn't fan out across many\nrequests. All numbers are derived from the production key store and\naudit log; no PII beyond company / billing email.",
+        "operationId": "admin_sales_overview_admin_sales_overview_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Admin Sales Overview Admin Sales Overview Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/admin/sales/tenants/{api_key_prefix}": {
+      "get": {
+        "summary": "Admin Sales Tenant Detail",
+        "description": "Per-tenant sales detail \u2014 usage, billing cycle, SSO/white-label state.",
+        "operationId": "admin_sales_tenant_detail_admin_sales_tenants__api_key_prefix__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "api_key_prefix",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Api Key Prefix"
+            }
+          },
+          {
+            "name": "X-Admin-TOTP",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Totp"
+            }
+          },
+          {
+            "name": "X-Admin-Justification",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Justification"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin Sales Tenant Detail Admin Sales Tenants  Api Key Prefix  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/impersonate/{api_key_prefix}": {
+      "post": {
+        "summary": "Admin Impersonate",
+        "description": "Return the full API key for a tenant (support / impersonation).\n\nIntentionally a POST so it doesn't show up in browser-history GETs.\nEvery call writes an audit row keyed to the impersonated tenant\n*and* a separate row keyed to the admin, so both sides of the\nimpersonation are traceable.\n\nThe returned ``api_key`` lets the operator make requests on the\ntenant's behalf for support purposes (e.g. paste it into a CLI to\nreproduce a user-reported bug). It does NOT change anything about\nthe tenant's account.",
+        "operationId": "admin_impersonate_admin_impersonate__api_key_prefix__post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "api_key_prefix",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Api Key Prefix"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ImpersonateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin Impersonate Admin Impersonate  Api Key Prefix  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/plan_repeater": {
@@ -956,7 +1534,7 @@
     "/signup/free": {
       "post": {
         "summary": "Signup Free",
-        "description": "Register a free-tier account and receive an API key instantly.",
+        "description": "Register a free-tier account and receive an API key instantly.\n\nRate-limited to 5 signups/hour/IP and (when configured) gated by\nCloudflare Turnstile to prevent automated free-key farming, which\nwould otherwise be an open faucet against per-call SRTM and Bedrock\ncosts.",
         "operationId": "signup_free_signup_free_post",
         "requestBody": {
           "content": {
@@ -970,6 +1548,114 @@
         },
         "responses": {
           "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/signup/config": {
+      "get": {
+        "summary": "Signup Config",
+        "description": "Public hint for the signup form: whether CAPTCHA is required and\nwhich Turnstile site key to render. Never returns the secret key.",
+        "operationId": "signup_config_signup_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sso/config": {
+      "get": {
+        "summary": "Sso Config",
+        "description": "Public discovery hint for the frontend (which IdP, which client).",
+        "operationId": "sso_config_auth_sso_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sso/callback": {
+      "post": {
+        "summary": "Sso Callback",
+        "description": "Server-side OAuth2 code \u2192 id_token \u2192 api_key exchange.\n\nThe SPA hits ``/auth/callback`` after Cognito redirects with ``?code=``,\nforwards the code to this endpoint, and receives an api_key. The\nclient_secret stays on the server. The id_token is verified with the\nsame code path as :func:`sso_exchange`.",
+        "operationId": "sso_callback_auth_sso_callback_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SsoCallbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sso": {
+      "post": {
+        "summary": "Sso Exchange",
+        "description": "Exchange an IdP-issued ID token for a long-lived TTP API key.\n\nThe token is fully verified (signature, issuer, audience, expiry,\ntoken_use) before any DB write. On first login a fresh free-tier key\nis minted; subsequent logins return the same key. The api_key row is\nstamped with (oauth_provider, oauth_subject) so future requests can\nuse ``Authorization: Bearer <id_token>`` directly.",
+        "operationId": "sso_exchange_auth_sso_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SsoExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -1803,6 +2489,105 @@
         ],
         "title": "Body_batch_reports_batch_reports_post"
       },
+      "Body_import_drive_test_csv_coverage_observations_drivetest_post": {
+        "properties": {
+          "csv_file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Csv File",
+            "description": "Drive-test export from TEMS / G-NetTrack / QualiPoc / Anatel"
+          },
+          "tower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tower Id",
+            "description": "If set, TX context is read from this tower."
+          },
+          "tx_lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Lat"
+          },
+          "tx_lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Lon"
+          },
+          "tx_height_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Height M"
+          },
+          "tx_power_dbm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Power Dbm"
+          },
+          "tx_gain_dbi": {
+            "type": "number",
+            "title": "Tx Gain Dbi",
+            "default": 17.0
+          },
+          "rx_height_m": {
+            "type": "number",
+            "title": "Rx Height M",
+            "default": 1.5
+          },
+          "default_band_mhz": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Band Mhz",
+            "description": "Used if the CSV has no band/freq column."
+          },
+          "device": {
+            "type": "string",
+            "title": "Device",
+            "description": "Free-form label, e.g. 'tems', 'gnettrack', 'qualipoc'.",
+            "default": "drive_test"
+          }
+        },
+        "type": "object",
+        "required": [
+          "csv_file"
+        ],
+        "title": "Body_import_drive_test_csv_coverage_observations_drivetest_post"
+      },
       "CheckoutRequest": {
         "properties": {
           "email": {
@@ -1843,6 +2628,294 @@
           "tier"
         ],
         "title": "CheckoutRequest"
+      },
+      "CoverageExportRequest": {
+        "properties": {
+          "tower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tower Id"
+          },
+          "tx_lat": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Lat"
+          },
+          "tx_lon": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": -180.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Lon"
+          },
+          "tx_height_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Height M"
+          },
+          "tx_power_dbm": {
+            "type": "number",
+            "title": "Tx Power Dbm",
+            "default": 43.0
+          },
+          "tx_gain_dbi": {
+            "type": "number",
+            "title": "Tx Gain Dbi",
+            "default": 17.0
+          },
+          "band": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Band"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rx_lat": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rx Lat"
+          },
+          "rx_lon": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": -180.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rx Lon"
+          },
+          "rx_height_m": {
+            "type": "number",
+            "title": "Rx Height M",
+            "default": 10.0
+          },
+          "rx_gain_dbi": {
+            "type": "number",
+            "title": "Rx Gain Dbi",
+            "default": 12.0
+          },
+          "bbox": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array",
+                "maxItems": 4,
+                "minItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox",
+            "description": "[min_lat, min_lon, max_lat, max_lon] for grid mode"
+          },
+          "grid_size": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 2.0,
+            "title": "Grid Size",
+            "default": 20
+          },
+          "cell_size_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10000.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cell Size M",
+            "description": "Cell size in metres (e.g. 50 for a 50x50 m heatmap). Overrides grid_size when supplied."
+          },
+          "feasibility_threshold_dbm": {
+            "type": "number",
+            "title": "Feasibility Threshold Dbm",
+            "default": -95.0
+          },
+          "explain": {
+            "type": "boolean",
+            "title": "Explain",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "CoverageExportRequest",
+        "description": "Same body as ``CoveragePredictRequest`` (bbox required)."
+      },
+      "CoverageObservationInput": {
+        "properties": {
+          "tower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tower Id"
+          },
+          "tx_lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Tx Lat"
+          },
+          "tx_lon": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Tx Lon"
+          },
+          "tx_height_m": {
+            "type": "number",
+            "maximum": 500.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Tx Height M"
+          },
+          "tx_power_dbm": {
+            "type": "number",
+            "maximum": 80.0,
+            "minimum": 0.0,
+            "title": "Tx Power Dbm"
+          },
+          "tx_gain_dbi": {
+            "type": "number",
+            "title": "Tx Gain Dbi",
+            "default": 17.0
+          },
+          "rx_lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Rx Lat"
+          },
+          "rx_lon": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Rx Lon"
+          },
+          "rx_height_m": {
+            "type": "number",
+            "maximum": 500.0,
+            "minimum": 0.0,
+            "title": "Rx Height M",
+            "default": 1.5
+          },
+          "rx_gain_dbi": {
+            "type": "number",
+            "title": "Rx Gain Dbi",
+            "default": 0.0
+          },
+          "freq_hz": {
+            "type": "number",
+            "maximum": 100000000000.0,
+            "exclusiveMinimum": 1000000.0,
+            "title": "Freq Hz"
+          },
+          "observed_dbm": {
+            "type": "number",
+            "maximum": 30.0,
+            "minimum": -150.0,
+            "title": "Observed Dbm"
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Source",
+            "default": "api"
+          },
+          "ts": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tx_lat",
+          "tx_lon",
+          "tx_height_m",
+          "tx_power_dbm",
+          "rx_lat",
+          "rx_lon",
+          "freq_hz",
+          "observed_dbm"
+        ],
+        "title": "CoverageObservationInput",
+        "description": "One ground-truth RSSI measurement.\n\nAll fields are required so the row is self-contained for offline\nre-training without needing to look up tower metadata. Submit\n``tower_id`` when the measurement is associated with a known tower\n(used for auditing)."
+      },
+      "CoverageObservationsBatch": {
+        "properties": {
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageObservationInput"
+            },
+            "type": "array",
+            "maxItems": 10000,
+            "minItems": 1,
+            "title": "Observations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "observations"
+        ],
+        "title": "CoverageObservationsBatch"
       },
       "CoveragePredictRequest": {
         "properties": {
@@ -1970,10 +3043,24 @@
           },
           "grid_size": {
             "type": "integer",
-            "maximum": 100.0,
+            "maximum": 200.0,
             "minimum": 2.0,
             "title": "Grid Size",
             "default": 20
+          },
+          "cell_size_m": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10000.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cell Size M",
+            "description": "Cell size in metres (e.g. 50 for a 50x50 m heatmap). Overrides grid_size when supplied."
           },
           "feasibility_threshold_dbm": {
             "type": "number",
@@ -2147,6 +3234,19 @@
             "maxLength": 254,
             "minLength": 5,
             "title": "Email"
+          },
+          "captcha_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captcha Token",
+            "description": "Cloudflare Turnstile token from the signup page. Required when TURNSTILE_SECRET_KEY is set on the server."
           }
         },
         "type": "object",
@@ -2154,6 +3254,181 @@
           "email"
         ],
         "title": "SignupRequest"
+      },
+      "SsoCallbackRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 4,
+            "title": "Code",
+            "description": "OAuth2 authorization code from Cognito redirect."
+          },
+          "redirect_uri": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 8,
+            "title": "Redirect Uri",
+            "description": "Must match the redirect_uri used on /authorize."
+          },
+          "provider": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 2,
+            "title": "Provider",
+            "default": "cognito"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "redirect_uri"
+        ],
+        "title": "SsoCallbackRequest",
+        "description": "Body of POST /auth/sso/callback. SPA forwards the OAuth code here so\nthe client_secret never leaves the server."
+      },
+      "SsoExchangeRequest": {
+        "properties": {
+          "id_token": {
+            "type": "string",
+            "maxLength": 8192,
+            "minLength": 20,
+            "title": "Id Token",
+            "description": "OIDC ID token (Cognito 'id_token')."
+          },
+          "provider": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 2,
+            "title": "Provider",
+            "description": "IdP identifier; only 'cognito' is supported today.",
+            "default": "cognito"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id_token"
+        ],
+        "title": "SsoExchangeRequest",
+        "description": "Body of POST /auth/sso. ``id_token`` is the Cognito-issued JWT."
+      },
+      "TenantBranding": {
+        "properties": {
+          "company_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company Name"
+          },
+          "logo_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logo Url",
+            "description": "HTTPS URL of the tenant logo (PNG/SVG)."
+          },
+          "primary_color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^#[0-9A-Fa-f]{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Color",
+            "description": "Hex colour, e.g. #1F4ED8."
+          },
+          "secondary_color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^#[0-9A-Fa-f]{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondary Color"
+          },
+          "accent_color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^#[0-9A-Fa-f]{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accent Color"
+          },
+          "frontend_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frontend Url",
+            "description": "HTTPS origin where the tenant's white-label UI is hosted. Auto-allowed in CORS for that tenant's API key."
+          },
+          "support_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Email"
+          },
+          "favicon_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Favicon Url"
+          },
+          "custom_css_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Css Url"
+          }
+        },
+        "type": "object",
+        "title": "TenantBranding",
+        "description": "Whitelisted tenant branding fields. Anything else is dropped on PUT."
       },
       "TowerInput": {
         "properties": {
@@ -2246,6 +3521,31 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "_ImpersonateRequest": {
+        "properties": {
+          "totp": {
+            "type": "string",
+            "maxLength": 6,
+            "minLength": 6,
+            "title": "Totp",
+            "description": "6-digit TOTP code"
+          },
+          "justification": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 10,
+            "title": "Justification",
+            "description": "Free-text reason for impersonation (recorded in audit log)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "totp",
+          "justification"
+        ],
+        "title": "_ImpersonateRequest",
+        "description": "Step-up payload for POST /admin/impersonate/{api_key_prefix}."
       }
     },
     "securitySchemes": {

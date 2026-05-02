@@ -29,9 +29,9 @@ from datetime import datetime, timezone
 
 import aiohttp
 from dataclasses import dataclass, asdict
-from typing import List, Optional, Dict, Tuple, Any
+from typing import List, Optional, Dict, Tuple, Any, Iterable
 from enum import Enum
-from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Request, WebSocket, WebSocketDisconnect, Header
+from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect, Header
 from fastapi.security import APIKeyHeader
 from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -2110,6 +2110,304 @@ async def submit_coverage_observations_batch(
     for o in body.observations:
         _record_coverage_accuracy_metrics(o)
     return {"ingested": n, "status": "stored"}
+
+
+# ---------------------------------------------------------------------------
+# Drive-test CSV importer (TEMS / G-NetTrack / QualiPoc / Anatel)
+# ---------------------------------------------------------------------------
+#
+# The various commercial drive-test tools each emit CSVs with their own
+# column conventions. Rather than asking the field engineer to remap
+# columns by hand, this importer auto-detects the most common aliases
+# and normalises every row into the shared `link_observations` schema
+# with `source='drive_test'`.
+
+_DT_COLUMN_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "lat": (
+        "lat", "latitude", "rx_lat", "Latitude", "LAT",
+        "Lat. [deg]", "GPS Latitude",
+    ),
+    "lon": (
+        "lon", "lng", "long", "longitude", "rx_lon", "Longitude", "LON",
+        "Lon. [deg]", "GPS Longitude",
+    ),
+    "signal_dbm": (
+        "signal_dbm", "observed_dbm", "rssi", "rsrp", "rscp", "rxlev",
+        "RSRP", "RSCP", "RxLev", "Signal", "Signal Level",
+        "Best Signal Level [dBm]", "DL_RSRP",
+    ),
+    "band_mhz": (
+        "band", "band_mhz", "frequency_mhz", "freq_mhz", "Band",
+        "Frequency [MHz]", "DL Frequency [MHz]",
+    ),
+    "freq_hz": ("freq_hz", "frequency_hz"),
+    "ts": ("timestamp", "ts", "time", "Time", "Date", "DateTime"),
+    "rx_height_m": ("rx_height_m", "antenna_height_m", "AntHeight"),
+}
+
+# Commercial cellular bands (centre frequency in Hz) — used when a
+# row has only `band_mhz` and we need a freq_hz to feed the model.
+_BAND_MHZ_TO_HZ: Dict[int, float] = {
+    700: 700e6, 800: 800e6, 850: 850e6, 900: 900e6,
+    1700: 1700e6, 1800: 1800e6, 1900: 1900e6, 2100: 2100e6,
+    2300: 2300e6, 2500: 2500e6, 2600: 2600e6,
+    3500: 3500e6, 3700: 3700e6, 5800: 5800e6,
+}
+
+
+def _resolve_dt_column(fieldnames: Iterable[str], target: str) -> Optional[str]:
+    """Return the actual CSV header that maps to ``target``, or None."""
+    aliases = _DT_COLUMN_ALIASES.get(target, ())
+    fields = list(fieldnames or [])
+    lower_to_orig = {f.strip().lower(): f for f in fields}
+    for alias in aliases:
+        key = alias.strip().lower()
+        if key in lower_to_orig:
+            return lower_to_orig[key]
+    return None
+
+
+def _parse_dt_timestamp(raw: Any) -> Optional[float]:
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)  # epoch seconds
+    except (TypeError, ValueError):
+        pass
+    s = str(raw).strip()
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f", "%d/%m/%Y %H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(s, fmt).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def _band_mhz_to_freq_hz(raw: Any) -> Optional[float]:
+    if raw is None or raw == "":
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    # Heuristic: > 1e6 → already Hz. > 1e3 → already MHz expressed as Hz/1e3?
+    # We treat the raw value as MHz unless > 5e4 (>50 GHz is non-cellular).
+    if v > 5e4:  # already in Hz
+        return v
+    if v <= 0:
+        return None
+    # Snap to closest known commercial band when within 50 MHz
+    bands = sorted(_BAND_MHZ_TO_HZ.keys())
+    closest = min(bands, key=lambda b: abs(b - v))
+    if abs(closest - v) <= 50:
+        return _BAND_MHZ_TO_HZ[closest]
+    return v * 1e6
+
+
+@app.post("/coverage/observations/drivetest")
+async def import_drive_test_csv(
+    request: Request,
+    csv_file: UploadFile = File(..., description="Drive-test export from TEMS / G-NetTrack / QualiPoc / Anatel"),
+    tower_id: Optional[str] = Form(None, description="If set, TX context is read from this tower."),
+    tx_lat: Optional[float] = Form(None),
+    tx_lon: Optional[float] = Form(None),
+    tx_height_m: Optional[float] = Form(None),
+    tx_power_dbm: Optional[float] = Form(None),
+    tx_gain_dbi: float = Form(17.0),
+    rx_height_m: float = Form(1.5),
+    default_band_mhz: Optional[int] = Form(None, description="Used if the CSV has no band/freq column."),
+    device: str = Form("drive_test", description="Free-form label, e.g. 'tems', 'gnettrack', 'qualipoc'."),
+    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
+):
+    """Bulk-ingest a drive-test CSV (TEMS / G-NetTrack / QualiPoc / Anatel).
+
+    Column aliases are auto-detected. The minimum required columns are
+    ``lat``/``lon`` and one of ``signal_dbm``/``rsrp``/``rscp``/``rxlev``.
+    Frequency is taken from (in priority order): per-row ``freq_hz``,
+    per-row ``band_mhz`` snapped to the nearest commercial band, the
+    ``default_band_mhz`` form field, or the tower's primary frequency
+    when ``tower_id`` is provided.
+
+    TX context resolution:
+      * ``tower_id`` → loads tower; uses its lat/lon/height/power/freq.
+      * Otherwise: ``tx_lat``, ``tx_lon``, ``tx_height_m``, ``tx_power_dbm``
+        form fields are required.
+
+    Rows are persisted to ``link_observations`` with ``source='drive_test'``
+    so the next ``retrain-coverage-model`` pass picks them up.
+    """
+    # ---- TX context ------------------------------------------------------
+    tower_obj = None
+    tower_freq_hz: Optional[float] = None
+    if tower_id:
+        tower_obj = platform.get_tower(tower_id)
+        if not tower_obj:
+            raise HTTPException(status_code=404, detail=f"Tower {tower_id} not found")
+        tx_lat = tower_obj.lat
+        tx_lon = tower_obj.lon
+        tx_height_m = tower_obj.height_m
+        tx_power_dbm = tower_obj.power_dbm
+        tower_freq_hz = float(tower_obj.primary_freq_hz())
+
+    missing = [
+        n for n, v in (
+            ("tx_lat", tx_lat), ("tx_lon", tx_lon),
+            ("tx_height_m", tx_height_m), ("tx_power_dbm", tx_power_dbm),
+        ) if v is None
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Provide either tower_id or all of: tx_lat, tx_lon, tx_height_m, tx_power_dbm. Missing: {missing}",
+        )
+
+    # ---- Read CSV --------------------------------------------------------
+    contents = await csv_file.read()
+    try:
+        text = contents.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = contents.decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=400, detail="CSV must be UTF-8 or latin-1 encoded")
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV has no header row")
+
+    col_lat = _resolve_dt_column(reader.fieldnames, "lat")
+    col_lon = _resolve_dt_column(reader.fieldnames, "lon")
+    col_sig = _resolve_dt_column(reader.fieldnames, "signal_dbm")
+    col_band = _resolve_dt_column(reader.fieldnames, "band_mhz")
+    col_freq_hz = _resolve_dt_column(reader.fieldnames, "freq_hz")
+    col_ts = _resolve_dt_column(reader.fieldnames, "ts")
+    col_rxh = _resolve_dt_column(reader.fieldnames, "rx_height_m")
+
+    if not (col_lat and col_lon and col_sig):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "CSV must have lat, lon and a signal column. "
+                f"Found: {reader.fieldnames}. Recognised aliases: "
+                f"lat={_DT_COLUMN_ALIASES['lat']}, "
+                f"lon={_DT_COLUMN_ALIASES['lon']}, "
+                f"signal={_DT_COLUMN_ALIASES['signal_dbm']}"
+            ),
+        )
+
+    default_freq_hz: Optional[float] = None
+    if default_band_mhz is not None:
+        default_freq_hz = _band_mhz_to_freq_hz(default_band_mhz)
+    if default_freq_hz is None:
+        default_freq_hz = tower_freq_hz
+
+    # ---- Parse rows ------------------------------------------------------
+    submitter = _caller_owner(request, key_data)
+    tier_limit = TIER_LIMITS[key_data["tier"]]["max_batch_rows"]
+
+    rows: List[Dict[str, Any]] = []
+    skipped = 0
+    for row_num, row in enumerate(reader, start=2):
+        if len(rows) >= tier_limit:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Drive-test CSV exceeds the {key_data['tier'].value} tier limit "
+                    f"of {tier_limit} rows. Split the file or upgrade your plan."
+                ),
+            )
+        try:
+            lat = float(row[col_lat])
+            lon = float(row[col_lon])
+            sig = float(row[col_sig])
+        except (TypeError, ValueError, KeyError):
+            skipped += 1
+            continue
+
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            skipped += 1
+            continue
+        if not (-150.0 <= sig <= 30.0):
+            skipped += 1
+            continue
+
+        # Frequency resolution priority: row freq_hz > row band_mhz > default
+        f_hz: Optional[float] = None
+        if col_freq_hz:
+            try:
+                f_hz = float(row[col_freq_hz])
+            except (TypeError, ValueError):
+                f_hz = None
+        if f_hz is None and col_band:
+            f_hz = _band_mhz_to_freq_hz(row.get(col_band))
+        if f_hz is None:
+            f_hz = default_freq_hz
+        if f_hz is None or f_hz <= 1e6:
+            skipped += 1
+            continue
+
+        ts_val: Optional[float] = None
+        if col_ts:
+            ts_val = _parse_dt_timestamp(row.get(col_ts))
+
+        rx_h = rx_height_m
+        if col_rxh:
+            try:
+                rx_h = float(row[col_rxh])
+            except (TypeError, ValueError):
+                pass
+
+        rows.append({
+            "ts": ts_val or time.time(),
+            "tower_id": tower_id,
+            "tx_lat": tx_lat, "tx_lon": tx_lon,
+            "tx_height_m": tx_height_m, "tx_power_dbm": tx_power_dbm,
+            "tx_gain_dbi": tx_gain_dbi,
+            "rx_lat": lat, "rx_lon": lon,
+            "rx_height_m": rx_h, "rx_gain_dbi": 0.0,
+            "freq_hz": f_hz,
+            "observed_dbm": sig,
+            "source": "drive_test",
+            "submitted_by": submitter,
+        })
+
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No valid rows parsed (skipped {skipped}). Check column mappings.",
+        )
+
+    from observation_store import ObservationStore
+    store = ObservationStore()
+    n = store.insert_observations_many(rows)
+
+    # Best-effort prediction-vs-measured metrics on a sampled subset to
+    # avoid CPU spikes on multi-thousand-row uploads.
+    sample_step = max(1, n // 200)
+    for r in rows[::sample_step]:
+        try:
+            _record_coverage_accuracy_metrics(CoverageObservationInput(**{
+                k: v for k, v in r.items() if k in CoverageObservationInput.model_fields
+            }))
+        except Exception:
+            pass
+
+    return {
+        "status": "stored",
+        "ingested": n,
+        "skipped": skipped,
+        "device": device,
+        "tower_id": tower_id,
+        "columns_detected": {
+            "lat": col_lat, "lon": col_lon, "signal": col_sig,
+            "band": col_band, "freq_hz": col_freq_hz,
+            "timestamp": col_ts, "rx_height": col_rxh,
+        },
+    }
 
 
 @app.get("/coverage/observations/stats")

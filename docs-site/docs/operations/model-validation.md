@@ -164,8 +164,11 @@ Tier-1 não é alvo nos próximos 18 meses.
 
 ### O que ainda **não** está automatizado (gap reconhecido)
 
-- ❌ **Importer de drive-test TEMS / QualiPoc / G-NetTrack** — hoje
-  o cliente precisa converter o export para o schema `/coverage/observations/batch`.
+- ✅ **Importer de drive-test TEMS / G-NetTrack / QualiPoc** — disponível
+  em `POST /coverage/observations/drivetest`. Aceita CSV com
+  auto-detecção de cabeçalhos (`Latitude`/`lat`, `RSRP`/`signal_dbm`/`RxLev`,
+  `Frequency [MHz]`/`band`, etc.). Persiste em `link_observations`
+  com `source='drive_test'`.
 - ❌ **Calibração por banda separada** — hoje um modelo único cobre
   todas as bandas; coeficientes per-band reduzem RMSE em ~30 % em PoCs.
 - ❌ **Features de clutter (vegetação, urbanização)** — terrain SRTM

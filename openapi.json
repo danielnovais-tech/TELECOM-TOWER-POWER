@@ -589,6 +589,48 @@
         ]
       }
     },
+    "/coverage/observations/drivetest": {
+      "post": {
+        "summary": "Import Drive Test Csv",
+        "description": "Bulk-ingest a drive-test CSV (TEMS / G-NetTrack / QualiPoc / Anatel).\n\nColumn aliases are auto-detected. The minimum required columns are\n``lat``/``lon`` and one of ``signal_dbm``/``rsrp``/``rscp``/``rxlev``.\nFrequency is taken from (in priority order): per-row ``freq_hz``,\nper-row ``band_mhz`` snapped to the nearest commercial band, the\n``default_band_mhz`` form field, or the tower's primary frequency\nwhen ``tower_id`` is provided.\n\nTX context resolution:\n  * ``tower_id`` \u2192 loads tower; uses its lat/lon/height/power/freq.\n  * Otherwise: ``tx_lat``, ``tx_lon``, ``tx_height_m``, ``tx_power_dbm``\n    form fields are required.\n\nRows are persisted to ``link_observations`` with ``source='drive_test'``\nso the next ``retrain-coverage-model`` pass picks them up.",
+        "operationId": "import_drive_test_csv_coverage_observations_drivetest_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_drive_test_csv_coverage_observations_drivetest_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
     "/coverage/observations/stats": {
       "get": {
         "summary": "Coverage Observations Stats",
@@ -609,6 +651,50 @@
             "APIKeyHeader": []
           }
         ]
+      }
+    },
+    "/coverage/model/info": {
+      "get": {
+        "summary": "Coverage Model Info",
+        "description": "Return metadata about the currently loaded coverage model.\n\n``?refresh=true`` re-reads ``coverage_model.npz`` from disk (or S3 via\n``COVERAGE_MODEL_S3_URI``) so a freshly retrained artifact can be\npicked up by a long-lived task without a full restart.",
+        "operationId": "coverage_model_info_coverage_model_info_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/coverage/predict/export": {
@@ -838,6 +924,38 @@
               "type": "string",
               "title": "Api Key Prefix"
             }
+          },
+          {
+            "name": "X-Admin-TOTP",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Totp"
+            }
+          },
+          {
+            "name": "X-Admin-Justification",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Justification"
+            }
           }
         ],
         "responses": {
@@ -887,6 +1005,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ImpersonateRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1406,7 +1534,7 @@
     "/signup/free": {
       "post": {
         "summary": "Signup Free",
-        "description": "Register a free-tier account and receive an API key instantly.",
+        "description": "Register a free-tier account and receive an API key instantly.\n\nRate-limited to 5 signups/hour/IP and (when configured) gated by\nCloudflare Turnstile to prevent automated free-key farming, which\nwould otherwise be an open faucet against per-call SRTM and Bedrock\ncosts.",
         "operationId": "signup_free_signup_free_post",
         "requestBody": {
           "content": {
@@ -1434,6 +1562,23 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/signup/config": {
+      "get": {
+        "summary": "Signup Config",
+        "description": "Public hint for the signup form: whether CAPTCHA is required and\nwhich Turnstile site key to render. Never returns the secret key.",
+        "operationId": "signup_config_signup_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -2344,6 +2489,105 @@
         ],
         "title": "Body_batch_reports_batch_reports_post"
       },
+      "Body_import_drive_test_csv_coverage_observations_drivetest_post": {
+        "properties": {
+          "csv_file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Csv File",
+            "description": "Drive-test export from TEMS / G-NetTrack / QualiPoc / Anatel"
+          },
+          "tower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tower Id",
+            "description": "If set, TX context is read from this tower."
+          },
+          "tx_lat": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Lat"
+          },
+          "tx_lon": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Lon"
+          },
+          "tx_height_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Height M"
+          },
+          "tx_power_dbm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Power Dbm"
+          },
+          "tx_gain_dbi": {
+            "type": "number",
+            "title": "Tx Gain Dbi",
+            "default": 17.0
+          },
+          "rx_height_m": {
+            "type": "number",
+            "title": "Rx Height M",
+            "default": 1.5
+          },
+          "default_band_mhz": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Band Mhz",
+            "description": "Used if the CSV has no band/freq column."
+          },
+          "device": {
+            "type": "string",
+            "title": "Device",
+            "description": "Free-form label, e.g. 'tems', 'gnettrack', 'qualipoc'.",
+            "default": "drive_test"
+          }
+        },
+        "type": "object",
+        "required": [
+          "csv_file"
+        ],
+        "title": "Body_import_drive_test_csv_coverage_observations_drivetest_post"
+      },
       "CheckoutRequest": {
         "properties": {
           "email": {
@@ -2990,6 +3234,19 @@
             "maxLength": 254,
             "minLength": 5,
             "title": "Email"
+          },
+          "captcha_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captcha Token",
+            "description": "Cloudflare Turnstile token from the signup page. Required when TURNSTILE_SECRET_KEY is set on the server."
           }
         },
         "type": "object",
@@ -3264,6 +3521,31 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "_ImpersonateRequest": {
+        "properties": {
+          "totp": {
+            "type": "string",
+            "maxLength": 6,
+            "minLength": 6,
+            "title": "Totp",
+            "description": "6-digit TOTP code"
+          },
+          "justification": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 10,
+            "title": "Justification",
+            "description": "Free-text reason for impersonation (recorded in audit log)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "totp",
+          "justification"
+        ],
+        "title": "_ImpersonateRequest",
+        "description": "Step-up payload for POST /admin/impersonate/{api_key_prefix}."
       }
     },
     "securitySchemes": {
