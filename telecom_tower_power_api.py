@@ -1047,7 +1047,10 @@ async def verify_api_key(request: Request, api_key: str = Security(api_key_heade
     if not api_key:
         auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
         if auth_header and auth_header.lower().startswith("bearer "):
-            token = auth_header.split(None, 1)[1].strip()
+            parts = auth_header.split(None, 1)
+            token = parts[1].strip() if len(parts) > 1 else ""
+            if not token:
+                raise HTTPException(status_code=401, detail="Invalid or missing API key")
             try:
                 claims = _sso.verify_id_token(token, provider="cognito")
             except _sso.SsoTokenError as exc:
