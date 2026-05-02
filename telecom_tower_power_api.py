@@ -2446,6 +2446,7 @@ async def coverage_model_info(
         import coverage_predict
         sm_endpoint = coverage_predict.SAGEMAKER_ENDPOINT
         model = coverage_predict.get_model(refresh=refresh)
+        band_model = coverage_predict.get_band_model(refresh=refresh)
     except Exception as e:
         logger.exception("coverage_model_info failed")
         raise HTTPException(
@@ -2458,6 +2459,8 @@ async def coverage_model_info(
         "local_model": None,
         "model_path": coverage_predict.MODEL_PATH,
         "model_s3_uri": coverage_predict.MODEL_S3_URI or None,
+        "band_aware": band_model.info() if band_model is not None else None,
+        "band_model_dir": coverage_predict.BAND_MODEL_DIR or None,
     }
     if model is not None:
         payload["local_model"] = {

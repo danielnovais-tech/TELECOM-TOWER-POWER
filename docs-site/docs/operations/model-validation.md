@@ -169,14 +169,22 @@ Tier-1 não é alvo nos próximos 18 meses.
   auto-detecção de cabeçalhos (`Latitude`/`lat`, `RSRP`/`signal_dbm`/`RxLev`,
   `Frequency [MHz]`/`band`, etc.). Persiste em `link_observations`
   com `source='drive_test'`.
-- ❌ **Calibração por banda separada** — hoje um modelo único cobre
-  todas as bandas; coeficientes per-band reduzem RMSE em ~30 % em PoCs.
+- ✅ **Calibração por banda separada** — `coverage_predict.train_band_aware_model()`
+  treina um ridge dedicado para cada uma das sete bandas comerciais brasileiras
+  (700 / 850 / 900 / 1800 / 2100 / 2600 / 3500 MHz) mais um modelo global de
+  fallback. Persistido como `coverage_model_<MHz>.npz` em um diretório apontado
+  por `COVERAGE_BAND_MODEL_DIR`. CLI: `python -m coverage_predict train-bands
+  --out-dir band_models`. Quando ativo, `predict_signal` snap-a `f_hz` ao band
+  mais próximo (e.g. 1.95 GHz → 1800, 3.6 GHz → 3500), aplicando coeficientes
+  específicos. RMSE típica reduz ~30 % em PoCs e a confiança reportada via
+  `/coverage/predict` deixa de ser uma média ponderada entre regimes
+  fundamentalmente diferentes.
 - ❌ **Features de clutter (vegetação, urbanização)** — terrain SRTM
   só captura altitude, não tipo de superfície. Roadmap: integração
   MapBiomas Coleção 9.
 
-Esses três items estão no roadmap MapBiomas + ITU-R P.1812 (Tier-2
-target).
+Resta o gap de clutter (MapBiomas Coleção 9 + ITU-R P.1812), Tier-2
+target.
 
 ---
 

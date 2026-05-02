@@ -67,8 +67,20 @@ logger = logging.getLogger(__name__)
 
 MODEL_PATH = os.getenv("COVERAGE_MODEL_PATH", "coverage_model.npz")
 MODEL_S3_URI = os.getenv("COVERAGE_MODEL_S3_URI", "")  # e.g. s3://bucket/models/coverage_model.npz
+# Optional directory of per-band ridge artefacts (coverage_model_<MHz>.npz).
+# When set and at least one band model is present we prefer band-specific
+# coefficients over the single global model. See ``BandAwareCoverageModel``.
+BAND_MODEL_DIR = os.getenv("COVERAGE_BAND_MODEL_DIR", "")
 SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_COVERAGE_ENDPOINT", "")
 SAGEMAKER_REGION = os.getenv("SAGEMAKER_REGION", os.getenv("AWS_REGION", "us-east-1"))
+
+# Nominal commercial cellular bands present in the Brazilian market.
+# Band-aware model artefacts are keyed by these integer MHz values.
+_NOMINAL_BANDS_MHZ: Tuple[int, ...] = (700, 850, 900, 1800, 2100, 2600, 3500)
+# Band used when an incoming frequency does not have a dedicated artefact
+# (e.g. 1900 MHz PCS, 28 GHz mmWave). 1800 MHz sits in the middle of the
+# coverage-grade spectrum and behaves closest to the median path.
+_FALLBACK_BAND_MHZ: int = 1800
 
 # Sentinel signal used when an output cannot be computed.
 _FLOOR_DBM = -140.0
@@ -285,6 +297,185 @@ class CoverageModel:
 
 _model_cache: Optional[CoverageModel] = None
 _model_loaded_at: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Band-aware model (one ridge per nominal commercial band)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BandAwareCoverageModel:
+    """Collection of per-band ridge regressions.
+
+    Path-loss exponent, intercept, and the slope of every covariate vary
+    measurably with carrier frequency: 700 MHz penetrates buildings and
+    suffers less foliage loss than 3.5 GHz on the same path. Fitting a
+    single global model averages those regimes and underestimates
+    confidence intervals at the band extremes.
+
+    This wrapper holds one :class:`CoverageModel` per nominal MHz band
+    (700 / 850 / 900 / 1800 / 2100 / 2600 / 3500) plus an optional
+    *global* model used when no per-band artefact is available for the
+    requested frequency. At prediction time we snap the requested
+    ``f_hz`` to the closest nominal band, fall back to ``fallback_band``
+    (1800 MHz) if that artefact is missing, then to the global model,
+    and finally back to the physics estimate via the caller.
+
+    Persistence layout::
+
+        <dir>/coverage_model_700.npz
+        <dir>/coverage_model_850.npz
+        ...
+        <dir>/coverage_model_3500.npz
+        <dir>/coverage_model_global.npz   (optional)
+        <dir>/manifest.json               (band metadata index)
+    """
+
+    models: Dict[int, CoverageModel] = field(default_factory=dict)
+    global_model: Optional[CoverageModel] = None
+    fallback_band: int = _FALLBACK_BAND_MHZ
+    trained_at: float = field(default_factory=time.time)
+
+    # ---- prediction ----------------------------------------------------
+
+    def pick(self, f_hz: float) -> Tuple[Optional[CoverageModel], int]:
+        """Return ``(model, band_mhz)`` for the given frequency.
+
+        Resolution order:
+          1. Exact-nearest nominal band (e.g. 1.95 GHz → 2100 MHz).
+          2. Configured fallback band (1800 MHz by default).
+          3. The global single-band model, if present.
+          4. ``(None, 0)`` — caller must use the physics fallback.
+        """
+        nearest = _nearest_band_mhz(f_hz)
+        m = self.models.get(nearest)
+        if m is not None:
+            return m, nearest
+        if self.fallback_band in self.models:
+            return self.models[self.fallback_band], self.fallback_band
+        if self.global_model is not None:
+            return self.global_model, 0
+        return None, 0
+
+    def predict(self, features: np.ndarray, *, f_hz: Optional[float] = None) -> Tuple[float, int]:
+        """Predict ``(signal_dbm, band_mhz_used)``.
+
+        ``f_hz`` is optional: when omitted we recover it from the
+        ``log_f_ghz`` slot of the feature vector — that is the
+        canonical location in :data:`_FEATURE_NAMES` and avoids a
+        second source of truth.
+        """
+        if f_hz is None:
+            f_hz = math.exp(float(features[_FEATURE_NAMES.index("log_f_ghz")])) * 1e9
+        m, band = self.pick(f_hz)
+        if m is None:
+            raise RuntimeError("no band model and no global fallback available")
+        return m.predict(features), band
+
+    # ---- persistence ---------------------------------------------------
+
+    def save_dir(self, directory: str) -> None:
+        os.makedirs(directory, exist_ok=True)
+        manifest: Dict[str, Any] = {
+            "trained_at": self.trained_at,
+            "fallback_band": self.fallback_band,
+            "bands": {},
+        }
+        for band, m in sorted(self.models.items()):
+            path = os.path.join(directory, f"coverage_model_{band}.npz")
+            m.save(path)
+            manifest["bands"][str(band)] = {
+                "rmse_db": m.rmse_db,
+                "n_train": m.n_train,
+                "cv_rmse_db": m.cv_rmse_db,
+                "cv_folds": m.cv_folds,
+            }
+        if self.global_model is not None:
+            self.global_model.save(os.path.join(directory, "coverage_model_global.npz"))
+            manifest["global"] = {
+                "rmse_db": self.global_model.rmse_db,
+                "n_train": self.global_model.n_train,
+            }
+        with open(os.path.join(directory, "manifest.json"), "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2)
+        logger.info("Saved band-aware model to %s (%d bands)", directory, len(self.models))
+
+    @classmethod
+    def load_dir(cls, directory: str) -> "BandAwareCoverageModel":
+        models: Dict[int, CoverageModel] = {}
+        for band in _NOMINAL_BANDS_MHZ:
+            path = os.path.join(directory, f"coverage_model_{band}.npz")
+            if os.path.exists(path):
+                try:
+                    models[band] = CoverageModel.load(path)
+                except Exception:
+                    logger.exception("Failed to load band model %s", path)
+        global_path = os.path.join(directory, "coverage_model_global.npz")
+        global_model: Optional[CoverageModel] = None
+        if os.path.exists(global_path):
+            try:
+                global_model = CoverageModel.load(global_path)
+            except Exception:
+                logger.exception("Failed to load global model %s", global_path)
+        if not models and global_model is None:
+            raise FileNotFoundError(f"no band artefacts under {directory!r}")
+        return cls(models=models, global_model=global_model)
+
+    # ---- introspection -------------------------------------------------
+
+    def info(self) -> Dict[str, Any]:
+        """Serializable summary suitable for ``/coverage/model/info``."""
+        out: Dict[str, Any] = {
+            "kind": "band-aware",
+            "fallback_band": self.fallback_band,
+            "bands": {},
+        }
+        for band, m in sorted(self.models.items()):
+            out["bands"][band] = {
+                "rmse_db": round(m.rmse_db, 4),
+                "cv_rmse_db": round(m.cv_rmse_db, 4),
+                "cv_folds": m.cv_folds,
+                "n_train": m.n_train,
+                "version": m.version,
+            }
+        if self.global_model is not None:
+            out["global"] = {
+                "rmse_db": round(self.global_model.rmse_db, 4),
+                "cv_rmse_db": round(self.global_model.cv_rmse_db, 4),
+                "n_train": self.global_model.n_train,
+            }
+        return out
+
+
+_band_model_cache: Optional[BandAwareCoverageModel] = None
+_band_model_loaded_at: float = 0.0
+
+
+def get_band_model(refresh: bool = False) -> Optional[BandAwareCoverageModel]:
+    """Return the cached band-aware model, lazily loading from
+    ``COVERAGE_BAND_MODEL_DIR``. Returns ``None`` when not configured or
+    when no artefacts are present.
+    """
+    global _band_model_cache, _band_model_loaded_at
+    if not BAND_MODEL_DIR:
+        return None
+    if _band_model_cache is not None and not refresh:
+        return _band_model_cache
+    if not os.path.isdir(BAND_MODEL_DIR):
+        return None
+    try:
+        _band_model_cache = BandAwareCoverageModel.load_dir(BAND_MODEL_DIR)
+        _band_model_loaded_at = time.time()
+        logger.info(
+            "Loaded band-aware coverage model from %s (%d bands)",
+            BAND_MODEL_DIR, len(_band_model_cache.models),
+        )
+    except FileNotFoundError:
+        return None
+    except Exception:
+        logger.exception("Failed to load band-aware model from %s", BAND_MODEL_DIR)
+        return None
+    return _band_model_cache
 
 
 def _download_from_s3(s3_uri: str, dest: str) -> bool:
@@ -552,6 +743,145 @@ def train_model(
 
 
 # ---------------------------------------------------------------------------
+# Band-aware training
+# ---------------------------------------------------------------------------
+
+# Minimum samples required to fit a useful per-band ridge (16 features
+# + intercept = 17 parameters). Below this we skip the band rather than
+# overfit; ``predict_signal`` will fall back to the 1800 MHz or global
+# model for that frequency.
+_MIN_SAMPLES_PER_BAND = 60
+
+
+def _split_by_nominal_band(
+    X: np.ndarray, y: np.ndarray,
+) -> Dict[int, Tuple[np.ndarray, np.ndarray]]:
+    """Group samples by closest nominal band, using the ``log_f_ghz``
+    feature column as the source of truth.
+    """
+    groups: Dict[int, List[int]] = {}
+    for i in range(len(X)):
+        f_hz = math.exp(float(X[i, _LOG_F_IDX])) * 1e9
+        band = _nearest_band_mhz(f_hz)
+        groups.setdefault(band, []).append(i)
+    return {
+        band: (X[np.asarray(ids)], y[np.asarray(ids)])
+        for band, ids in groups.items()
+    }
+
+
+def train_band_aware_model(
+    n_synthetic: int = 8000,
+    historical: Optional[Sequence[Tuple[np.ndarray, float]]] = None,
+    l2: float = 1.0,
+    seed: int = 42,
+    save_to_dir: Optional[str] = None,
+    kfold: int = 5,
+    train_global_fallback: bool = True,
+) -> BandAwareCoverageModel:
+    """Train one ridge per nominal commercial band.
+
+    The synthetic generator already emits each of the seven Brazilian
+    bands uniformly, so an 8 000-sample run yields ~1 100 samples per
+    band — well above ``_MIN_SAMPLES_PER_BAND``. Real
+    ``link_observations`` rows are routed to whichever band their
+    frequency snaps closest to and up-weighted 3× (mirrors
+    :func:`train_model`).
+
+    When ``train_global_fallback`` is true a single all-data ridge is
+    also fit and persisted as ``coverage_model_global.npz`` so requests
+    on rare bands (e.g. 28 GHz mmWave, 450 MHz iDEN) still get an ML
+    answer instead of dropping to the physics fallback.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+
+    X_syn, y_syn = _generate_synthetic_dataset(n_synthetic)
+    if historical:
+        X_hist = np.vstack([row[0] for row in historical])
+        y_hist = np.asarray([row[1] for row in historical])
+        X_full = np.vstack([X_syn, X_hist, X_hist, X_hist])
+        y_full = np.concatenate([y_syn, y_hist, y_hist, y_hist])
+    else:
+        X_full, y_full = X_syn, y_syn
+
+    band_data = _split_by_nominal_band(X_full, y_full)
+    band_models: Dict[int, CoverageModel] = {}
+    for band in _NOMINAL_BANDS_MHZ:
+        if band not in band_data:
+            continue
+        Xb, yb = band_data[band]
+        if len(Xb) < _MIN_SAMPLES_PER_BAND:
+            logger.warning(
+                "Skipping band %d MHz: only %d samples (< %d).",
+                band, len(Xb), _MIN_SAMPLES_PER_BAND,
+            )
+            continue
+
+        w, mean, std_safe = _fit_ridge(Xb, yb, l2=l2)
+        Xn_b = np.hstack([
+            (Xb - mean) / std_safe, np.ones((len(Xb), 1)),
+        ])
+        rmse = float(np.sqrt(np.mean((Xn_b @ w - yb) ** 2)))
+
+        cv_rmse = 0.0
+        cv_std = 0.0
+        cv_used = 0
+        if kfold and kfold >= 2 and len(Xb) >= kfold * 10:
+            cv_used = int(kfold)
+            cv_rmse, cv_std, _, _ = _kfold_evaluate(
+                Xb, yb, l2=l2, k=cv_used, seed=seed,
+            )
+
+        band_models[band] = CoverageModel(
+            weights=w,
+            feature_mean=mean,
+            feature_std=std_safe,
+            version=f"ridge-band-{band}-v1",
+            rmse_db=rmse,
+            n_train=len(Xb),
+            cv_rmse_db=float(cv_rmse),
+            cv_rmse_std_db=float(cv_std),
+            cv_folds=cv_used,
+        )
+        logger.info(
+            "Trained %d MHz band: rmse=%.2f dB, cv=%.2f±%.2f dB, n=%d",
+            band, rmse, cv_rmse, cv_std, len(Xb),
+        )
+
+    global_model: Optional[CoverageModel] = None
+    if train_global_fallback:
+        # Re-fit ridge on the full pooled dataset (avoids the dataset
+        # rebuild that calling ``train_model`` again would force).
+        w, mean, std_safe = _fit_ridge(X_full, y_full, l2=l2)
+        Xn_b = np.hstack([
+            (X_full - mean) / std_safe, np.ones((len(X_full), 1)),
+        ])
+        rmse = float(np.sqrt(np.mean((Xn_b @ w - y_full) ** 2)))
+        global_model = CoverageModel(
+            weights=w,
+            feature_mean=mean,
+            feature_std=std_safe,
+            version="ridge-global-v1",
+            rmse_db=rmse,
+            n_train=len(X_full),
+        )
+
+    band_aware = BandAwareCoverageModel(
+        models=band_models,
+        global_model=global_model,
+        fallback_band=_FALLBACK_BAND_MHZ,
+    )
+
+    if save_to_dir:
+        band_aware.save_dir(save_to_dir)
+        global _band_model_cache
+        _band_model_cache = band_aware
+
+    return band_aware
+
+
+# ---------------------------------------------------------------------------
 # Cross-validation helpers
 # ---------------------------------------------------------------------------
 
@@ -579,6 +909,17 @@ def _band_label(log_f_ghz: float) -> str:
         (3.5, "3500MHz"),
     ]
     return min(bands, key=lambda b: abs(b[0] - f_ghz))[1]
+
+
+def _nearest_band_mhz(f_hz: float) -> int:
+    """Map an arbitrary frequency in Hz to the closest nominal band in MHz.
+
+    Used by :class:`BandAwareCoverageModel` to pick the correct per-band
+    ridge artefact at prediction time. The mapping is closest-by-MHz, so
+    e.g. 2.3 GHz → 2100, 1.9 GHz → 1800, 4.0 GHz → 3500.
+    """
+    f_mhz = f_hz / 1e6
+    return min(_NOMINAL_BANDS_MHZ, key=lambda b: abs(b - f_mhz))
 
 
 def _fit_ridge(X: np.ndarray, y: np.ndarray, l2: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -888,15 +1229,29 @@ def predict_signal(
         version = f"sagemaker:{SAGEMAKER_ENDPOINT}"
         confidence = 0.85
     else:
-        model = get_model()
-        if model is not None:
-            rssi = model.predict(feats)
-            source = "local-model"
-            version = model.version
-            # 1 σ ≈ rmse; map to 0..1 confidence. Anchor on realistic sub-GHz
-            # NLOS propagation accuracy (Hata/Okumura class): ≤ 8 dB → 0.9
-            # (excellent), 13 dB → 0.75 (good), ≥ 18 dB → 0.4 (poor).
-            confidence = max(0.3, min(0.9, 1.0 - (model.rmse_db - 8.0) / 20.0))
+        # Prefer band-aware (per-frequency) ridge when configured —
+        # path-loss exponent and shadowing differ enough between 700 MHz
+        # and 3.5 GHz that a single global model averages them poorly.
+        band_model = get_band_model()
+        if band_model is not None:
+            picked, band_used = band_model.pick(f_hz)
+            if picked is not None:
+                rssi = picked.predict(feats)
+                source = "local-model-band"
+                version = f"{picked.version}:band-{band_used}MHz"
+                confidence = max(
+                    0.3, min(0.9, 1.0 - (picked.rmse_db - 8.0) / 20.0)
+                )
+        if rssi is None:
+            model = get_model()
+            if model is not None:
+                rssi = model.predict(feats)
+                source = "local-model"
+                version = model.version
+                # 1 σ ≈ rmse; map to 0..1 confidence. Anchor on realistic sub-GHz
+                # NLOS propagation accuracy (Hata/Okumura class): ≤ 8 dB → 0.9
+                # (excellent), 13 dB → 0.75 (good), ≥ 18 dB → 0.4 (poor).
+                confidence = max(0.3, min(0.9, 1.0 - (model.rmse_db - 8.0) / 20.0))
 
     if rssi is None:
         rssi = _physics_fallback(feats)
@@ -1134,6 +1489,23 @@ if __name__ == "__main__":   # pragma: no cover
 
     p_show = sub.add_parser("info", help="Show metadata for the persisted model")
 
+    p_train_bands = sub.add_parser(
+        "train-bands",
+        help="Train a per-band ridge for each nominal cellular band",
+    )
+    p_train_bands.add_argument("--n", type=int, default=8000)
+    p_train_bands.add_argument("--out-dir", default="band_models")
+    p_train_bands.add_argument("--l2", type=float, default=1.0)
+    p_train_bands.add_argument("--seed", type=int, default=42)
+    p_train_bands.add_argument(
+        "--with-observations", action="store_true",
+        help="Include rows from link_observations as additional labels.",
+    )
+    p_train_bands.add_argument(
+        "--no-global-fallback", action="store_true",
+        help="Skip the all-data fallback ridge (saves ~1 s).",
+    )
+
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -1162,3 +1534,18 @@ if __name__ == "__main__":   # pragma: no cover
                 "n_train": m.n_train,
                 "feature_names": list(_FEATURE_NAMES),
             }, indent=2, default=str))
+    elif args.cmd == "train-bands":
+        historical = None
+        if args.with_observations:
+            historical = load_historical_from_stores(include_observations=True)
+            print(f"Loaded {len(historical)} historical samples")
+        ba = train_band_aware_model(
+            n_synthetic=args.n,
+            l2=args.l2,
+            seed=args.seed,
+            save_to_dir=args.out_dir,
+            historical=historical,
+            train_global_fallback=not args.no_global_fallback,
+        )
+        print(json.dumps(ba.info(), indent=2, default=str))
+        print(f"Saved {len(ba.models)} band models to {args.out_dir}")
