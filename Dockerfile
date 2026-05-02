@@ -37,6 +37,7 @@ COPY srtm_prefetch.py .
 COPY bedrock_service.py .
 COPY coverage_predict.py .
 COPY coverage_model.npz .
+COPY itu_p1812.py .
 COPY observation_store.py .
 COPY stripe_billing.py .
 COPY stripe_webhook_service.py .
