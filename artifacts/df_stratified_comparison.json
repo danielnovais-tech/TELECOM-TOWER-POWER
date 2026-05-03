@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-05-03T22:29:17.935662",
+  "timestamp": "2026-05-03T23:12:58.161410+00:00",
   "config": {
     "df_bbox": {
       "lat_min": -16.1,
@@ -21,8 +21,8 @@
     "delta_stdev_db": 7.862,
     "delta_mae_db": 7.194,
     "delta_max_abs_db": 15.326,
-    "runtime_mean_ms_itmlogic": 0.423,
-    "runtime_mean_ms_p1812": 3.116
+    "runtime_mean_ms_itmlogic": 0.472,
+    "runtime_mean_ms_p1812": 1.925
   },
   "strata_stats": {
     "0_5km": {
@@ -32,8 +32,8 @@
       "delta_stdev_db": 7.716,
       "delta_mae_db": 6.444,
       "delta_max_abs_db": 12.245,
-      "runtime_mean_ms_itmlogic": 0.438,
-      "runtime_mean_ms_p1812": 1.769
+      "runtime_mean_ms_itmlogic": 0.499,
+      "runtime_mean_ms_p1812": 1.891
     },
     "5_10km": {
       "count": 2,
@@ -42,8 +42,8 @@
       "delta_stdev_db": 2.679,
       "delta_mae_db": 4.982,
       "delta_max_abs_db": 6.876,
-      "runtime_mean_ms_itmlogic": 0.442,
-      "runtime_mean_ms_p1812": 7.957
+      "runtime_mean_ms_itmlogic": 0.472,
+      "runtime_mean_ms_p1812": 1.801
     },
     "10plus_km": {
       "count": 4,
@@ -52,8 +52,8 @@
       "delta_stdev_db": 4.403,
       "delta_mae_db": 9.051,
       "delta_max_abs_db": 15.326,
-      "runtime_mean_ms_itmlogic": 0.399,
-      "runtime_mean_ms_p1812": 2.042
+      "runtime_mean_ms_itmlogic": 0.446,
+      "runtime_mean_ms_p1812": 2.02
     }
   },
   "rows": [
@@ -64,8 +64,8 @@
       "itmlogic_db": 123.14008900121087,
       "p1812_db": 120.10373059138479,
       "delta_db": 3.0363584098260787,
-      "itmlogic_ms": 0.376,
-      "p1812_ms": 2.047
+      "itmlogic_ms": 0.632,
+      "p1812_ms": 1.453
     },
     {
       "idx": 2,
@@ -74,8 +74,8 @@
       "itmlogic_db": 103.89938020313527,
       "p1812_db": 116.14448897484945,
       "delta_db": -12.245108771714186,
-      "itmlogic_ms": 0.455,
-      "p1812_ms": 1.722
+      "itmlogic_ms": 0.474,
+      "p1812_ms": 2.018
     },
     {
       "idx": 3,
@@ -84,8 +84,8 @@
       "itmlogic_db": 147.124656782843,
       "p1812_db": 140.24844520812644,
       "delta_db": 6.876211574716564,
-      "itmlogic_ms": 0.448,
-      "p1812_ms": 14.064
+      "itmlogic_ms": 0.411,
+      "p1812_ms": 1.607
     },
     {
       "idx": 4,
@@ -94,8 +94,8 @@
       "itmlogic_db": 169.0770253262378,
       "p1812_db": 153.7514121994712,
       "delta_db": 15.325613126766598,
-      "itmlogic_ms": 0.448,
-      "p1812_ms": 1.886
+      "itmlogic_ms": 0.462,
+      "p1812_ms": 2.713
     },
     {
       "idx": 5,
@@ -104,8 +104,8 @@
       "itmlogic_db": 143.1717187136183,
       "p1812_db": 136.96038955217762,
       "delta_db": 6.211329161440688,
-      "itmlogic_ms": 0.362,
-      "p1812_ms": 2.494
+      "itmlogic_ms": 0.394,
+      "p1812_ms": 1.537
     },
     {
       "idx": 6,
@@ -114,8 +114,8 @@
       "itmlogic_db": 155.3928592078846,
       "p1812_db": 146.50485061309274,
       "delta_db": 8.88800859479187,
-      "itmlogic_ms": 0.374,
-      "p1812_ms": 1.518
+      "itmlogic_ms": 0.513,
+      "p1812_ms": 1.832
     },
     {
       "idx": 7,
@@ -124,8 +124,8 @@
       "itmlogic_db": 93.58309918671415,
       "p1812_db": 100.83000500883807,
       "delta_db": -7.246905822123921,
-      "itmlogic_ms": 0.559,
-      "p1812_ms": 1.771
+      "itmlogic_ms": 0.499,
+      "p1812_ms": 2.582
     },
     {
       "idx": 8,
@@ -134,8 +134,8 @@
       "itmlogic_db": 148.08042545653734,
       "p1812_db": 142.299694295622,
       "delta_db": 5.780731160915337,
-      "itmlogic_ms": 0.413,
-      "p1812_ms": 2.272
+      "itmlogic_ms": 0.414,
+      "p1812_ms": 1.999
     },
     {
       "idx": 9,
@@ -144,8 +144,8 @@
       "itmlogic_db": 141.11832484487775,
       "p1812_db": 138.03121437017072,
       "delta_db": 3.087110474707032,
-      "itmlogic_ms": 0.436,
-      "p1812_ms": 1.85
+      "itmlogic_ms": 0.532,
+      "p1812_ms": 1.995
     },
     {
       "idx": 10,
@@ -154,8 +154,8 @@
       "itmlogic_db": 123.15411581141572,
       "p1812_db": 119.90718300267284,
       "delta_db": 3.2469328087428835,
-      "itmlogic_ms": 0.363,
-      "p1812_ms": 1.535
+      "itmlogic_ms": 0.393,
+      "p1812_ms": 1.513
     }
   ]
 }

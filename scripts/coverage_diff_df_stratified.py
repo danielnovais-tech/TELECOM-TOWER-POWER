@@ -11,6 +11,7 @@ import logging
 import math
 import statistics
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -179,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     strata_stats = {name: compute_stats(rows) for name, rows in strata.items()}
 
     output: dict[str, Any] = {
-        "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "config": {
             "df_bbox": {
                 "lat_min": args.lat_min,
@@ -231,12 +232,18 @@ def main(argv: list[str] | None = None) -> int:
         "",
     ]
 
+    bin_labels = {
+        "0_5km": "0-5 km",
+        "5_10km": "5-10 km",
+        "10plus_km": "10+ km",
+    }
+
     for bin_name in ["0_5km", "5_10km", "10plus_km"]:
         stats = strata_stats.get(bin_name, {})
         count = stats.get("count", 0)
         if count == 0:
             continue
-        bin_display = bin_name.replace("_", " ").replace("km", " km")
+        bin_display = bin_labels[bin_name]
         md_lines.extend([
             f"### {bin_display}",
             "",
