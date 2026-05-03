@@ -34,19 +34,41 @@ Index   Name                         Source / formula
                                        sampled along the path (zeros if
                                        extractor unavailable; index 27
                                        holds clutter_missing_flag)
+
+Feature vector layout (v2, 30 dims, opt-in)
+-------------------------------------------
+v2 appends two slots after the v1 vector:
+
+Index   Name                         Source / formula
+-----   ---------------------------- --------------------------------
+28      ndvi_delta_mean              mean of Planet PSScene NDVI delta
+                                       sampled along the path (zero if
+                                       missing — see slot 29)
+29      ndvi_delta_missing_flag      1 if any path sample is uncached,
+                                       else 0
+
+v2 is gated by ``SIONNA_FEATURES_VERSION=v2`` at import time. The
+schema constant and FEATURE_DIM both shift, which means the runtime
+adapter (sionna_engine) refuses to load any TFLite artefact that
+doesn't match — operators must retrain after flipping the env.
+Default remains v1 so deployed engines are unaffected.
 """
 from __future__ import annotations
 
 import math
+import os
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
-FEATURE_SCHEMA_VERSION = "v1"
-FEATURE_DIM = 28
-N_CLUTTER_SAMPLES = 8
+_USE_V2 = os.getenv("SIONNA_FEATURES_VERSION", "v1").strip().lower() == "v2"
 
-FEATURE_NAMES: List[str] = [
+FEATURE_SCHEMA_VERSION = "v2" if _USE_V2 else "v1"
+FEATURE_DIM = 30 if _USE_V2 else 28
+N_CLUTTER_SAMPLES = 8
+N_NDVI_SAMPLES = 5  # NDVI is a coarse 5 km grid; oversampling buys nothing.
+
+_V1_FEATURE_NAMES: List[str] = [
     "log10_f_hz",
     "d_total_km",
     "htg_m",
@@ -79,6 +101,10 @@ FEATURE_NAMES: List[str] = [
     "clutter_other",
     "clutter_missing_flag",
 ]
+
+FEATURE_NAMES: List[str] = list(_V1_FEATURE_NAMES)
+if _USE_V2:
+    FEATURE_NAMES.extend(["ndvi_delta_mean", "ndvi_delta_missing_flag"])
 assert len(FEATURE_NAMES) == FEATURE_DIM
 
 
@@ -185,6 +211,47 @@ def _clutter_mean(
     return vec / n, False
 
 
+def _ndvi_delta_mean(
+    phi_t: float, lam_t: float, phi_r: float, lam_r: float
+) -> Tuple[float, bool]:
+    """Sample Planet NDVI-delta along the path and return its mean.
+
+    Returns ``(mean, missing_flag)``. ``missing_flag`` is True if the
+    extractor isn't available OR if any sample on the path lacks a
+    cache entry — a partial path is still flagged so the model never
+    sees a silent zero stand-in for unmeasured terrain.
+    """
+    try:
+        from planet_ndvi import (  # type: ignore[import-not-found]
+            get_extractor,
+        )
+    except Exception:
+        return 0.0, True
+
+    try:
+        ext = get_extractor()
+    except Exception:
+        return 0.0, True
+
+    samples: List[float] = []
+    any_missing = False
+    for i in range(N_NDVI_SAMPLES):
+        f = i / max(1, N_NDVI_SAMPLES - 1)
+        lat = phi_t + (phi_r - phi_t) * f
+        lon = lam_t + (lam_r - lam_t) * f
+        try:
+            v = ext.get_ndvi_delta(lat, lon)
+        except Exception:
+            v = None
+        if v is None:
+            any_missing = True
+            continue
+        samples.append(float(v))
+    if not samples:
+        return 0.0, True
+    return float(np.mean(samples)), any_missing
+
+
 def build_features(
     *,
     f_hz: float,
@@ -248,6 +315,11 @@ def build_features(
         # 10th MapBiomas one-hot bin is the "Other" (rare) bucket; we
         # discard it here to make room for the missing flag and rely on
         # the model to absorb the small information loss.
+
+    if _USE_V2:
+        ndvi_mean, ndvi_missing = _ndvi_delta_mean(phi_t, lam_t, phi_r, lam_r)
+        out[28] = 0.0 if ndvi_missing else ndvi_mean
+        out[29] = 1.0 if ndvi_missing else 0.0
 
     if not np.all(np.isfinite(out)):  # defence in depth
         out = np.where(np.isfinite(out), out, 0.0)
