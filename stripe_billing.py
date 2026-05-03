@@ -34,6 +34,7 @@ from typing import Dict, Optional
 import stripe
 
 import key_store_db
+from offline_mode import require_online
 
 logger = logging.getLogger("stripe_billing")
 
@@ -223,6 +224,8 @@ def create_checkout_session(email: str, tier: str, country: Optional[str] = None
     enterprise plan, SRTM tiles for that country will be pre-downloaded
     after payment.
     """
+    require_online("stripe.checkout",
+                   hint="unset TTP_OFFLINE to enable paid signup")
     if not STRIPE_SECRET_KEY:
         raise RuntimeError("STRIPE_SECRET_KEY is not configured")
 
@@ -352,6 +355,8 @@ def handle_webhook_event(payload: bytes, sig_header: str) -> Dict:
     Verify and process a Stripe webhook event.
     Returns a dict with the action taken.
     """
+    require_online("stripe.webhook",
+                   hint="webhooks are paused while TTP_OFFLINE is set")
     if not STRIPE_WEBHOOK_SECRET:
         raise RuntimeError("STRIPE_WEBHOOK_SECRET is not configured")
 

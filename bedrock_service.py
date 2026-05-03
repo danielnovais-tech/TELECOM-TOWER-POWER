@@ -28,6 +28,8 @@ from typing import Optional, List, Dict, Any
 import boto3
 from botocore.exceptions import ClientError
 
+from offline_mode import is_offline
+
 logger = logging.getLogger(__name__)
 
 BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
@@ -612,6 +614,23 @@ def invoke_model(
     tokens = max_tokens or BEDROCK_MAX_TOKENS
     temp = temperature if temperature is not None else BEDROCK_TEMPERATURE
 
+    # ── Offline mode short-circuit ───────────────────────────────
+    # In offline / air-gapped installs we must not reach Bedrock.
+    # Return a canned response so the AI Playground UI degrades
+    # gracefully (the operator sees a clear notice instead of a 500).
+    if is_offline():
+        logger.info("bedrock: TTP_OFFLINE=1, returning canned response")
+        return {
+            "response": (
+                "AI Playground is disabled in offline mode (TTP_OFFLINE=1). "
+                "Local RF engines (P.1812, ITM-logic, Sionna) remain available."
+            ),
+            "model_id": model,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "offline": True,
+        }
+
     # ── Prompt-injection guard ────────────────────────────────────
     # Reject obvious jailbreak attempts before paying for inference.
     # The wrapped delimiter is also a defense-in-depth signal to the
@@ -712,6 +731,10 @@ def list_available_models() -> list[dict]:
             "name": "Claude Sonnet 4",
         },
     ]
+
+    if is_offline():
+        logger.info("bedrock: TTP_OFFLINE=1, returning static model list")
+        return static_models
 
     try:
         bedrock_ctrl = boto3.client("bedrock", region_name=BEDROCK_REGION)

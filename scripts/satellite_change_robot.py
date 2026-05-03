@@ -262,6 +262,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     logger.info("scanning %d sites since %s", len(sites), since_iso)
 
     api_key = (os.environ.get("PLANET_API_KEY") or "").strip() or None
+    if (os.environ.get("TTP_OFFLINE", "").strip().lower() in {"1", "true", "yes", "on"}):
+        # Air-gapped install: never call api.planet.com. Treat as
+        # "no key" so _build_report emits a no-api-key empty report.
+        logger.warning("TTP_OFFLINE=1 — skipping Planet API, emitting empty report")
+        api_key = None
     if not api_key:
         logger.warning("PLANET_API_KEY not set — emitting empty report (no-api-key)")
 

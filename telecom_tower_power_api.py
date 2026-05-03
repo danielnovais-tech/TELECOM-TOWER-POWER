@@ -34,7 +34,7 @@ from typing import List, Literal, Optional, Dict, Tuple, Any, Iterable
 from enum import Enum
 from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect, Header
 from fastapi.security import APIKeyHeader
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 # uvicorn is imported lazily inside ``__main__`` so the module loads cleanly
@@ -46,6 +46,7 @@ from tower_db import TowerStore
 from job_store import JobStore, JOB_RESULTS_DIR
 import audit_log as _audit
 import sso_auth as _sso
+from offline_mode import OfflineModeError, is_offline
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from pythonjsonlogger import jsonlogger
 
@@ -1163,6 +1164,21 @@ app = FastAPI(
                 "Requires an API key via the `X-API-Key` header.",
 )
 
+
+# Map OfflineModeError → HTTP 503 so paid third-party features
+# (Stripe checkout, Stripe webhook) degrade cleanly when the operator
+# has set TTP_OFFLINE=1 (air-gapped install / on-prem).
+@app.exception_handler(OfflineModeError)
+async def _offline_mode_handler(_request, exc: OfflineModeError):  # noqa: ANN001
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": str(exc),
+            "feature": exc.feature,
+            "offline": True,
+        },
+    )
+
 # Distributed tracing (OpenTelemetry -> Jaeger). No-op unless OTEL_ENABLED=true.
 try:
     from tracing import setup_tracing as _setup_tracing
@@ -1352,6 +1368,7 @@ async def health_check():
         "jobs_running": running_jobs,
         "elevation_cache_size": len(platform.elevation.cache),
         "srtm_available": srtm_ok,
+        "offline": is_offline(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
