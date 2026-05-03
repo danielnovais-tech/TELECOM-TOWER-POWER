@@ -1,0 +1,181 @@
+name: Retrain Sionna Engine
+
+# Weekly: train the learned propagation model (rf_engines/sionna_engine).
+# Pipeline lives in scripts/train_sionna.py — pulls labelled drive-test
+# rows from the production Postgres, samples SRTM along each path,
+# fits a small Keras MLP with Huber loss, exports TFLite + a JSON
+# sidecar pinning the feature schema.
+#
+# Cadence rationale: the dataset (link_observations) only grows by
+# ~few-hundred rows per week from API submissions; training daily
+# would burn TF install time (~300 MB) for no measurable accuracy
+# delta. The coverage-diff robot watches for drift on the golden
+# link set independently and pages on regression > 3 dB.
+#
+# Manual:  gh workflow run retrain-sionna.yml -f force=true
+
+on:
+  schedule:
+    - cron: '30 7 * * 0'   # Sunday 07:30 UTC, after weekly Postgres backup.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Train even if min-links threshold isn''t exceeded'
+        required: false
+        default: 'false'
+      min_links:
+        description: 'Minimum labelled links to allow training'
+        required: false
+        default: '500'
+      epochs:
+        description: 'Training epochs'
+        required: false
+        default: '80'
+      dry_run:
+        description: 'Train + report but skip S3 upload'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: retrain-sionna
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  AWS_REGION: sa-east-1
+  S3_PREFIX: s3://telecom-tower-power-results/models/sionna
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      trained: ${{ steps.train.outputs.trained }}
+      n_train: ${{ steps.train.outputs.n_train }}
+      test_mae_db: ${{ steps.train.outputs.test_mae_db }}
+      schema_version: ${{ steps.train.outputs.schema_version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      # TF install is ~300 MB — cache it to keep weekly runs under a
+      # couple of minutes once the cache is warm.
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-sionna-${{ runner.os }}-tf2.16
+          restore-keys: pip-sionna-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Pinning TF to 2.16 keeps the TFLite converter stable; older
+          # versions emit ops the lite runtime in the API container can't load.
+          pip install 'tensorflow~=2.16' numpy boto3 psycopg2-binary
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # SRTM tiles for the AOIs we care about ship from the prod bucket
+      # so we don't hammer USGS in CI. Skipped on first run / non-existent
+      # prefix — train_sionna degrades to zero-elevation gracefully.
+      - name: Hydrate SRTM tiles (best effort)
+        run: |
+          set -uo pipefail
+          mkdir -p srtm_data
+          aws s3 sync \
+            s3://telecom-tower-power-results/srtm/ srtm_data/ \
+            --only-show-errors || echo "SRTM sync skipped — training will use flat terrain"
+
+      - name: Train
+        id: train
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          # MapBiomas raster is several GB — runners don't have it. The
+          # feature builder gracefully sets the missing flag and learns
+          # without clutter. Retrain on a self-hosted runner once the
+          # raster is mirrored to a local NVMe.
+          MAPBIOMAS_RASTER_PATH: ""
+          SRTM_DATA_DIR: ./srtm_data
+        run: |
+          set -euo pipefail
+          OUT=models/sionna_$(date -u +%Y%m%d_%H%M)
+          mkdir -p "$OUT"
+          ARGS=(--output-dir "$OUT" --epochs "${{ inputs.epochs || '80' }}")
+          ARGS+=(--min-links "${{ inputs.min_links || '500' }}")
+          if [[ "${{ inputs.force || 'false' }}" == "true" ]]; then
+            ARGS+=(--min-links 1)   # bypass the gate
+          fi
+          set +e
+          python -m scripts.train_sionna "${ARGS[@]}"
+          rc=$?
+          set -e
+          if [[ $rc -ne 0 ]]; then
+            echo "trained=false" >> "$GITHUB_OUTPUT"
+            echo "## Sionna training skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "Exit code $rc — likely below --min-links. See logs." >> "$GITHUB_STEP_SUMMARY"
+            # Treat a "not enough data yet" case as a soft skip, not a
+            # workflow failure; the cron should keep firing harmlessly
+            # until the dataset crosses the threshold.
+            exit 0
+          fi
+          # Surface key metrics from the sidecar.
+          SIDE="$OUT/sionna_features.json"
+          echo "trained=true" >> "$GITHUB_OUTPUT"
+          echo "n_train=$(jq -r '.n_train' "$SIDE")" >> "$GITHUB_OUTPUT"
+          echo "test_mae_db=$(jq -r '.metrics.test_mae_db // "n/a"' "$SIDE")" >> "$GITHUB_OUTPUT"
+          echo "schema_version=$(jq -r '.schema_version' "$SIDE")" >> "$GITHUB_OUTPUT"
+          echo "OUT_DIR=$OUT" >> "$GITHUB_ENV"
+
+      - name: Upload TFLite + sidecar to S3
+        if: steps.train.outputs.trained == 'true' && inputs.dry_run != 'true'
+        run: |
+          set -euo pipefail
+          STAMP=$(basename "$OUT_DIR")
+          # Versioned copy (kept for rollback) AND the "current" pointer
+          # the ECS task fetches at boot. Two writes keep the S3 history
+          # auditable without forcing the runtime to know about stamps.
+          aws s3 cp "$OUT_DIR/sionna_model.tflite"     "$S3_PREFIX/versions/$STAMP/sionna_model.tflite"
+          aws s3 cp "$OUT_DIR/sionna_features.json"    "$S3_PREFIX/versions/$STAMP/sionna_features.json"
+          aws s3 cp "$OUT_DIR/training_report.json"    "$S3_PREFIX/versions/$STAMP/training_report.json"
+          aws s3 cp "$OUT_DIR/sionna_model.tflite"     "$S3_PREFIX/current/sionna_model.tflite"
+          aws s3 cp "$OUT_DIR/sionna_features.json"    "$S3_PREFIX/current/sionna_features.json"
+
+      - name: Force ECS new deployment so tasks reload artefact
+        if: steps.train.outputs.trained == 'true' && inputs.dry_run != 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          aws ecs update-service \
+            --cluster telecom-tower-power \
+            --service telecom-tower-power \
+            --force-new-deployment \
+            --region "$AWS_REGION" \
+            --output json | jq -r '.service.deployments[0].id // empty'
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Sionna engine retrain"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| trained | ${{ steps.train.outputs.trained || 'false' }} |"
+            echo "| n_train | ${{ steps.train.outputs.n_train || 'n/a' }} |"
+            echo "| test_mae_db | ${{ steps.train.outputs.test_mae_db || 'n/a' }} |"
+            echo "| schema_version | ${{ steps.train.outputs.schema_version || 'n/a' }} |"
+            echo "| dry_run | ${{ inputs.dry_run || 'false' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

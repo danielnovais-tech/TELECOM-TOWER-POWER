@@ -490,7 +490,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     p.add_argument("--receivers", required=True, help="CSV with lat,lon[,height,gain]")
     p.add_argument("--n-towers", type=int, default=3)
-    p.add_argument("--engine", default="itmlogic", choices=["itmlogic", "itu-p1812"])
+    p.add_argument("--engine", default="itmlogic",
+                   choices=["itmlogic", "itu-p1812", "sionna"],
+                   help=(
+                       "Propagation engine for fitness eval. 'sionna' uses "
+                       "the learned MLP from rf_engines.sionna_engine — only "
+                       "available when the artefact has been provisioned "
+                       "(SIONNA_DISABLED=0 + model+sidecar on disk). The GA "
+                       "logs an error and exits if the chosen engine reports "
+                       "is_available()=False, rather than silently using a "
+                       "fallback (that would corrupt the comparative reports)."
+                   ))
     p.add_argument("--frequency-mhz", type=float, default=850.0)
     p.add_argument("--threshold-db", type=float, default=130.0)
     p.add_argument("--generations", type=int, default=30)

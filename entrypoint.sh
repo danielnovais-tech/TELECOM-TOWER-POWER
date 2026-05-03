@@ -200,6 +200,47 @@ print(f"ITU-R P.1812 digital maps ready at {dst} ({os.path.getsize(dst)} bytes)"
     unset _P1812_DL_CMD
 fi
 
+# Sionna learned-propagation engine artefact (TFLite + JSON sidecar).
+# Optional: the registry simply skips the engine when the files are
+# absent. The trained model is published by retrain-sionna.yml under
+#   $S3/current/sionna_model.tflite
+#   $S3/current/sionna_features.json
+# We download both into $SIONNA_MODEL_DIR (default /srv/models/) and
+# only flip SIONNA_DISABLED=0 *after* both files land — half-loaded
+# state would make the engine refuse to start anyway, but flipping
+# the gate explicitly here keeps the boot log honest.
+if [ -n "${SIONNA_MODEL_S3_URI:-}" ] && [ -n "${SIONNA_FEATURES_S3_URI:-}" ]; then
+    _SIONNA_DIR="${SIONNA_MODEL_DIR:-/srv/models}"
+    mkdir -p "$_SIONNA_DIR" || true
+    : "${SIONNA_MODEL_PATH:=$_SIONNA_DIR/sionna_model.tflite}"
+    : "${SIONNA_FEATURES_PATH:=$_SIONNA_DIR/sionna_features.json}"
+    export SIONNA_MODEL_PATH SIONNA_FEATURES_PATH
+    echo "Fetching Sionna artefact from S3 (60s timeout)..."
+    _SIONNA_DL_CMD='import os, sys, boto3
+from urllib.parse import urlparse
+def _dl(env_uri, dst):
+    uri = os.environ[env_uri]
+    u = urlparse(uri)
+    if u.scheme != "s3" or not u.netloc or not u.path:
+        print(f"ERROR: invalid {env_uri}: {uri}", file=sys.stderr); sys.exit(2)
+    boto3.client("s3").download_file(u.netloc, u.path.lstrip("/"), dst)
+    print(f"{env_uri} → {dst} ({os.path.getsize(dst)} bytes)")
+_dl("SIONNA_MODEL_S3_URI",    os.environ["SIONNA_MODEL_PATH"])
+_dl("SIONNA_FEATURES_S3_URI", os.environ["SIONNA_FEATURES_PATH"])'
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 60 python -c "$_SIONNA_DL_CMD" \
+            && export SIONNA_DISABLED=0 \
+            && echo "Sionna engine enabled" \
+            || echo "WARN: Sionna artefact download failed, engine stays disabled"
+    else
+        python -c "$_SIONNA_DL_CMD" \
+            && export SIONNA_DISABLED=0 \
+            && echo "Sionna engine enabled" \
+            || echo "WARN: Sionna artefact download failed, engine stays disabled"
+    fi
+    unset _SIONNA_DL_CMD _SIONNA_DIR
+fi
+
 if [ "${SERVICE_TYPE:-}" = "webhook" ]; then
     echo "SERVICE_TYPE=webhook → starting stripe_webhook_service"
     exec uvicorn stripe_webhook_service:app --host 0.0.0.0 --port "${PORT:-8080}"
