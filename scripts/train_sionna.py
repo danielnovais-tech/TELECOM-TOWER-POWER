@@ -101,6 +101,7 @@ class LabelledLink:
     features: np.ndarray
     label_db: float
     tower_id: str   # used for group-aware splitting
+    source: str = "unknown"  # 'api', 'csv_seed', 'synthetic_p1812_v1', …
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -189,22 +190,49 @@ def _row_to_link(row: Dict[str, object]) -> Optional[LabelledLink]:
         pol=None, zone=None,
     )
     tid = str(row.get("tower_id") or f"adhoc:{tx_lat:.3f},{tx_lon:.3f}")
-    return LabelledLink(features=feats, label_db=lb, tower_id=tid)
+    src = str(row.get("source") or "unknown")
+    return LabelledLink(features=feats, label_db=lb, tower_id=tid, source=src)
 
 
-def _load_dataset(min_links: int) -> List[LabelledLink]:
+def _load_dataset(
+    min_links: int,
+    exclude_sources: Optional[List[str]] = None,
+) -> List[LabelledLink]:
     from observation_store import ObservationStore  # type: ignore[import-not-found]
 
     store = ObservationStore()
     rows = list(store.iter_observations())
     logger.info("loaded %d raw observation rows", len(rows))
 
+    excluded = set(exclude_sources or [])
     links: List[LabelledLink] = []
+    skipped_excluded = 0
     for r in rows:
+        if excluded and str(r.get("source") or "unknown") in excluded:
+            skipped_excluded += 1
+            continue
         link = _row_to_link(r)
         if link is not None:
             links.append(link)
-    logger.info("retained %d valid labelled links", len(links))
+    logger.info("retained %d valid labelled links (skipped %d by --exclude-source)",
+                len(links), skipped_excluded)
+
+    # Source breakdown — critical signal for whether the model is
+    # being dominated by synthetic seed rows. Surfaces in the sidecar.
+    breakdown: Dict[str, int] = {}
+    for ln in links:
+        breakdown[ln.source] = breakdown.get(ln.source, 0) + 1
+    for src, n in sorted(breakdown.items(), key=lambda kv: -kv[1]):
+        pct = 100.0 * n / max(1, len(links))
+        logger.info("  source=%s rows=%d (%.1f%%)", src, n, pct)
+    synthetic = sum(n for s, n in breakdown.items() if s.startswith("synthetic"))
+    if synthetic and synthetic / max(1, len(links)) > 0.5:
+        logger.warning(
+            "⚠  %.0f%% of training data is synthetic — the resulting model "
+            "will at best imitate P.1812. Use only for smoke-testing the "
+            "deployment path; do NOT promote to default engine in compare.",
+            100.0 * synthetic / len(links),
+        )
 
     if len(links) < min_links:
         raise SystemExit(
@@ -212,6 +240,16 @@ def _load_dataset(min_links: int) -> List[LabelledLink]:
             f"Run more drive-test imports or lower --min-links for a smoke run."
         )
     return links
+
+
+def _source_breakdown(links: List[LabelledLink]) -> Dict[str, int]:
+    """Count rows per ``source`` label — surfaced in the sidecar so the
+    monitoring dashboard can flag a model that was trained mostly on
+    synthetic data."""
+    out: Dict[str, int] = {}
+    for ln in links:
+        out[ln.source] = out.get(ln.source, 0) + 1
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +358,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--epochs", type=int, default=80)
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--exclude-source", action="append", default=[],
+                   metavar="SOURCE",
+                   help="Drop rows where link_observations.source matches. "
+                        "Repeatable. Use to exclude 'synthetic_p1812_v1' "
+                        "once real drive-test data dominates the dataset.")
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -327,7 +370,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
 
-    links = _load_dataset(args.min_links)
+    links = _load_dataset(args.min_links, exclude_sources=args.exclude_source)
     train, val, test = _group_split(links, args.seed)
     Xtr, ytr = _to_arrays(train)
     Xva, yva = _to_arrays(val)
@@ -384,6 +427,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "n_train": int(len(ytr)),
         "n_val": int(len(yva)),
         "n_test": int(len(yte)),
+        "source_breakdown": _source_breakdown(links),
         "metrics": metrics,
         "trained_at": int(time.time()),
         "elapsed_s": round(time.perf_counter() - t0, 2),

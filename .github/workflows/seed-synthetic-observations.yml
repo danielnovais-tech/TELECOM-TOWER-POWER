@@ -1,0 +1,146 @@
+name: Seed Synthetic Observations
+
+# Manual one-shot to populate link_observations with physically-grounded
+# synthetic rows generated from the P.1812 reference solver over a
+# random sample of real Brazilian towers. This is the unblock-the-pipeline
+# escape hatch; once real drive-test ingestion is in place, retire it
+# (or use --exclude-source synthetic_p1812_v1 in the trainer).
+#
+# Manual only — never schedule. Idempotency is achieved by always tagging
+# rows source='synthetic_p1812_v1', so a reseed simply piles on more
+# rows that the trainer can dedupe in spirit (group split by tower_id).
+
+on:
+  workflow_dispatch:
+    inputs:
+      n_towers:
+        description: 'Number of random towers to sample from tower_db'
+        required: false
+        default: '200'
+      receivers_per_tower:
+        description: 'Receivers per tower (total rows ≈ n_towers × this)'
+        required: false
+        default: '10'
+      shadowing_db:
+        description: 'Log-normal shadowing σ (dB)'
+        required: false
+        default: '4.0'
+      dry_run:
+        description: 'Generate + report but do not write to DB'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: seed-synthetic-observations
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  AWS_REGION: sa-east-1
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-seed-synth-${{ runner.os }}
+          restore-keys: pip-seed-synth-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Only what the seed script + P.1812 engine need at runtime.
+          # No tensorflow here — labels come from the closed-form solver.
+          pip install numpy scipy psycopg2-binary boto3
+          # Py1812 reference solver — same source pinned in requirements.txt.
+          pip install 'Py1812 @ https://github.com/eeveetza/Py1812/archive/refs/heads/main.tar.gz'
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # SRTM hydration is best-effort. Without tiles, profiles default to
+      # flat 0 m; the resulting Lb is still valid (smooth-Earth case),
+      # and the trainer just learns weaker terrain features. The whole
+      # POINT of the synthetic seed is to validate plumbing, not realism.
+      - name: Hydrate SRTM tiles (best effort)
+        run: |
+          set -uo pipefail
+          mkdir -p srtm_data
+          aws s3 sync \
+            s3://telecom-tower-power-results/srtm/ srtm_data/ \
+            --only-show-errors || echo "SRTM sync skipped — using flat terrain"
+
+      # P.1812 digital maps (P1812.npz) are mandatory for predict_basic_loss.
+      # Same bucket pattern used by entrypoint.sh in production.
+      - name: Hydrate P.1812 digital maps
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, boto3
+          import Py1812
+          dst = os.path.join(os.path.dirname(Py1812.__file__), "P1812.npz")
+          boto3.client("s3").download_file(
+              "telecom-tower-power-results", "itu/P1812.npz", dst,
+          )
+          print(f"ITU-R P.1812 maps ready at {dst} ({os.path.getsize(dst)} bytes)")
+          PY
+
+      - name: Generate seed
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          SRTM_DATA_DIR: ./srtm_data
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --n-towers "${{ inputs.n_towers || '200' }}"
+            --receivers-per-tower "${{ inputs.receivers_per_tower || '10' }}"
+            --shadowing-db "${{ inputs.shadowing_db || '4.0' }}"
+          )
+          if [[ "${{ inputs.dry_run || 'false' }}" == "true" ]]; then
+            ARGS+=(--dry-run)
+          fi
+          python -m scripts.seed_synthetic_observations "${ARGS[@]}" -v
+
+      - name: Job summary
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          {
+            echo "## Synthetic observations seed"
+            echo ""
+            echo "| Param | Value |"
+            echo "|---|---|"
+            echo "| n_towers | ${{ inputs.n_towers || '200' }} |"
+            echo "| receivers_per_tower | ${{ inputs.receivers_per_tower || '10' }} |"
+            echo "| shadowing_db | ${{ inputs.shadowing_db || '4.0' }} |"
+            echo "| dry_run | ${{ inputs.dry_run || 'false' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Surface current row count so it's obvious at a glance whether
+          # the next retrain will have enough data.
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
+          try:
+              from observation_store import ObservationStore
+              c = ObservationStore().counts()
+              print(f"\n**link_observations:** {c['link_observations']}")
+              print(f"**cell_signal_samples:** {c['cell_signal_samples']}")
+          except Exception as e:
+              print(f"\n*counts unavailable: {e}*")
+          PY
