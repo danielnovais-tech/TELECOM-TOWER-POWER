@@ -89,6 +89,22 @@
           "value": "s3://telecom-tower-power-results/itu/P1812.npz"
         },
         {
+          "name": "SIONNA_MODEL_S3_URI",
+          "value": "s3://telecom-tower-power-results/models/sionna/current/sionna_model.tflite"
+        },
+        {
+          "name": "SIONNA_FEATURES_S3_URI",
+          "value": "s3://telecom-tower-power-results/models/sionna/current/sionna_features.json"
+        },
+        {
+          "name": "SIONNA_MODEL_DIR",
+          "value": "/app/models/sionna"
+        },
+        {
+          "name": "SIONNA_DISABLED",
+          "value": "1"
+        },
+        {
           "name": "SQS_QUEUE_URL",
           "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-prod"
         },
