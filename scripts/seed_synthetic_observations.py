@@ -122,25 +122,30 @@ def _sample_towers(n: int, rng: random.Random) -> List[Tower]:
 
     out: List[Tower] = []
     for r in sample:
-        # Different stores expose the row dict slightly differently;
-        # rely on the canonical columns documented in tower_db.py.
+        # Schema (see tower_db.py CREATE TABLE): id, lat, lon, height_m,
+        # operator, bands (JSON list of MHz), power_dbm, owner.
         try:
-            lat = float(r["latitude"])
-            lon = float(r["longitude"])
-            tid = str(r.get("tower_id") or r.get("id") or f"{lat:.4f}_{lon:.4f}")
+            lat = float(r["lat"])
+            lon = float(r["lon"])
+            tid = str(r.get("id") or f"{lat:.4f}_{lon:.4f}")
         except (KeyError, TypeError, ValueError):
             continue
         if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
             continue
         if abs(lat) < 0.01 and abs(lon) < 0.01:
             continue  # null-island sentinel
+        # Frequency: prefer the lowest declared band (longest range,
+        # matches the conservative SMP carrier choice). Fall back to
+        # 850 MHz when bands is missing/empty/non-numeric.
         freq_hz = 850e6
-        try:
-            f_mhz = float(r.get("freq_mhz") or 0)
-            if f_mhz > 0:
-                freq_hz = f_mhz * 1e6
-        except (TypeError, ValueError):
-            pass
+        bands = r.get("bands")
+        if isinstance(bands, list) and bands:
+            try:
+                f_mhz = min(float(b) for b in bands if b is not None)
+                if 100.0 <= f_mhz <= 6000.0:
+                    freq_hz = f_mhz * 1e6
+            except (TypeError, ValueError):
+                pass
         height_m = 35.0
         try:
             h = float(r.get("height_m") or 0)
@@ -148,8 +153,16 @@ def _sample_towers(n: int, rng: random.Random) -> List[Tower]:
                 height_m = h
         except (TypeError, ValueError):
             pass
+        # EIRP: derive from declared Tx power if available, else 60 dBm.
+        eirp_dbm = 60.0
+        try:
+            p = float(r.get("power_dbm") or 0)
+            if 20.0 <= p <= 80.0:
+                eirp_dbm = p + 17.0  # +17 dBi typical sector antenna
+        except (TypeError, ValueError):
+            pass
         out.append(Tower(tid=tid, lat=lat, lon=lon, height_m=height_m,
-                         freq_hz=freq_hz, eirp_dbm=60.0))
+                         freq_hz=freq_hz, eirp_dbm=eirp_dbm))
     if not out:
         raise SystemExit("no usable towers after filtering")
     return out
