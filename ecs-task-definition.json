@@ -105,10 +105,6 @@
           "value": "1"
         },
         {
-          "name": "RF_SIGNALS_S3_URL",
-          "value": "s3://telecom-tower-power-results/bin/rfsignals-cli"
-        },
-        {
           "name": "SQS_QUEUE_URL",
           "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-prod"
         },

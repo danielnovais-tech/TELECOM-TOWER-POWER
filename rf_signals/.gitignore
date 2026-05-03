@@ -1,6 +1,0 @@
-# /target — Rust build artefacts
-target/
-
-# Cargo lockfile is committed for binaries (this is a binary crate),
-# but vendored dependencies are not.
-/vendor/

@@ -26,7 +26,7 @@ nightly by the ``coverage-diff`` GitHub Actions robot.
 Why a registry instead of inline ``if/elif`` branches?
 ------------------------------------------------------
 The platform already ships three predictors (ridge, SageMaker, ITU-R
-P.1812) gated by env vars. Adding rf-signals, Cloud-RF Signal-Server,
+P.1812) gated by env vars. Adding itmlogic, Cloud-RF Signal-Server,
 and Sionna inline would push ``predict_signal`` past the readability
 cliff. The registry keeps ``coverage_predict`` single-purpose and lets
 each engine fail closed independently.

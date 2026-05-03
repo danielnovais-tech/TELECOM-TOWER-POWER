@@ -10,6 +10,9 @@ RUN npx vite build
 # ── Stage 2: Python application ────────────────────────────
 FROM python:3.13-slim
 
+ENV CONDA_DIR=/opt/conda
+ENV PATH=$CONDA_DIR/bin:$PATH
+
 # Prevent Python from buffering stdout/stderr (important for container logs)
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -17,15 +20,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN groupadd --gid 1000 appuser && \
     useradd --uid 1000 --gid 1000 --create-home appuser
 
-# curl is needed at boot to fetch the rfsignals-cli binary from S3
-# (clean-room Rust artefact, public-read in the results bucket).
-# Skipping the install when curl is already present keeps this layer
-# cheap on base images that ship it.
-RUN if ! command -v curl >/dev/null 2>&1; then \
-        apt-get update && \
-        apt-get install -y --no-install-recommends curl ca-certificates && \
-        rm -rf /var/lib/apt/lists/*; \
-    fi
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN wget -qO /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
+    bash /tmp/miniconda.sh -b -p "$CONDA_DIR" && \
+    rm -f /tmp/miniconda.sh
+
+RUN conda install -y gdal numpy && \
+    git clone https://github.com/edwardoughton/itmlogic.git /opt/itmlogic && \
+    cd /opt/itmlogic && python setup.py install && \
+    conda clean -afy
 
 WORKDIR /app
 
@@ -98,12 +104,10 @@ COPY scripts/audit_log_encrypt.py scripts/audit_log_encrypt.py
 # Copy built React frontend
 COPY --from=frontend-build /app/dist frontend_dist/
 
-# Create srtm_data directory and fix permissions. /opt/rfsignals is
-# the boot-time install dir for the clean-room rfsignals-cli binary
-# (entrypoint.sh fetches it from $RF_SIGNALS_S3_URL when set).
-RUN mkdir -p srtm_data job_results /opt/rfsignals && \
+# Create runtime writable directories and fix permissions.
+RUN mkdir -p srtm_data job_results && \
     chmod +x start.sh entrypoint.sh load_secrets.sh && \
-    chown -R appuser:appuser /app /opt/rfsignals
+    chown -R appuser:appuser /app
 
 USER appuser
 

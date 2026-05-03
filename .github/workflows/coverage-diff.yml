@@ -2,7 +2,7 @@
 # Coverage-diff robot.
 #
 # Nightly job that re-runs a fixed set of canonical Tx→Rx links
-# through every available RF engine (rf-signals, signal-server,
+# through every available RF engine (itmlogic, signal-server,
 # ITU-R P.1812, sionna when ready) and posts a delta report:
 #
 #   * dB drift per engine vs. the P.1812 reference;
@@ -58,14 +58,9 @@ jobs:
         continue-on-error: true
         run: bash scripts/build_signal_server.sh "$HOME/.local"
 
-      - name: Build rf-signals (clean-room Rust)
-        continue-on-error: true
-        run: bash scripts/build_rf_signals.sh "$HOME/.local"
-
       - name: Run coverage diff
         env:
           SIGNAL_SERVER_BIN: ${{ github.workspace }}/../.local/bin/signalserverHD
-          RF_SIGNALS_BIN: ${{ github.workspace }}/../.local/bin/rfsignals-cli
         run: |
           python scripts/coverage_diff_robot.py \
             --links tests/data/coverage_diff_links.json \

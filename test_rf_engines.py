@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Daniel Azevedo Novais ("TELECOM-TOWER-POWER"). All rights reserved.
 """Unit tests for the rf_engines registry and compare layer.
 
-We do NOT exercise the third-party engines (rf-signals, signal-server,
+We do NOT exercise the third-party engines (itmlogic, signal-server,
 sionna) here — those require external binaries / GPU and are
 exercised by the nightly coverage-diff workflow. These tests focus
 on the contracts:

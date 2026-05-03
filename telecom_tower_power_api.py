@@ -4584,7 +4584,7 @@ try:
 except Exception:
     logger.exception("GraphQL router failed to mount; REST API still active")
 
-# RF engines registry router (rf-signals, signal-server, sionna, ITU-R P.1812).
+# RF engines registry router (itmlogic, signal-server, sionna, ITU-R P.1812).
 # Mounted *after* the API-key dependency is in scope so the router inherits
 # the same auth posture as the rest of /coverage/*. Failure to import any
 # individual engine adapter is non-fatal — see rf_engines/__init__.py.
