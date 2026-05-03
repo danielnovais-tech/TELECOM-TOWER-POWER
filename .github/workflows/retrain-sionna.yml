@@ -35,6 +35,15 @@ on:
         description: 'Train + report but skip S3 upload'
         required: false
         default: 'false'
+      exclude_synthetic:
+        description: 'Drop synthetic_p1812_v1 rows. auto = exclude when ≥min_links real rows exist; always = always exclude; never = include all'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - always
+          - never
 
 concurrency:
   group: retrain-sionna
@@ -116,6 +125,29 @@ jobs:
           if [[ "${{ inputs.force || 'false' }}" == "true" ]]; then
             ARGS+=(--min-links 1)   # bypass the gate
           fi
+          # Synthetic seed handling. Default 'auto': only keep synthetic
+          # rows when there aren't yet enough real ones to reach min_links
+          # — guarantees production never silently retrains on a model
+          # that just imitates P.1812 once real drive-tests start landing.
+          MODE="${{ inputs.exclude_synthetic || 'auto' }}"
+          MIN_REAL="${{ inputs.min_links || '500' }}"
+          if [[ "${{ inputs.force || 'false' }}" == "true" ]]; then MIN_REAL=1; fi
+          case "$MODE" in
+            always)
+              ARGS+=(--exclude-source synthetic_p1812_v1)
+              echo "exclude_synthetic=always (forced)" ;;
+            never)
+              echo "exclude_synthetic=never — synthetic rows kept" ;;
+            auto|*)
+              REAL_ROWS=$(python -c "import os,psycopg2; c=psycopg2.connect(os.environ['DATABASE_URL']); cur=c.cursor(); cur.execute(\"SELECT COUNT(*) FROM link_observations WHERE source IS DISTINCT FROM 'synthetic_p1812_v1'\"); print(cur.fetchone()[0]); c.close()")
+              echo "non-synthetic rows: $REAL_ROWS (threshold $MIN_REAL)"
+              if [[ "$REAL_ROWS" -ge "$MIN_REAL" ]]; then
+                ARGS+=(--exclude-source synthetic_p1812_v1)
+                echo "exclude_synthetic=auto → excluding (real ≥ threshold)"
+              else
+                echo "exclude_synthetic=auto → keeping synthetic (real < threshold)"
+              fi ;;
+          esac
           set +e
           python -m scripts.train_sionna "${ARGS[@]}"
           rc=$?
