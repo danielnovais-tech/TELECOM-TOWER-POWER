@@ -621,7 +621,8 @@ class TelecomTowerPower:
                         f_hz, a.power_dbm,
                     )
                     cost, _feasible = _hop_get_or_compute(
-                        key, lambda a=a, b=b, d_km=d_km: _compute_edge(a, b, d_km)
+                        key, lambda a=a, b=b, d_km=d_km: _compute_edge(a, b, d_km),
+                        tower_ids=(a.id, b.id),
                     )
                 else:
                     cost, _feasible = _compute_edge(a, b, d_km)

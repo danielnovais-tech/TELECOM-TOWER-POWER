@@ -3218,6 +3218,68 @@ async def admin_impersonate(
     }
 
 
+class _CacheInvalidateRequest(BaseModel):
+    """Payload for POST /admin/cache/invalidate-towers."""
+    tower_ids: List[str] = Field(
+        ..., min_length=1, max_length=10_000,
+        description="Tower IDs whose hop_cache entries should be invalidated",
+    )
+    reason: str = Field(
+        default="satellite-change",
+        max_length=100,
+        description="Human-readable reason recorded in the audit log",
+    )
+    ttl_s: Optional[int] = Field(
+        default=None, ge=60, le=90 * 24 * 3600,
+        description="Optional override for the stale-marker TTL (seconds)",
+    )
+
+
+@app.post("/admin/cache/invalidate-towers")
+async def admin_cache_invalidate_towers(
+    body: _CacheInvalidateRequest,
+    request: Request,
+    admin_key: str = Depends(require_admin),
+) -> Dict:
+    """Mark a list of tower IDs as stale in the shared hop_cache.
+
+    The next ``plan_repeater`` call that touches any of those towers
+    will bypass cache, recompute the hop costs from fresh terrain +
+    model state, and clear the stale flags. Designed to close the
+    loop with the satellite-change robot: when fresh imagery flags a
+    site, that site's RF predictions can no longer be trusted.
+
+    Idempotent. Returns the number of markers actually written
+    (always 0 when the API runs without a Redis backend, since the
+    in-memory LRU is process-local and cannot coordinate workers).
+    """
+    try:
+        import hop_cache  # noqa: PLC0415
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"hop_cache unavailable: {e}")
+
+    written = hop_cache.mark_towers_stale(
+        body.tower_ids,
+        ttl_s=body.ttl_s,
+        reason=body.reason,
+    )
+    await _audit.log(
+        admin_key,
+        "admin.cache.invalidate_towers",
+        actor_email=_admin_email_for(admin_key),
+        tier="admin",
+        target=f"hop_cache:{len(body.tower_ids)}",
+        ip=_client_ip(request),
+        metadata={"reason": body.reason, "written": written, "requested": len(body.tower_ids)},
+    )
+    return {
+        "requested": len(body.tower_ids),
+        "marked_stale": written,
+        "reason": body.reason,
+        "ttl_s": body.ttl_s,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Dynamic CORS reflection for tenant ``frontend_url``
 # ─────────────────────────────────────────────────────────────────────

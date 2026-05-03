@@ -30,7 +30,7 @@ import logging
 import os
 import threading
 from collections import OrderedDict
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,14 @@ except Exception:  # noqa: BLE001
     _redis = None  # type: ignore
 
 _KEY_PREFIX = "ttp:hop:v1:"
+_STALE_PREFIX = "ttp:hop:v1:stale-tower:"
 _DEFAULT_TTL_S = int(os.getenv("HOP_CACHE_TTL_S", str(30 * 24 * 3600)))
+_STALE_TTL_S = int(os.getenv("HOP_CACHE_STALE_TTL_S", str(30 * 24 * 3600)))
 _LRU_MAX = int(os.getenv("HOP_CACHE_LRU_MAX", "4096"))
 
 # Module-level counters for observability.  Read by /metrics if desired.
 _metrics_lock = threading.Lock()
-_metrics: Dict[str, int] = {"hits": 0, "misses": 0, "errors": 0, "puts": 0}
+_metrics: Dict[str, int] = {"hits": 0, "misses": 0, "errors": 0, "puts": 0, "stale_recomputes": 0}
 
 
 def get_metrics() -> Dict[str, int]:
@@ -204,6 +206,8 @@ def _get_backend() -> Any:
 def get_or_compute(
     key: str,
     compute: Callable[[], Tuple[float, bool]],
+    *,
+    tower_ids: Sequence[str] = (),
 ) -> Tuple[float, bool]:
     """Return cached (cost_db, feasible) for *key*, or run *compute*.
 
@@ -211,30 +215,113 @@ def get_or_compute(
     tuple ``(cost_db: float, feasible: bool)``. The feasible flag is what
     the planner uses to prune impossible edges; we store both so callers
     can also reason about edge weight without recomputing.
+
+    *tower_ids*: when provided, any tower flagged stale (e.g. by the
+    satellite-change robot via ``mark_towers_stale``) forces a recompute
+    and refreshes the cached entry. After the refresh the stale markers
+    for those towers are cleared so subsequent calls hit cache again.
     """
     backend = _get_backend()
 
+    forced_recompute = False
+    stale_hits: list[str] = []
+    if tower_ids:
+        for tid in tower_ids:
+            if tid and is_tower_stale(tid):
+                forced_recompute = True
+                stale_hits.append(tid)
+
     # Tier 1: shared backend (Redis when configured).
-    cached = backend.get(key)
-    if cached is not None:
-        _bump("hits")
-        return float(cached["c"]), bool(cached["f"])
+    if not forced_recompute:
+        cached = backend.get(key)
+        if cached is not None:
+            _bump("hits")
+            return float(cached["c"]), bool(cached["f"])
 
-    # Tier 2: process-local LRU (covers brief Redis blips and cold workers).
-    cached = _LOCAL_LRU.get(key)
-    if cached is not None:
-        _bump("hits")
-        # Best-effort: warm the shared backend with what we already had.
-        backend.put(key, cached)
-        return float(cached["c"]), bool(cached["f"])
+        # Tier 2: process-local LRU (covers brief Redis blips and cold workers).
+        cached = _LOCAL_LRU.get(key)
+        if cached is not None:
+            _bump("hits")
+            # Best-effort: warm the shared backend with what we already had.
+            backend.put(key, cached)
+            return float(cached["c"]), bool(cached["f"])
 
-    _bump("misses")
+    if forced_recompute:
+        _bump("stale_recomputes")
+    else:
+        _bump("misses")
     cost_db, feasible = compute()
     payload = {"c": float(cost_db), "f": bool(feasible)}
     _LOCAL_LRU.put(key, payload)
     backend.put(key, payload)
     _bump("puts")
+    if stale_hits:
+        _clear_stale_towers(stale_hits)
     return cost_db, feasible
+
+
+# ---------------------------------------------------------------------------
+# Stale-tower markers (closed-loop with satellite-change robot)
+# ---------------------------------------------------------------------------
+
+def _stale_key(tower_id: str) -> str:
+    return _STALE_PREFIX + tower_id
+
+
+def mark_towers_stale(
+    tower_ids: Iterable[str],
+    *,
+    ttl_s: Optional[int] = None,
+    reason: str = "satellite-change",
+) -> int:
+    """Mark *tower_ids* so the next planner call recomputes their hops.
+
+    Used by ``scripts/invalidate_rf_cache.py`` after the satellite-change
+    robot detects fresh imagery over a tower. Returns the number of
+    markers actually written. Falls back to a no-op when the backend has
+    no native expiring write (in-process LRU) — cache invalidation is
+    only meaningful with a shared Redis.
+    """
+    backend = _get_backend()
+    ttl = int(ttl_s) if ttl_s is not None else _STALE_TTL_S
+    written = 0
+    if not isinstance(backend, _RedisBackend):
+        # In-memory backend has no cross-process visibility — short-circuit.
+        logger.info("hop_cache.mark_towers_stale: backend=memory; skipping")
+        return 0
+    client = backend._client  # noqa: SLF001
+    for tid in tower_ids:
+        if not tid:
+            continue
+        try:
+            client.set(_stale_key(tid), reason, ex=ttl)
+            written += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("hop_cache: failed to mark %s stale: %s", tid, e)
+    return written
+
+
+def is_tower_stale(tower_id: str) -> bool:
+    """Return True if *tower_id* has an active stale marker in Redis."""
+    backend = _get_backend()
+    if not isinstance(backend, _RedisBackend):
+        return False
+    try:
+        return backend._client.exists(_stale_key(tower_id)) > 0  # noqa: SLF001
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _clear_stale_towers(tower_ids: Iterable[str]) -> None:
+    backend = _get_backend()
+    if not isinstance(backend, _RedisBackend):
+        return
+    try:
+        keys = [_stale_key(t) for t in tower_ids if t]
+        if keys:
+            backend._client.delete(*keys)  # noqa: SLF001
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def reset_for_tests() -> None:

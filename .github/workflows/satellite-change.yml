@@ -59,6 +59,7 @@ jobs:
       MAX_SITES: ${{ github.event.inputs.max_sites || '100' }}
       USE_DB: ${{ github.event.inputs.use_db || 'auto' }}
       FAIL_ON_FLAGGED: ${{ github.event.inputs.fail_on_flagged || 'false' }}
+      INVALIDATE_AVAILABLE: ${{ secrets.TTP_API_URL != '' && secrets.TTP_ADMIN_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -207,6 +208,27 @@ jobs:
             echo "--- ssm-session.log (last 40 lines) ---"
             tail -40 /tmp/ssm-session.log || true
           fi
+
+      - name: Invalidate RF cache for flagged towers
+        # Closed-loop step: when the robot found new clear imagery over
+        # any tower, the API's hop_cache entries for those towers are
+        # marked stale via the admin endpoint. The next plan_repeater
+        # call recomputes from fresh terrain/model state.
+        if: always() && env.INVALIDATE_AVAILABLE == 'true'
+        env:
+          TTP_API_URL: ${{ secrets.TTP_API_URL }}
+          TTP_ADMIN_API_KEY: ${{ secrets.TTP_ADMIN_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ ! -f artifacts/satellite_change.json ]; then
+            echo "no report — skipping invalidation"
+            exit 0
+          fi
+          python scripts/invalidate_rf_cache.py \
+            --report artifacts/satellite_change.json \
+            --reason "satellite-change/${{ github.run_id }}" || {
+              echo "::warning::invalidation failed (non-fatal); report still uploaded"
+            }
 
       - name: Upload report artefact
         if: always()
