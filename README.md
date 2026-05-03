@@ -669,6 +669,27 @@ RDS Proxy requires a paid AWS account (free-tier restriction). Until deployed, L
 
 Push to a Railway project — `railway.json` configures Dockerfile build, healthcheck, and restart policy.
 
+### QGIS / Atoll export bundle (GitHub Actions)
+
+Generate a QGIS/Atoll bundle from CI (manual dispatch):
+
+```bash
+gh workflow run QGIS-export.yml -f aoi_bbox="-73.0,-33.0,-34.0,5.0"
+```
+
+Fetch artifacts from a completed run:
+
+```bash
+# List artifacts only
+scripts/fetch_qgis_artifact.sh --run-id 25293853926 --list-only
+
+# Download all artifacts and auto-extract *.tar.gz into artifacts/*_extracted
+scripts/fetch_qgis_artifact.sh --run-id 25293853926
+```
+
+This helper uses the GitHub Actions API directly, so it works even when the
+local `gh` version does not support `gh run view --json artifacts`.
+
 ### Heroku / Generic PaaS
 
 Uses the `Procfile`:
