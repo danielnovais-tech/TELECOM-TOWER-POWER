@@ -1,0 +1,22 @@
+[package]
+name = "rfsignals-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Clean-room RF propagation models (FSPL, Okumura-HATA, COST-231-HATA, ECC-33, EGLI, two-ray) — JSON CLI for TELECOM-TOWER-POWER"
+license = "LicenseRef-TTP-Proprietary"
+authors = ["Daniel Azevedo Novais"]
+publish = false
+
+[[bin]]
+name = "rfsignals-cli"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+codegen-units = 1

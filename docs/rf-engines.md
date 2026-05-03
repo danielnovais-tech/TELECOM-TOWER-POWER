@@ -10,7 +10,7 @@ ITU-R P.1812 wrapper, without any commercial licence.
 | --------------- | -------------------------------------------- | ---------- | ----------------- |
 | `itu-p1812`     | `eeveetza/Py1812` (already in platform)      | ITU permissive | **available** |
 | `itmlogic`      | [`edwardoughton/itmlogic`][itm] (NTIA ITM)   | MIT-style  | **available** (pip) |
-| `rf-signals`    | [`thebracket/rf-signals`][rfs]               | **GPL-2.0**| placeholder — see note |
+| `rf-signals`    | clean-room (this repo, `rf_signals/`)        | LicenseRef-TTP-Proprietary | **available** — empirical models |
 | `signal-server` | [`W3AXL/Signal-Server`][css] (active fork)   | **GPL-2.0**| operator-buildable (see note) |
 | `sionna`        | NVIDIA Sionna (learned model)                | Apache 2.0 | scaffolding only  |
 
@@ -18,36 +18,50 @@ ITU-R P.1812 wrapper, without any commercial licence.
 [css]: https://github.com/W3AXL/Signal-Server
 [itm]: https://github.com/edwardoughton/itmlogic
 
-### Copyleft posture (rf-signals + signal-server)
+### Copyleft posture (signal-server) and clean-room rf-signals
 
-Both `rf-signals` and `signal-server` are **GPL-2.0** — viral
-copyleft. The platform stays clean because:
+`signal-server` is **GPL-2.0** — viral copyleft. The platform stays
+clean because the Python adapter talks to it via **subprocess**
+(separate process boundary) — no static linking, no FFI inside the
+API process — and the resulting `signalserverHD` binary is **never
+bundled** in the proprietary container image. Operators build it on
+the ECS host (or a build sidecar), upload to S3, and the task
+downloads it at boot.
 
-* the Python adapter talks to each engine via **subprocess** (separate
-  process boundary) — no static linking, no FFI inside the API process;
-* the resulting binaries (`rfsignals-cli`, `signalserverHD`) are
-  **never bundled** in the proprietary container image. Operators build
-  them on the ECS host (or a build sidecar), upload to S3, and the
-  task downloads them at boot — same posture as ITU digital maps and
-  MapBiomas rasters.
+`rf-signals` (the legacy `thebracket/rf-signals` GPL-2.0 crate) was
+**not** forked. Instead `rf_signals/` in this repo is a **clean-room
+Rust crate** that re-implements only the *public-domain empirical
+formulas* (FSPL/ITU-R P.525, Okumura-Hata, COST-231-Hata, ECC-33,
+Egli, two-ray plane-earth). All citations are to open IEEE/ITU/ECC
+papers (see `rf_signals/src/models.rs` headers). No GPL upstream
+code is consulted, copied, or linked, so the binary inherits no
+copyleft obligation. It is still launched as a subprocess for
+consistency with the other engines, but the in-repo source itself
+is under the proprietary licence.
 
-### ⚠️ rf-signals status (placeholder)
+### rf-signals status (clean-room, available)
 
-The upstream repo `thebracket/rf-signals` has been **unmaintained for
-~5 years**, requires nightly Rust from 2020, an old Rocket release,
-Google Maps API key, and LiDAR conversion via PROJ. The adapter in
-this repo is wired into the registry for future revival but reports
-`is_available() = False` until someone:
+The revival shipped as `rf_signals/` (Rust 2021, stable toolchain).
+It builds with `bash scripts/build_rf_signals.sh ~/.local` and
+produces a self-contained `rfsignals-cli` binary (~500 KB, no
+runtime deps). Model dispatch is automatic by frequency unless the
+caller pins one explicitly:
 
-1. Forks `thebracket/rf-signals` and pins a buildable Rust toolchain.
-2. Maps the actual public API in `rf-signal-algorithms/src/rfcalc/`
-   (ITWOM3, HATA, COST/HATA, ECC33, EGLI, FSPL) onto the JSON shim
-   schema documented in `rf_engines/rf_signals_engine.py` (`_call_subprocess`).
-3. Validates outputs against ITU-R P.1812 on the coverage-diff golden
-   set for at least 7 nights before flipping the engine on.
+| Band              | Default model    |
+| ----------------- | ---------------- |
+| < 150 MHz         | Egli             |
+| 150 – 1500 MHz    | Okumura-Hata     |
+| 1500 – 2000 MHz   | COST-231-Hata    |
+| 2000 – 3500 MHz   | ECC-33           |
+| > 3500 MHz        | FSPL fallback    |
 
-Until step 3 lands, treat any rf-signals output as research-only —
-the `coverage-diff` workflow already excludes it via `is_available()`.
+All outputs are floored at FSPL (no model can return a value below
+free-space). Confidence is 0.75 for empirical models in their
+calibrated band, 0.55 for FSPL/two-ray fallbacks. Validation against
+the coverage-diff golden set vs ITU-R P.1812 over 7 nights is the
+remaining gate before promoting it to the primary engine in
+`/coverage/engines/compare`; until then it stays in the rotation as
+a cross-check, not a reference.
 
 ### ⚠️ signal-server status (operator-buildable)
 
@@ -109,9 +123,10 @@ bash scripts/build_signal_server.sh ~/.local
 # Then on the ECS task:
 export SIGNAL_SERVER_BIN=/usr/local/bin/signalserverHD
 
-# rf-signals: NOT shipped — see "rf-signals status" above. To revive,
-# fork the upstream crate, pin the toolchain, fix the JSON shim, then
-# re-add a build_rf_signals.sh that actually compiles.
+# rf-signals (clean-room Rust, this repo) — ~15 s
+bash scripts/build_rf_signals.sh ~/.local
+# Then on the ECS task:
+export RF_SIGNALS_BIN=/usr/local/bin/rfsignals-cli
 ```
 
 `GET /coverage/engines` will start reporting `available=true` for each
