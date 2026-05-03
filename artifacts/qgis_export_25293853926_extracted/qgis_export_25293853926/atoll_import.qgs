@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<qgis projectname="TELECOM-TOWER-POWER → Atoll export" version="3.34.0">
+  <title>TTP Atoll Export</title>
+  <projectCrs><spatialrefsys><srid>4326</srid></spatialrefsys></projectCrs>
+  <mapcanvas>
+    <extent>
+      <xmin>-73.0</xmin><ymin>-33.0</ymin>
+      <xmax>-34.0</xmax><ymax>5.0</ymax>
+    </extent>
+  </mapcanvas>
+  <layers>
+    <maplayer type="vector" name="sites">
+      <datasource>file:./sites.txt?delimiter=%09&amp;xField=Longitude&amp;yField=Latitude</datasource>
+    </maplayer>
+    <maplayer type="raster" name="terrain">
+      <datasource>./terrain.bil</datasource>
+    </maplayer>
+    <maplayer type="raster" name="clutter">
+      <datasource>./clutter.bil</datasource>
+    </maplayer>
+  </layers>
+</qgis>
