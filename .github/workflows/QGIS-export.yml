@@ -1,0 +1,104 @@
+name: QGIS Export (Atoll Bundle)
+
+on:
+  schedule:
+    # Every Monday 04:30 UTC
+    - cron: '30 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      aoi_bbox:
+        description: 'AOI bbox in WGS84: lon_min,lat_min,lon_max,lat_max'
+        required: true
+        default: '-48.0,-16.0,-47.5,-15.7'
+      include_rasters:
+        description: 'Include terrain/clutter rasters (needs raster data/deps)'
+        required: true
+        type: boolean
+        default: false
+      raster_step_deg:
+        description: 'Raster step in degrees (used only when include_rasters=true)'
+        required: true
+        default: '0.0008333333'
+
+concurrency:
+  group: qgis-export
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install minimal dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install psycopg2-binary
+
+      - name: Build QGIS/Atoll export bundle
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          AOI_BBOX_INPUT: ${{ github.event.inputs.aoi_bbox }}
+          INCLUDE_RASTERS_INPUT: ${{ github.event.inputs.include_rasters }}
+          RASTER_STEP_INPUT: ${{ github.event.inputs.raster_step_deg }}
+        run: |
+          set -euo pipefail
+
+          # Defaults for scheduled runs (workflow_dispatch inputs are empty on cron).
+          AOI_BBOX="${AOI_BBOX_INPUT:-}"
+          if [ -z "$AOI_BBOX" ]; then
+            AOI_BBOX='-48.0,-16.0,-47.5,-15.7'
+          fi
+
+          INCLUDE_RASTERS="${INCLUDE_RASTERS_INPUT:-false}"
+          RASTER_STEP="${RASTER_STEP_INPUT:-0.0008333333}"
+
+          OUT_DIR="qgis_export_${GITHUB_RUN_ID}"
+          mkdir -p "$OUT_DIR"
+
+          ARGS=(
+            "--aoi-bbox=$AOI_BBOX"
+            "--out-dir=$OUT_DIR"
+            "--towers-from-db"
+            "--raster-step-deg=$RASTER_STEP"
+            "--verbose"
+          )
+
+          if [ "$INCLUDE_RASTERS" != "true" ]; then
+            ARGS+=("--skip-rasters")
+          fi
+
+          python scripts/qgis_to_atoll.py "${ARGS[@]}"
+
+          # Pack bundle for easy download/import.
+          tar -czf "${OUT_DIR}.tar.gz" "$OUT_DIR"
+
+          {
+            echo "## QGIS Export Output"
+            echo
+            echo "- AOI bbox: $AOI_BBOX"
+            echo "- include_rasters: $INCLUDE_RASTERS"
+            echo "- raster_step_deg: $RASTER_STEP"
+            echo
+            echo "### Files"
+            ls -1 "$OUT_DIR" | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload export bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: qgis-atoll-export-${{ github.run_id }}
+          path: |
+            qgis_export_${{ github.run_id }}/
+            qgis_export_${{ github.run_id }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
