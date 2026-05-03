@@ -6,6 +6,13 @@
 # deforestation, vegetation regrowth) that may have invalidated our
 # cached RF predictions.
 #
+# Site source (auto-selected, in priority order):
+#   1. --sites-from-db via SSM tunnel to RDS  ← prod path
+#      Requires secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+#      EC2_INSTANCE_ID, RDS_HOST, RDS_USER, RDS_PASSWORD, RDS_DBNAME.
+#   2. tests/data/satellite_change_sites.csv  ← CI fallback / dry-run
+#      Used when the SSM/RDS secret set is incomplete.
+#
 # Auth: set the `PLANET_API_KEY` repository secret. Without it the
 # robot still runs and emits an empty report (no-api-key) so the
 # workflow stays green while the secret is wired.
@@ -24,6 +31,14 @@ on:
         description: "Look-back window in days"
         required: false
         default: "7"
+      max_sites:
+        description: "Hard cap on sites scanned (Planet quota guard)"
+        required: false
+        default: "100"
+      use_db:
+        description: "Pull sites from RDS via SSM tunnel (auto/always/never)"
+        required: false
+        default: "auto"
       fail_on_flagged:
         description: "Fail the job (and open an issue) if any site is flagged"
         required: false
@@ -36,11 +51,13 @@ permissions:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       PLANET_API_KEY: ${{ secrets.PLANET_API_KEY }}
       BUFFER_KM: ${{ github.event.inputs.buffer_km || '2' }}
       SINCE_DAYS: ${{ github.event.inputs.since_days || '7' }}
+      MAX_SITES: ${{ github.event.inputs.max_sites || '100' }}
+      USE_DB: ${{ github.event.inputs.use_db || 'auto' }}
       FAIL_ON_FLAGGED: ${{ github.event.inputs.fail_on_flagged || 'false' }}
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +67,102 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Decide site source
+        id: src
+        env:
+          AWS_KEY_PRESENT: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
+          EC2_PRESENT: ${{ secrets.EC2_INSTANCE_ID != '' }}
+          RDS_PRESENT: ${{ secrets.RDS_HOST != '' }}
+        run: |
+          set -euo pipefail
+          mode="csv"
+          case "$USE_DB" in
+            never)
+              mode="csv"
+              ;;
+            always)
+              if [ "$AWS_KEY_PRESENT" != "true" ] || [ "$EC2_PRESENT" != "true" ] || [ "$RDS_PRESENT" != "true" ]; then
+                echo "::error::use_db=always but AWS/EC2/RDS secrets are missing"
+                exit 1
+              fi
+              mode="db"
+              ;;
+            auto|*)
+              if [ "$AWS_KEY_PRESENT" = "true" ] && [ "$EC2_PRESENT" = "true" ] && [ "$RDS_PRESENT" = "true" ]; then
+                mode="db"
+              else
+                mode="csv"
+                echo "::warning::SSM/RDS secrets missing — falling back to tests/data/satellite_change_sites.csv"
+              fi
+              ;;
+          esac
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Site source: $mode"
+
+      - name: Install psycopg2 (DB mode)
+        if: steps.src.outputs.mode == 'db'
+        run: pip install psycopg2-binary
+
+      - name: Configure AWS credentials (DB mode)
+        if: steps.src.outputs.mode == 'db'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Install AWS Session Manager plugin (DB mode)
+        if: steps.src.outputs.mode == 'db'
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" \
+            -o /tmp/session-manager-plugin.deb
+          sudo dpkg -i /tmp/session-manager-plugin.deb
+          session-manager-plugin --version
+
+      - name: Verify EC2 bastion is online (DB mode)
+        if: steps.src.outputs.mode == 'db'
+        env:
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          PING=$(aws ssm describe-instance-information \
+            --region sa-east-1 \
+            --filters "Key=InstanceIds,Values=${EC2_INSTANCE_ID}" \
+            --query 'InstanceInformationList[0].PingStatus' \
+            --output text)
+          echo "SSM PingStatus: ${PING}"
+          if [ "$PING" != "Online" ]; then
+            echo "::error::EC2 ${EC2_INSTANCE_ID} not Online in SSM (got: ${PING})"
+            exit 1
+          fi
+
+      - name: Open SSM port-forward tunnel to RDS (DB mode)
+        if: steps.src.outputs.mode == 'db'
+        env:
+          EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          RDS_HOST: ${{ secrets.RDS_HOST }}
+        run: |
+          set -euo pipefail
+          nohup aws ssm start-session \
+            --region sa-east-1 \
+            --target "${EC2_INSTANCE_ID}" \
+            --document-name AWS-StartPortForwardingSessionToRemoteHost \
+            --parameters "host=${RDS_HOST},portNumber=5432,localPortNumber=15432" \
+            > /tmp/ssm-session.log 2>&1 &
+          echo $! > /tmp/ssm-session.pid
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/15432) 2>/dev/null; then
+              exec 3<&- 3>&-
+              echo "SSM tunnel ready on 127.0.0.1:15432 after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::SSM tunnel did not become ready within 30s"
+          tail -40 /tmp/ssm-session.log || true
+          exit 1
+
       - name: Compute --since cutoff
         id: cutoff
         run: |
@@ -57,16 +170,43 @@ jobs:
           echo "since=$since" >> "$GITHUB_OUTPUT"
 
       - name: Run satellite-change robot
+        env:
+          RDS_USER: ${{ secrets.RDS_USER }}
+          RDS_PASSWORD: ${{ secrets.RDS_PASSWORD }}
+          RDS_DBNAME: ${{ secrets.RDS_DBNAME }}
         run: |
+          set -euo pipefail
           mkdir -p artifacts
           flag_arg=""
           if [ "$FAIL_ON_FLAGGED" = "true" ]; then flag_arg="--fail-on-flagged"; fi
+
+          if [ "${{ steps.src.outputs.mode }}" = "db" ]; then
+            PW=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['RDS_PASSWORD'], safe=''))")
+            export DATABASE_URL="postgresql://${RDS_USER}:${PW}@127.0.0.1:15432/${RDS_DBNAME}?sslmode=require"
+            site_args="--sites-from-db --max-sites ${MAX_SITES}"
+          else
+            site_args="--sites-csv tests/data/satellite_change_sites.csv"
+          fi
+
           python scripts/satellite_change_robot.py \
-            --sites-csv tests/data/satellite_change_sites.csv \
+            $site_args \
             --since "${{ steps.cutoff.outputs.since }}" \
             --buffer-km "$BUFFER_KM" \
             --output artifacts/satellite_change.json \
             $flag_arg
+
+      - name: Teardown SSM tunnel
+        if: always() && steps.src.outputs.mode == 'db'
+        run: |
+          if [ -f /tmp/ssm-session.pid ]; then
+            kill "$(cat /tmp/ssm-session.pid)" 2>/dev/null || true
+          fi
+          pkill -f "session-manager-plugin" 2>/dev/null || true
+          pkill -f "ssm start-session" 2>/dev/null || true
+          if [ -f /tmp/ssm-session.log ]; then
+            echo "--- ssm-session.log (last 40 lines) ---"
+            tail -40 /tmp/ssm-session.log || true
+          fi
 
       - name: Upload report artefact
         if: always()

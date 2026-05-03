@@ -172,19 +172,25 @@ def _scan_site(site: dict[str, Any], *, since_iso: str, buffer_km: float,
     return out
 
 
-def _load_sites(sites_csv: Optional[Path], from_db: bool) -> list[dict[str, Any]]:
+def _load_sites(sites_csv: Optional[Path], from_db: bool,
+                max_sites: Optional[int] = None) -> list[dict[str, Any]]:
     if sites_csv is not None:
         with sites_csv.open() as fh:
-            return list(csv.DictReader(fh))
-    if from_db:
+            sites = list(csv.DictReader(fh))
+    elif from_db:
         from tower_db import TowerStore  # type: ignore[import-not-found]
 
         rows = TowerStore().list_all(limit=200_000)
-        return [
+        sites = [
             {"name": r.get("id"), "lat": r["lat"], "lon": r["lon"]}
             for r in rows
         ]
-    raise SystemExit("either --sites-csv or --sites-from-db is required")
+    else:
+        raise SystemExit("either --sites-csv or --sites-from-db is required")
+    if max_sites is not None and max_sites > 0 and len(sites) > max_sites:
+        logger.warning("capping sites %d → %d (--max-sites)", len(sites), max_sites)
+        sites = sites[:max_sites]
+    return sites
 
 
 def _build_report(sites: list[dict[str, Any]], *, since_iso: str,
@@ -233,6 +239,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--min-clear", type=int, default=1,
                    help="Flag a site when ≥ this many clear scenes were found")
     p.add_argument("--item-types", default=",".join(DEFAULT_ITEM_TYPES))
+    p.add_argument("--max-sites", type=int, default=None,
+                   help="Hard cap on sites scanned (Planet API quota guard). 0/None = unlimited.")
     p.add_argument("--output", required=True, type=Path,
                    help="Path to write the JSON report")
     p.add_argument("--fail-on-flagged", action="store_true",
@@ -250,7 +258,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=30)
         since_iso = cutoff.isoformat(timespec="seconds")
 
-    sites = _load_sites(args.sites_csv, args.sites_from_db)
+    sites = _load_sites(args.sites_csv, args.sites_from_db, max_sites=args.max_sites)
     logger.info("scanning %d sites since %s", len(sites), since_iso)
 
     api_key = (os.environ.get("PLANET_API_KEY") or "").strip() or None
