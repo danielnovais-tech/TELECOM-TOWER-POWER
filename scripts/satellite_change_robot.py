@@ -211,6 +211,7 @@ def _build_report(sites: list[dict[str, Any]], *, since_iso: str,
             "item_types": list(item_types),
         },
         "api_key_present": bool(api_key),
+        "api_key_length": len(api_key) if api_key else 0,
         "sites": rows,
         "flagged_count": sum(1 for r in rows if r["flagged"]),
     }
@@ -252,7 +253,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sites = _load_sites(args.sites_csv, args.sites_from_db)
     logger.info("scanning %d sites since %s", len(sites), since_iso)
 
-    api_key = os.environ.get("PLANET_API_KEY") or None
+    api_key = (os.environ.get("PLANET_API_KEY") or "").strip() or None
     if not api_key:
         logger.warning("PLANET_API_KEY not set — emitting empty report (no-api-key)")
 
