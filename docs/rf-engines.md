@@ -121,8 +121,12 @@ engine whose binary is on `$PATH` (or whose explicit env var resolves).
 
 * **QGIS → Atoll exporter**: [scripts/qgis_to_atoll.py](../scripts/qgis_to_atoll.py)
   emits Atoll-native `sites.txt` / `transmitters.txt` / `terrain.bil` /
-  `clutter.bil` plus a `.qgs` project for visual QA. Lets Atoll users
-  validate TTP predictions side-by-side with their commercial licence.
+  `clutter.bil` (with ENVI `.hdr` sidecars) plus a `.qgs` project for
+  visual QA. Towers come from `--towers-csv` or `--towers-from-db`
+  (live `TowerStore`); rasters are sampled from the same `SRTMReader`
+  / `MapBiomasExtractor` the runtime uses, so Atoll users can validate
+  TTP predictions side-by-side with their commercial licence — no
+  lock-in. Tested in [test_qgis_to_atoll.py](../test_qgis_to_atoll.py).
 * **Planetiler base maps**: [scripts/planetiler_build.sh](../scripts/planetiler_build.sh)
   renders Brazil vector tiles in <30 min. Drops a `brazil.pmtiles`
   next to Caddy for the SPA's MapLibre layer.
