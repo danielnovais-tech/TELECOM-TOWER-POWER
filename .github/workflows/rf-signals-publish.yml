@@ -1,0 +1,73 @@
+name: rf-signals publish
+
+# Builds the clean-room rfsignals-cli binary on every push to main that
+# touches rf_signals/ or its build script, and uploads the artefact to
+# s3://telecom-tower-power-results/bin/ as a public-read object so the
+# API container can fetch it via plain HTTPS at boot (no AWS creds in
+# the runtime image).
+#
+# Two keys are published per build:
+#   * bin/rfsignals-cli                     (mutable "current", 5-min cache)
+#   * bin/rfsignals-cli-<sha256-12>         (immutable, 1-year cache)
+#
+# Rollback: point RF_SIGNALS_S3_URL at a SHA-tagged sibling.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rf_signals/**"
+      - "scripts/build_rf_signals.sh"
+      - ".github/workflows/rf-signals-publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: sa-east-1
+  S3_PUBLISH_URI: s3://telecom-tower-power-results/bin/rfsignals-cli
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          set -euo pipefail
+          rustc --version || sudo apt-get update -qq
+          rustc --version || sudo apt-get install -y rustc cargo
+          rustc --version
+          cargo --version
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build + publish rfsignals-cli
+        env:
+          PREFIX: ${{ runner.temp }}/rfsignals
+        run: |
+          set -euo pipefail
+          mkdir -p "$PREFIX"
+          bash scripts/build_rf_signals.sh
+          ls -la "$PREFIX/bin/rfsignals-cli"
+
+      - name: Smoke test (HEAD on published object)
+        run: |
+          set -euo pipefail
+          # Allow up to ~2 min for S3 to expose the object.
+          for i in 1 2 3 4 5 6 7 8; do
+            if curl -fsSI "https://telecom-tower-power-results.s3.${AWS_REGION}.amazonaws.com/bin/rfsignals-cli" >/dev/null; then
+              echo "object reachable on attempt $i"
+              exit 0
+            fi
+            sleep $((i*5))
+          done
+          echo "::error::published object did not become reachable" >&2
+          exit 1

@@ -241,6 +241,44 @@ _dl("SIONNA_FEATURES_S3_URI", os.environ["SIONNA_FEATURES_PATH"])'
     unset _SIONNA_DL_CMD _SIONNA_DIR
 fi
 
+# rfsignals-cli (clean-room Rust empirical-models binary). Optional.
+# When RF_SIGNALS_S3_URL is set, fetch the binary into a writable path
+# and export RF_SIGNALS_BIN so the Python adapter resolves it. The
+# binary is published as public-read by the rf-signals-publish CI
+# workflow, so no AWS creds are required at boot. SHA-256 verification
+# happens when RF_SIGNALS_S3_SHA256 is also set (recommended for prod).
+if [ -n "${RF_SIGNALS_S3_URL:-}" ]; then
+    _RFS_DIR="${RF_SIGNALS_BIN_DIR:-/opt/rfsignals}"
+    _RFS_BIN="$_RFS_DIR/rfsignals-cli"
+    mkdir -p "$_RFS_DIR" 2>/dev/null || true
+    if command -v curl >/dev/null 2>&1; then
+        echo "Fetching rfsignals-cli from ${RF_SIGNALS_S3_URL} (60s timeout)..."
+        if curl -fsSL --max-time 60 -o "$_RFS_BIN.tmp" "$RF_SIGNALS_S3_URL"; then
+            if [ -n "${RF_SIGNALS_S3_SHA256:-}" ] && command -v sha256sum >/dev/null 2>&1; then
+                _got=$(sha256sum "$_RFS_BIN.tmp" | awk '{print $1}')
+                if [ "$_got" != "$RF_SIGNALS_S3_SHA256" ]; then
+                    echo "WARN: rfsignals-cli sha256 mismatch (got=$_got expected=$RF_SIGNALS_S3_SHA256), discarding"
+                    rm -f "$_RFS_BIN.tmp"
+                    _RFS_BIN=""
+                fi
+                unset _got
+            fi
+            if [ -n "${_RFS_BIN:-}" ] && [ -f "$_RFS_BIN.tmp" ]; then
+                chmod 0755 "$_RFS_BIN.tmp"
+                mv -f "$_RFS_BIN.tmp" "$_RFS_BIN"
+                export RF_SIGNALS_BIN="$_RFS_BIN"
+                echo "rfsignals-cli ready: $RF_SIGNALS_BIN ($(stat -c%s "$_RFS_BIN" 2>/dev/null || echo "?") bytes)"
+            fi
+        else
+            echo "WARN: rfsignals-cli download failed, engine stays unavailable"
+            rm -f "$_RFS_BIN.tmp" 2>/dev/null || true
+        fi
+    else
+        echo "WARN: curl not available in image, cannot fetch rfsignals-cli"
+    fi
+    unset _RFS_DIR _RFS_BIN
+fi
+
 if [ "${SERVICE_TYPE:-}" = "webhook" ]; then
     echo "SERVICE_TYPE=webhook → starting stripe_webhook_service"
     exec uvicorn stripe_webhook_service:app --host 0.0.0.0 --port "${PORT:-8080}"

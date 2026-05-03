@@ -17,6 +17,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN groupadd --gid 1000 appuser && \
     useradd --uid 1000 --gid 1000 --create-home appuser
 
+# curl is needed at boot to fetch the rfsignals-cli binary from S3
+# (clean-room Rust artefact, public-read in the results bucket).
+# Skipping the install when curl is already present keeps this layer
+# cheap on base images that ship it.
+RUN if ! command -v curl >/dev/null 2>&1; then \
+        apt-get update && \
+        apt-get install -y --no-install-recommends curl ca-certificates && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
 WORKDIR /app
 
 # Install dependencies first (layer caching via Docker's normal layer cache).
@@ -86,8 +96,12 @@ COPY scripts/audit_log_encrypt.py scripts/audit_log_encrypt.py
 # Copy built React frontend
 COPY --from=frontend-build /app/dist frontend_dist/
 
-# Create srtm_data directory and fix permissions
-RUN mkdir -p srtm_data job_results && chmod +x start.sh entrypoint.sh load_secrets.sh && chown -R appuser:appuser /app
+# Create srtm_data directory and fix permissions. /opt/rfsignals is
+# the boot-time install dir for the clean-room rfsignals-cli binary
+# (entrypoint.sh fetches it from $RF_SIGNALS_S3_URL when set).
+RUN mkdir -p srtm_data job_results /opt/rfsignals && \
+    chmod +x start.sh entrypoint.sh load_secrets.sh && \
+    chown -R appuser:appuser /app /opt/rfsignals
 
 USER appuser
 
