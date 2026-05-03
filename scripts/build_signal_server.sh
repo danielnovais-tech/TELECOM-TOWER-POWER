@@ -65,7 +65,7 @@ fi
 if command -v apt-get >/dev/null 2>&1; then
     sudo apt-get update -qq || true
     sudo apt-get install -y --no-install-recommends \
-        build-essential cmake g++ libbz2-dev imagemagick libspdlog-dev \
+        build-essential cmake g++ libbz2-dev imagemagick libspdlog-dev zlib1g-dev \
         >/dev/null 2>&1 || true
 fi
 

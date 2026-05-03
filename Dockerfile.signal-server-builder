@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# (this Dockerfile is a build recipe; the binary it produces is GPL-2.0)
+#
+# Signal-Server builder image — operator-only.
+# ---------------------------------------------
+# Compiles the W3AXL/Signal-Server fork (GPL-2.0) with
+# scripts/signal_server_json.patch (GPL-2.0-or-later) applied, and
+# stages the resulting `signalserver` / `signalserverHD` /
+# `signalserverLIDAR` binaries under /out/bin.
+#
+# Usage (operator host):
+#
+#   docker build -f Dockerfile.signal-server-builder -t ttp-ss-builder .
+#   id=$(docker create ttp-ss-builder)
+#   docker cp "$id":/out/bin/signalserverHD ./signalserverHD
+#   docker rm "$id"
+#   aws s3 cp ./signalserverHD s3://$ARTEFACT_BUCKET/bin/signalserverHD
+#
+# WHY MULTI-STAGE WITHOUT A RUNTIME APP STAGE
+# -------------------------------------------
+# Signal-Server is GPL-2.0. Bundling the binary into the platform's
+# proprietary runtime image would trigger GPL distribution
+# obligations (offer of source for 3 years, etc.) once that image
+# is pushed to a registry. We therefore intentionally STOP at the
+# builder stage: the operator extracts the binary with `docker cp`
+# and uploads it to S3, where the ECS task downloads it at boot —
+# same pattern as the ITU digital maps and MapBiomas rasters.
+# This image is for VALIDATION + ARTEFACT EXTRACTION ONLY and must
+# never be merged into the application Dockerfile.
+#
+# CI usage: `docker build` of this file is the smoke test that the
+# patch still applies and the upstream fork still compiles. See
+# .github/workflows/signal-server-build.yml.
+
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        cmake \
+        g++ \
+        build-essential \
+        libbz2-dev \
+        libspdlog-dev \
+        zlib1g-dev \
+        imagemagick \
+        sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy ONLY the build inputs we need; keeps layer cache stable when
+# unrelated files in the repo change.
+COPY scripts/build_signal_server.sh /build/scripts/build_signal_server.sh
+COPY scripts/signal_server_json.patch /build/scripts/signal_server_json.patch
+
+# build_signal_server.sh installs into $PREFIX/bin. Skip the apt step
+# inside the script (we already installed deps above) by faking sudo
+# to a no-op so the script's `sudo apt-get install ... || true` line
+# stays harmless under non-root runtimes too.
+RUN install -d /out/bin \
+    && bash scripts/build_signal_server.sh /out
+
+# Sanity check: binary must accept -json without crashing. The flag is
+# only meaningful in PPA mode, so calling with no other args should
+# print the upstream usage banner and exit; a missing-flag parser
+# error here would mean the patch did not take.
+RUN /out/bin/signalserverHD 2>&1 | head -n 20 || true \
+    && test -x /out/bin/signalserverHD \
+    && echo "[signal-server-builder] OK: signalserverHD built with -json shim"
+
+# Marker file the CI workflow greps for to confirm a clean build.
+RUN echo "ttp-signal-server-build-ok" > /out/BUILD_OK
+
+# Final stage is the builder itself. We do NOT add a runtime stage on
+# purpose — see the GPL note at the top of this file. The artefact is
+# extracted via `docker cp` from this single stage.

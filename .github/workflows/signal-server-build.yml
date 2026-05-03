@@ -1,0 +1,94 @@
+name: Signal-Server Build
+
+# Validates that scripts/signal_server_json.patch still applies cleanly
+# against the W3AXL/Signal-Server fork and that the patched source still
+# compiles. This is the "smoke test" promised in the patch header.
+#
+# IMPORTANT: this workflow does NOT publish an image and does NOT push
+# the resulting binary anywhere. Signal-Server is GPL-2.0; distribution
+# would trigger source-offer obligations. We build, assert, and discard.
+# The header of Dockerfile.signal-server-builder explains the posture
+# in detail.
+#
+# When this workflow goes red, options are (in order of effort):
+#   1. Re-roll the patch against the new W3AXL HEAD (most likely cause:
+#      upstream renamed/moved the line we anchor on in main.cc/outputs.cc).
+#   2. Pin the clone in scripts/build_signal_server.sh to the last known-
+#      good SHA (currently 7f6242a).
+#   3. Switch SIGNAL_SERVER_REPO to a different fork.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/signal_server_json.patch"
+      - "scripts/build_signal_server.sh"
+      - "Dockerfile.signal-server-builder"
+      - ".github/workflows/signal-server-build.yml"
+  pull_request:
+    paths:
+      - "scripts/signal_server_json.patch"
+      - "scripts/build_signal_server.sh"
+      - "Dockerfile.signal-server-builder"
+      - ".github/workflows/signal-server-build.yml"
+  schedule:
+    # Weekly drift check. Catches upstream W3AXL changes that silently
+    # break the patch even though nothing in this repo moved.
+    - cron: "23 04 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build patched Signal-Server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build builder image (validates patch + compile)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.signal-server-builder
+          push: false
+          load: true
+          tags: ttp-signal-server-builder:ci
+          # No cache-to: image is throwaway. cache-from is fine to
+          # speed up reruns on the same SHA.
+          cache-from: type=gha,scope=signal-server-builder
+          cache-to: type=gha,mode=min,scope=signal-server-builder
+
+      - name: Verify build marker
+        run: |
+          set -euo pipefail
+          id=$(docker create ttp-signal-server-builder:ci)
+          trap 'docker rm -f "$id" >/dev/null 2>&1 || true' EXIT
+          docker cp "$id":/out/BUILD_OK /tmp/BUILD_OK
+          grep -q "ttp-signal-server-build-ok" /tmp/BUILD_OK
+          docker cp "$id":/out/bin/signalserverHD /tmp/signalserverHD
+          test -x /tmp/signalserverHD
+          # The -json flag is the whole reason this workflow exists.
+          # If our patch was silently dropped (e.g. by a force-push to
+          # the patch file), the binary will not advertise -json in
+          # any banner — but it should at least not crash with a parse
+          # error when invoked. Run with -json alone and a no-op set
+          # of args; expect non-zero exit (missing required flags) but
+          # no segfault.
+          set +e
+          /tmp/signalserverHD -json 2>&1 | head -n 10
+          rc=$?
+          set -e
+          # 0 (banner), 1, or 22/EINVAL are all acceptable. SIGSEGV
+          # (139) or SIGABRT (134) means the patch broke something.
+          if [ "$rc" -ge 128 ]; then
+            echo "FATAL: signalserverHD crashed with signal exit $rc"
+            exit 1
+          fi
+          echo "OK: patched binary runs (exit=$rc)"
