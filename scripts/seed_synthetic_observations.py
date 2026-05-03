@@ -106,9 +106,9 @@ def _sample_towers(n: int, rng: random.Random) -> List[Tower]:
     Antenna height defaults to 35 m (Anatel "Class B" baseline).
     EIRP defaults to 60 dBm (43 dBm Pt + 17 dBi Gt).
     """
-    from tower_db import TowerDB  # type: ignore[import-not-found]
+    from tower_db import TowerStore  # type: ignore[import-not-found]
 
-    db = TowerDB()
+    db = TowerStore()
     all_rows = list(db.list_all(limit=200_000))
     if not all_rows:
         raise SystemExit(
