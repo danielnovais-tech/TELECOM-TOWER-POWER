@@ -38,8 +38,10 @@ jobs:
       - name: Install Rust toolchain
         run: |
           set -euo pipefail
-          rustc --version || sudo apt-get update -qq
-          rustc --version || sudo apt-get install -y rustc cargo
+          if ! command -v cargo >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends rustc cargo
+          fi
           rustc --version
           cargo --version
 
@@ -52,9 +54,10 @@ jobs:
       - name: Build + publish rfsignals-cli
         env:
           PREFIX: ${{ runner.temp }}/rfsignals
+          S3_PUBLISH_URI: ${{ env.S3_PUBLISH_URI }}
         run: |
           set -euo pipefail
-          mkdir -p "$PREFIX"
+          mkdir -p "$PREFIX/bin"
           bash scripts/build_rf_signals.sh
           ls -la "$PREFIX/bin/rfsignals-cli"
 

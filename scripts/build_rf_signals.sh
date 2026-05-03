@@ -52,19 +52,27 @@ if [ -n "${S3_PUBLISH_URI:-}" ]; then
     short=${sha:0:12}
     sibling="${S3_PUBLISH_URI%/*}/rfsignals-cli-${short}"
 
-    # Public-read because the binary is built from this repo's
-    # clean-room sources only — no copyleft, no secret material.
-    # The container fetches it via plain HTTPS at boot, no AWS creds.
-    aws s3 cp "$bin_path" "$S3_PUBLISH_URI" \
-        --acl public-read \
-        --content-type application/octet-stream \
-        --cache-control "public, max-age=300" \
-        --metadata "sha256=$sha"
-    aws s3 cp "$bin_path" "$sibling" \
-        --acl public-read \
-        --content-type application/octet-stream \
-        --cache-control "public, max-age=31536000, immutable" \
-        --metadata "sha256=$sha"
+    # Upload with --acl public-read. If the bucket enforces
+    # BucketOwnerEnforced and rejects object ACLs, fall back to a
+    # no-ACL upload (the bucket policy on this bucket allows public
+    # GET for the bin/ prefix).
+    _s3_cp() {
+        local src="$1" dst="$2" cache="$3" sha="$4"
+        if aws s3 cp "$src" "$dst" \
+                --acl public-read \
+                --content-type application/octet-stream \
+                --cache-control "$cache" \
+                --metadata "sha256=$sha" 2>&1; then
+            return 0
+        fi
+        echo "WARN: --acl public-read rejected, retrying without ACL flag" >&2
+        aws s3 cp "$src" "$dst" \
+            --content-type application/octet-stream \
+            --cache-control "$cache" \
+            --metadata "sha256=$sha"
+    }
+    _s3_cp "$bin_path" "$S3_PUBLISH_URI"  "public, max-age=300"              "$sha"
+    _s3_cp "$bin_path" "$sibling"          "public, max-age=31536000, immutable" "$sha"
 
     echo "published: $S3_PUBLISH_URI (sha256=$sha)"
     echo "rollback : $sibling"
