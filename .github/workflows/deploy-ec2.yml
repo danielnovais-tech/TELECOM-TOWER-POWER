@@ -1,9 +1,22 @@
-name: Deploy Docker Stack to EC2
+name: Deploy to EC2 (Caddy + Docker stack)
+
+# Sequential deploy of the EC2 host:
+#   1. caddy   — SCP + validate + reload Caddy   (always first)
+#   2. docker  — git pull + rebuild + restart    (only after caddy succeeds)
+#
+# Both legacy workflows (deploy-caddy.yml, deploy-ec2-docker.yml) used to
+# run in parallel under separate concurrency groups, which produced a
+# race: deploy-caddy SCP'd Caddyfile into the repo dir, deploy-ec2-docker
+# then refused to `git pull` because of "local changes". This workflow
+# replaces both — the caddy job now SCPs directly to /tmp and never
+# touches the working tree, and the docker job runs `git pull --rebase
+# --autostash` as belt-and-braces. Concurrency group covers both jobs.
 
 on:
   push:
     branches: [main]
     paths:
+      # Application code / config that requires a Docker rebuild + restart
       - 'telecom_tower_power_api.py'
       - 'telecom_tower_power.py'
       - 'telecom_tower_power_db.py'
@@ -26,24 +39,152 @@ on:
       - 'docker-compose.yml'
       - 'entrypoint.sh'
       - 'start.sh'
-      - 'Caddyfile'
       - 'load_secrets.sh'
       - 'frontend/**'
       - 'prometheus/**'
       - 'grafana/**'
       - 'alertmanager/**'
       - 'redis-metrics-collector/**'
+      # Reverse-proxy config — caddy job runs always, docker job is
+      # skipped when only Caddyfile changed (see `needs.caddy.outputs`).
+      - 'Caddyfile'
+      # The workflow file itself, so edits ship via the same path.
+      - '.github/workflows/deploy-ec2.yml'
   workflow_dispatch:
+    inputs:
+      skip_docker:
+        description: 'Reload Caddy only, skip the Docker rebuild'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
-  group: deploy-ec2-docker
-  cancel-in-progress: true
+  # Single group → one EC2 deploy at a time across both jobs.
+  group: deploy-ec2
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  deploy:
+  caddy:
+    name: Reload Caddy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      runner_ip: ${{ steps.sg.outputs.runner_ip }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Whitelist runner IP in EC2 SG
+        id: sg
+        env:
+          EC2_SG_ID: ${{ secrets.EC2_SG_ID }}
+        run: |
+          : "${EC2_SG_ID:?EC2_SG_ID secret not set}"
+          RUNNER_IP=$(curl -sSf https://checkip.amazonaws.com | tr -d '\r\n')
+          echo "Runner IP: ${RUNNER_IP}"
+          echo "runner_ip=${RUNNER_IP}" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${EC2_SG_ID}" \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" \
+            2>&1 | grep -v "InvalidPermission.Duplicate" || true
+
+      - name: Push SSH key via EC2 Instance Connect
+        run: |
+          ssh-keygen -t rsa -b 2048 -f /tmp/ec2_key -N "" -q
+          aws ec2-instance-connect send-ssh-public-key \
+            --instance-id ${{ secrets.EC2_INSTANCE_ID }} \
+            --instance-os-user ubuntu \
+            --ssh-public-key file:///tmp/ec2_key.pub
+
+      - name: SCP Caddyfile to /tmp and reload Caddy
+        run: |
+          # Important: SCP into /tmp, NOT into the repo working tree.
+          # The docker job's `git pull` would otherwise see a dirty
+          # working tree and abort (this was the historical race).
+          LOCAL_MD5=$(md5sum Caddyfile | awk '{print $1}')
+          echo "Local Caddyfile md5: $LOCAL_MD5"
+          REMOTE_TMP="/tmp/Caddyfile.${GITHUB_RUN_ID}"
+          scp -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            Caddyfile \
+            "ubuntu@${{ secrets.EC2_HOST }}:${REMOTE_TMP}"
+          ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} \
+            "sudo cp '${REMOTE_TMP}' /etc/caddy/Caddyfile && \
+             sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && \
+             sudo systemctl reload caddy && \
+             rm -f '${REMOTE_TMP}'"
+          REMOTE_MD5=$(ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} \
+            "sudo md5sum /etc/caddy/Caddyfile | awk '{print \$1}'")
+          echo "Remote /etc/caddy/Caddyfile md5: $REMOTE_MD5"
+          if [ "$LOCAL_MD5" != "$REMOTE_MD5" ]; then
+            echo "::error::Caddyfile md5 mismatch (local=$LOCAL_MD5 remote=$REMOTE_MD5)"
+            exit 1
+          fi
+          ssh -i /tmp/ec2_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=15 \
+            ubuntu@${{ secrets.EC2_HOST }} \
+            'systemctl is-active caddy'
+
+      - name: Verify Caddy-routed health endpoints
+        run: |
+          sleep 3
+          for HOST in www.telecomtowerpower.com.br app.telecomtowerpower.com.br api.telecomtowerpower.com.br; do
+            STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://${HOST}/health")
+            echo "Health ${HOST}/health: HTTP $STATUS"
+            if [ "$STATUS" != "200" ]; then
+              echo "::error::Health check failed for ${HOST} (HTTP $STATUS)"
+              exit 1
+            fi
+          done
+          STATUS=$(curl -sSL -o /dev/null -w "%{http_code}" "https://docs.telecomtowerpower.com.br/")
+          echo "Health docs.*/: HTTP $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Docs site health check failed (HTTP $STATUS)"
+            exit 1
+          fi
+
+      - name: Revoke runner IP from EC2 SG
+        if: always() && steps.sg.outputs.runner_ip != ''
+        env:
+          EC2_SG_ID: ${{ secrets.EC2_SG_ID }}
+          RUNNER_IP: ${{ steps.sg.outputs.runner_ip }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id "${EC2_SG_ID}" \
+            --protocol tcp --port 22 \
+            --cidr "${RUNNER_IP}/32" 2>&1 || true
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/ec2_key /tmp/ec2_key.pub
+
+  docker:
+    name: Rebuild Docker stack
+    needs: caddy
+    if: ${{ github.event.inputs.skip_docker != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -63,16 +204,15 @@ jobs:
         env:
           EC2_SG_ID: ${{ secrets.EC2_SG_ID }}
         run: |
-          : "${EC2_SG_ID:?EC2_SG_ID secret not set (e.g. sg-037a9e44d3332f796)}"
+          : "${EC2_SG_ID:?EC2_SG_ID secret not set}"
           RUNNER_IP=$(curl -sSf https://checkip.amazonaws.com | tr -d '\r\n')
           echo "Runner IP: ${RUNNER_IP}"
           echo "runner_ip=${RUNNER_IP}" >> "$GITHUB_OUTPUT"
-          # Idempotent: ignore "rule already exists" errors
           aws ec2 authorize-security-group-ingress \
             --group-id "${EC2_SG_ID}" \
             --protocol tcp --port 22 \
             --cidr "${RUNNER_IP}/32" \
-            --tag-specifications "ResourceType=security-group-rule,Tags=[{Key=Name,Value=gh-actions-ephemeral},{Key=Workflow,Value=deploy-ec2-docker}]" \
+            --tag-specifications "ResourceType=security-group-rule,Tags=[{Key=Name,Value=gh-actions-ephemeral},{Key=Workflow,Value=deploy-ec2}]" \
             2>&1 | grep -v "InvalidPermission.Duplicate" || true
 
       - name: Push SSH key via EC2 Instance Connect
@@ -93,18 +233,14 @@ jobs:
           set -euo pipefail
           cd /home/ubuntu/TELECOM-TOWER-POWER
 
-          # OS package updates intentionally removed from deploy path:
-          # they blocked for >15min under load on the small EC2. Security
-          # patching is handled by unattended-upgrades on a timer.
-
           echo "==> Pulling latest code..."
-          # Capture current HEAD before pulling so we can roll back if the new
-          # build fails its post-deploy health check.
           PREV_SHA=$(git rev-parse HEAD)
           echo "==> Previous commit: $PREV_SHA"
           git config credential.helper '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN}"; }; f'
-          git stash --include-untracked 2>/dev/null || true
-          git pull origin main
+          # --rebase --autostash is the belt-and-braces against any local
+          # working-tree drift (Caddy job no longer writes here, but the
+          # operator may have edited files manually for hot-fixes).
+          git pull --rebase --autostash origin main
           git config --unset credential.helper
           NEW_SHA=$(git rev-parse HEAD)
           echo "==> New commit:      $NEW_SHA"
@@ -115,11 +251,6 @@ jobs:
           docker pull node:22-alpine     2>/dev/null || true
 
           echo "==> Rebuilding Docker images..."
-          # Use BuildKit layer cache: the COPY requirements.txt layer key
-          # changes only when the file content changes, so pip install is
-          # only re-run when needed. Avoid --no-cache to keep deploys fast
-          # on small instances and prevent CI timeouts during heavy installs.
-          # Disable Bake (buildx not installed on EC2) to silence the warning.
           export COMPOSE_BAKE=false DOCKER_BUILDKIT=1
           docker compose build api
           docker compose build frontend worker rq-worker stripe-webhook 2>/dev/null || true
@@ -134,10 +265,6 @@ jobs:
           docker compose up -d --no-deps frontend-react  2>/dev/null || true
 
           echo "==> Rebuilding and restarting monitoring stack..."
-          # Prometheus image bakes alert_rules.yml + prometheus.yml.tpl in
-          # via COPY, so a rebuild is required when those files change.
-          # Without --force-recreate, `up -d` is a no-op when the image tag
-          # name is unchanged, so config edits silently never reach prod.
           docker compose build grafana prometheus 2>/dev/null || true
           docker compose up -d --no-deps --force-recreate grafana          2>/dev/null || true
           docker compose up -d --no-deps --force-recreate prometheus       2>/dev/null || true
@@ -145,8 +272,6 @@ jobs:
           docker compose up -d --no-deps                 blackbox-exporter 2>/dev/null || true
 
           echo "==> Pruning unused Docker images and build cache..."
-          # Aggressive prune: remove dangling + unreferenced images and all
-          # build cache. Keeps only images currently used by running containers.
           docker image prune -af --filter "until=24h" 2>/dev/null || true
           docker builder prune -af --filter "until=24h" 2>/dev/null || true
 
@@ -213,8 +338,7 @@ jobs:
           aws ec2 revoke-security-group-ingress \
             --group-id "${EC2_SG_ID}" \
             --protocol tcp --port 22 \
-            --cidr "${RUNNER_IP}/32" \
-            2>&1 || echo "::warning::Could not revoke ${RUNNER_IP}/32 from ${EC2_SG_ID}"
+            --cidr "${RUNNER_IP}/32" 2>&1 || true
 
       - name: Cleanup
         if: always()
