@@ -32,6 +32,7 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
     conda install -y gdal numpy && \
     git clone https://github.com/edwardoughton/itmlogic.git /opt/itmlogic && \
+    pip install vcs_versioning && \
     cd /opt/itmlogic && python setup.py install && \
     conda clean -afy
 
