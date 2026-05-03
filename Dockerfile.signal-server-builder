@@ -36,18 +36,30 @@ FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update -qq \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        git \
-        cmake \
-        g++ \
-        build-essential \
-        libbz2-dev \
-        libspdlog-dev \
-        zlib1g-dev \
-        imagemagick \
-        sudo \
+# apt-get retry shim — GitHub runners occasionally see archive.ubuntu.com
+# time out mid-fetch, which fails the whole `apt-get install`. Up to
+# 5 attempts with progressive backoff covers the typical flake window.
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
+    && echo 'Acquire::http::Timeout "30";' >> /etc/apt/apt.conf.d/80-retries \
+    && echo 'Acquire::https::Timeout "30";' >> /etc/apt/apt.conf.d/80-retries
+
+RUN for i in 1 2 3 4 5; do \
+        apt-get update -qq && break || { echo "apt-get update attempt $i failed; sleeping"; sleep $((i*5)); }; \
+    done \
+    && for i in 1 2 3 4 5; do \
+        apt-get install -y --no-install-recommends \
+            ca-certificates \
+            git \
+            cmake \
+            g++ \
+            build-essential \
+            libbz2-dev \
+            libspdlog-dev \
+            zlib1g-dev \
+            imagemagick \
+            sudo \
+        && break || { echo "apt-get install attempt $i failed; sleeping"; sleep $((i*10)); }; \
+    done \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
