@@ -47,6 +47,7 @@ COPY itu_p1812.py .
 COPY observation_store.py .
 COPY stripe_billing.py .
 COPY stripe_webhook_service.py .
+COPY offline_mode.py .
 COPY tower_db.py .
 COPY job_store.py .
 COPY repeater_jobs_store.py .
