@@ -27,7 +27,7 @@ on:
       fail_on_flagged:
         description: "Fail the job (and open an issue) if any site is flagged"
         required: false
-        default: "true"
+        default: "false"
 
 permissions:
   contents: read
@@ -41,7 +41,7 @@ jobs:
       PLANET_API_KEY: ${{ secrets.PLANET_API_KEY }}
       BUFFER_KM: ${{ github.event.inputs.buffer_km || '2' }}
       SINCE_DAYS: ${{ github.event.inputs.since_days || '7' }}
-      FAIL_ON_FLAGGED: ${{ github.event.inputs.fail_on_flagged || 'true' }}
+      FAIL_ON_FLAGGED: ${{ github.event.inputs.fail_on_flagged || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
