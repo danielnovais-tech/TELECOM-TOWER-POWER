@@ -28,7 +28,9 @@ RUN wget -qO /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-la
     bash /tmp/miniconda.sh -b -p "$CONDA_DIR" && \
     rm -f /tmp/miniconda.sh
 
-RUN conda install -y gdal numpy && \
+RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
+    conda install -y gdal numpy && \
     git clone https://github.com/edwardoughton/itmlogic.git /opt/itmlogic && \
     cd /opt/itmlogic && python setup.py install && \
     conda clean -afy
