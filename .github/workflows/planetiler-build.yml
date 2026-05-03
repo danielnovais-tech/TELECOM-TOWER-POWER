@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Planetiler — monthly Brazil vector-tile build.
+#
+# Generates brazil.pmtiles (single-file PMTiles archive built from
+# OpenStreetMap via the OpenMapTiles profile) and uploads it to
+# s3://telecom-tower-power-results/tiles/brazil.pmtiles.
+#
+# Caddy serves /tiles/* by reverse-proxy to that S3 path so the SPA
+# (and any external maplibre client) can fetch the tiles via stable
+# https://www.telecomtowerpower.com.br/tiles/brazil.pmtiles URLs.
+# PMTiles uses HTTP Range requests, which S3 supports natively.
+#
+# Cadence: 1st of each month at 03:00 UTC. OSM data churn is slow
+# enough that more frequent rebuilds are wasteful; manual dispatch
+# is available for ad-hoc rebuilds (e.g. after a major OSM import).
+name: planetiler-build
+
+on:
+  schedule:
+    - cron: "0 3 1 * *"   # 03:00 UTC, day 1 of each month
+  workflow_dispatch:
+    inputs:
+      planetiler_version:
+        description: "Planetiler release tag (without v prefix)"
+        required: false
+        default: "0.8.4"
+      area:
+        description: "Planetiler --area value"
+        required: false
+        default: "brazil"
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: sa-east-1
+  S3_DEST: s3://telecom-tower-power-results/tiles/brazil.pmtiles
+  PLANETILER_VERSION: ${{ github.event.inputs.planetiler_version || '0.8.4' }}
+  AREA: ${{ github.event.inputs.area || 'brazil' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Free disk space
+        run: |
+          # Planetiler needs ~10 GB free for OSM PBF + scratch space.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Build Brazil PMTiles
+        env:
+          OUT_DIR: ./tiles
+        run: |
+          set -euo pipefail
+          # Drive script via env vars so the workflow stays declarative.
+          export PLANETILER_VERSION="$PLANETILER_VERSION"
+          # The script defaults --area=brazil; override via env if needed.
+          if [ "$AREA" != "brazil" ]; then
+            export PLANETILER_AREA="$AREA"
+          fi
+          bash scripts/planetiler_build.sh
+          ls -lh "$OUT_DIR/brazil.pmtiles"
+          # Sanity: PMTiles starts with magic bytes "PMTiles"
+          # (header bytes 0..6 = 0x50 0x4d 0x54 0x69 0x6c 0x65 0x73).
+          head -c 7 "$OUT_DIR/brazil.pmtiles" | xxd | head -1
+          SIZE=$(stat -c%s "$OUT_DIR/brazil.pmtiles")
+          if [ "$SIZE" -lt $((50 * 1024 * 1024)) ]; then
+            echo "::error::brazil.pmtiles is only ${SIZE} bytes — build likely failed"
+            exit 1
+          fi
+          echo "PMTILES_SIZE=$SIZE" >> "$GITHUB_ENV"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload to S3
+        run: |
+          set -euo pipefail
+          # Stamp a timestamped copy alongside :latest so we can roll back
+          # if a future build is broken without re-running Planetiler.
+          TS=$(date -u +%Y%m%d)
+          ARCHIVE="s3://telecom-tower-power-results/tiles/archive/brazil-${TS}.pmtiles"
+          aws s3 cp "tiles/brazil.pmtiles" "$ARCHIVE" \
+            --cache-control "public,max-age=31536000,immutable" \
+            --content-type "application/octet-stream"
+          aws s3 cp "tiles/brazil.pmtiles" "$S3_DEST" \
+            --cache-control "public,max-age=2592000" \
+            --content-type "application/octet-stream"
+          echo "Uploaded ${PMTILES_SIZE} bytes to ${S3_DEST}"
+          echo "Archive: ${ARCHIVE}"
+
+      - name: Prune archive (keep last 6)
+        run: |
+          set -euo pipefail
+          LISTING=$(aws s3 ls s3://telecom-tower-power-results/tiles/archive/ \
+            | awk '{print $4}' | sort | grep -E '^brazil-[0-9]{8}\.pmtiles$' || true)
+          COUNT=$(echo "$LISTING" | grep -c . || echo 0)
+          if [ "$COUNT" -gt 6 ]; then
+            DELETE=$(echo "$LISTING" | head -n $((COUNT - 6)))
+            for f in $DELETE; do
+              aws s3 rm "s3://telecom-tower-power-results/tiles/archive/$f"
+            done
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Planetiler build" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Area: $AREA" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Planetiler: $PLANETILER_VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Size: ${PMTILES_SIZE:-?} bytes" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Latest: $S3_DEST" >> "$GITHUB_STEP_SUMMARY"

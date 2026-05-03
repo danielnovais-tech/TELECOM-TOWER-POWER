@@ -31,6 +31,32 @@
                 file_server
         }
 
+        # ── /tiles/* → Planetiler PMTiles on S3 ──
+        # The monthly planetiler-build workflow uploads brazil.pmtiles to
+        # s3://telecom-tower-power-results/tiles/. Caddy reverse-proxies
+        # any /tiles/* request to the bucket so the SPA can fetch a
+        # stable origin URL (HTTP Range requests for PMTiles work
+        # natively over S3).
+        #
+        # Required bucket policy (one-time, manual): allow public
+        # s3:GetObject on arn:aws:s3:::telecom-tower-power-results/tiles/*.
+        # Without it Caddy will simply forward S3's 403.
+        @tiles path /tiles/*
+        handle @tiles {
+                # Strip /tiles/ prefix so /tiles/brazil.pmtiles → /tiles/brazil.pmtiles
+                # on the bucket (object key already starts with tiles/).
+                header {
+                        Access-Control-Allow-Origin "*"
+                        Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+                        Access-Control-Allow-Headers "Range, If-Match, If-None-Match"
+                        Access-Control-Expose-Headers "Content-Length, Content-Range, ETag, Accept-Ranges"
+                        Cache-Control "public, max-age=2592000"
+                }
+                reverse_proxy https://telecom-tower-power-results.s3.sa-east-1.amazonaws.com {
+                        header_up Host telecom-tower-power-results.s3.sa-east-1.amazonaws.com
+                }
+        }
+
         # ── www / app frontend: selective API routing + React SPA ──
         @api_routes path /api/* /health* /calculate* /towers* /batch* /jobs* /docs* /openapi.json /stripe* /usage* /api-key* /signup/free /signup/checkout /signup/status /login* /profile* /portal* /analyze* /plan_repeater* /export_report* /bedrock* /coverage* /srtm* /tenant* /admin/sales/overview* /admin/sales/tenants/* /admin/impersonate/*
 
