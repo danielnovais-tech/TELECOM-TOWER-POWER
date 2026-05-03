@@ -243,40 +243,68 @@ fi
 
 # rfsignals-cli (clean-room Rust empirical-models binary). Optional.
 # When RF_SIGNALS_S3_URL is set, fetch the binary into a writable path
-# and export RF_SIGNALS_BIN so the Python adapter resolves it. The
-# binary is published as public-read by the rf-signals-publish CI
-# workflow, so no AWS creds are required at boot. SHA-256 verification
-# happens when RF_SIGNALS_S3_SHA256 is also set (recommended for prod).
+# and export RF_SIGNALS_BIN so the Python adapter resolves it.
+# Accepts s3://bucket/key (private, downloaded via boto3) or https:// URL
+# (public, downloaded via curl). SHA-256 verification when
+# RF_SIGNALS_S3_SHA256 is also set (recommended for prod).
 if [ -n "${RF_SIGNALS_S3_URL:-}" ]; then
     _RFS_DIR="${RF_SIGNALS_BIN_DIR:-/opt/rfsignals}"
     _RFS_BIN="$_RFS_DIR/rfsignals-cli"
+    _RFS_TMP="$_RFS_BIN.tmp"
     mkdir -p "$_RFS_DIR" 2>/dev/null || true
-    if command -v curl >/dev/null 2>&1; then
-        echo "Fetching rfsignals-cli from ${RF_SIGNALS_S3_URL} (60s timeout)..."
-        if curl -fsSL --max-time 60 -o "$_RFS_BIN.tmp" "$RF_SIGNALS_S3_URL"; then
-            if [ -n "${RF_SIGNALS_S3_SHA256:-}" ] && command -v sha256sum >/dev/null 2>&1; then
-                _got=$(sha256sum "$_RFS_BIN.tmp" | awk '{print $1}')
-                if [ "$_got" != "$RF_SIGNALS_S3_SHA256" ]; then
-                    echo "WARN: rfsignals-cli sha256 mismatch (got=$_got expected=$RF_SIGNALS_S3_SHA256), discarding"
-                    rm -f "$_RFS_BIN.tmp"
-                    _RFS_BIN=""
+    echo "Fetching rfsignals-cli from ${RF_SIGNALS_S3_URL} ..."
+    _dl_ok=0
+    case "${RF_SIGNALS_S3_URL}" in
+        s3://*)
+            # Private bucket — use boto3 (no aws CLI in image).
+            _RFS_DL_CMD='import os, boto3
+from urllib.parse import urlparse
+u = urlparse(os.environ["RF_SIGNALS_S3_URL"])
+boto3.client("s3").download_file(u.netloc, u.path.lstrip("/"), os.environ["_RFS_TMP"])
+print("Downloaded", os.path.getsize(os.environ["_RFS_TMP"]), "bytes", flush=True)'
+            export _RFS_TMP
+            if timeout 120 python -c "$_RFS_DL_CMD"; then
+                _dl_ok=1
+            else
+                echo "WARN: rfsignals-cli boto3 download failed, engine stays unavailable"
+            fi
+            unset _RFS_DL_CMD
+            ;;
+        https://*|http://*)
+            # Public URL — use curl.
+            if command -v curl >/dev/null 2>&1; then
+                if curl -fsSL --max-time 60 -o "$_RFS_TMP" "$RF_SIGNALS_S3_URL"; then
+                    _dl_ok=1
+                else
+                    echo "WARN: rfsignals-cli curl download failed, engine stays unavailable"
+                    rm -f "$_RFS_TMP" 2>/dev/null || true
                 fi
-                unset _got
+            else
+                echo "WARN: curl not available in image, cannot fetch rfsignals-cli via HTTP"
             fi
-            if [ -n "${_RFS_BIN:-}" ] && [ -f "$_RFS_BIN.tmp" ]; then
-                chmod 0755 "$_RFS_BIN.tmp"
-                mv -f "$_RFS_BIN.tmp" "$_RFS_BIN"
-                export RF_SIGNALS_BIN="$_RFS_BIN"
-                echo "rfsignals-cli ready: $RF_SIGNALS_BIN ($(stat -c%s "$_RFS_BIN" 2>/dev/null || echo "?") bytes)"
+            ;;
+        *)
+            echo "WARN: unrecognised RF_SIGNALS_S3_URL scheme, skipping download"
+            ;;
+    esac
+    if [ "$_dl_ok" = "1" ] && [ -f "$_RFS_TMP" ]; then
+        if [ -n "${RF_SIGNALS_S3_SHA256:-}" ] && command -v sha256sum >/dev/null 2>&1; then
+            _got=$(sha256sum "$_RFS_TMP" | awk '{print $1}')
+            if [ "$_got" != "$RF_SIGNALS_S3_SHA256" ]; then
+                echo "WARN: rfsignals-cli sha256 mismatch (got=$_got expected=$RF_SIGNALS_S3_SHA256), discarding"
+                rm -f "$_RFS_TMP"
+                _dl_ok=0
             fi
-        else
-            echo "WARN: rfsignals-cli download failed, engine stays unavailable"
-            rm -f "$_RFS_BIN.tmp" 2>/dev/null || true
+            unset _got
         fi
-    else
-        echo "WARN: curl not available in image, cannot fetch rfsignals-cli"
     fi
-    unset _RFS_DIR _RFS_BIN
+    if [ "$_dl_ok" = "1" ] && [ -f "$_RFS_TMP" ]; then
+        chmod 0755 "$_RFS_TMP"
+        mv -f "$_RFS_TMP" "$_RFS_BIN"
+        export RF_SIGNALS_BIN="$_RFS_BIN"
+        echo "rfsignals-cli ready: $RF_SIGNALS_BIN ($(stat -c%s "$_RFS_BIN" 2>/dev/null || echo "?") bytes)"
+    fi
+    unset _RFS_DIR _RFS_BIN _RFS_TMP _dl_ok
 fi
 
 if [ "${SERVICE_TYPE:-}" = "webhook" ]; then

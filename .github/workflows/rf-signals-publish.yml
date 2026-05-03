@@ -61,16 +61,12 @@ jobs:
           bash scripts/build_rf_signals.sh
           ls -la "$PREFIX/bin/rfsignals-cli"
 
-      - name: Smoke test (HEAD on published object)
+      - name: Smoke test (head-object on published key)
         run: |
           set -euo pipefail
-          # Allow up to ~2 min for S3 to expose the object.
-          for i in 1 2 3 4 5 6 7 8; do
-            if curl -fsSI "https://telecom-tower-power-results.s3.${AWS_REGION}.amazonaws.com/bin/rfsignals-cli" >/dev/null; then
-              echo "object reachable on attempt $i"
-              exit 0
-            fi
-            sleep $((i*5))
-          done
-          echo "::error::published object did not become reachable" >&2
-          exit 1
+          # Bucket is private (BucketOwnerEnforced); verify via authenticated API.
+          aws s3api head-object \
+            --bucket telecom-tower-power-results \
+            --key bin/rfsignals-cli \
+            --region "$AWS_REGION"
+          echo "object present (head-object ok)"
