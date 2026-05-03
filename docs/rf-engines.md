@@ -135,6 +135,15 @@ engine whose binary is on `$PATH` (or whose explicit env var resolves).
   re-runs a golden link set through every available engine and opens
   a regression issue if any engine drifts > 3 dB vs. the previous run.
   Golden links live under [tests/data/coverage_diff_links.json](../tests/data/coverage_diff_links.json).
+* **Weekly satellite-change robot**:
+  [.github/workflows/satellite-change.yml](../.github/workflows/satellite-change.yml)
+  uses [scripts/satellite_change_robot.py](../scripts/satellite_change_robot.py)
+  to scan each tower's footprint against fresh Planet Labs PSScene
+  imagery (Data API quick-search), flagging sites with cloud-free
+  scenes since the last run so the operator knows to refresh
+  predictions. Requires the `PLANET_API_KEY` repo secret; without it
+  the robot still runs and emits an empty `no-api-key` report.
+  Tested in [test_satellite_change_robot.py](../test_satellite_change_robot.py).
 
 ## Adding a new engine
 

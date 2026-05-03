@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: LicenseRef-TTP-Proprietary
+# Satellite-change robot.
+#
+# Weekly job that scans every active tower's footprint against fresh
+# Planet Labs PSScene imagery to detect ground changes (new buildings,
+# deforestation, vegetation regrowth) that may have invalidated our
+# cached RF predictions.
+#
+# Auth: set the `PLANET_API_KEY` repository secret. Without it the
+# robot still runs and emits an empty report (no-api-key) so the
+# workflow stays green while the secret is wired.
+name: satellite-change
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"   # 07:00 UTC Monday = 04:00 BRT
+  workflow_dispatch:
+    inputs:
+      buffer_km:
+        description: "Buffer around each site (km)"
+        required: false
+        default: "2"
+      since_days:
+        description: "Look-back window in days"
+        required: false
+        default: "7"
+      fail_on_flagged:
+        description: "Fail the job (and open an issue) if any site is flagged"
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+  issues: write   # to open a change-detected issue
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PLANET_API_KEY: ${{ secrets.PLANET_API_KEY }}
+      BUFFER_KM: ${{ github.event.inputs.buffer_km || '2' }}
+      SINCE_DAYS: ${{ github.event.inputs.since_days || '7' }}
+      FAIL_ON_FLAGGED: ${{ github.event.inputs.fail_on_flagged || 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compute --since cutoff
+        id: cutoff
+        run: |
+          since=$(python -c "import datetime as d; print((d.datetime.now(d.timezone.utc)-d.timedelta(days=${SINCE_DAYS})).isoformat(timespec='seconds'))")
+          echo "since=$since" >> "$GITHUB_OUTPUT"
+
+      - name: Run satellite-change robot
+        run: |
+          mkdir -p artifacts
+          flag_arg=""
+          if [ "$FAIL_ON_FLAGGED" = "true" ]; then flag_arg="--fail-on-flagged"; fi
+          python scripts/satellite_change_robot.py \
+            --sites-csv tests/data/satellite_change_sites.csv \
+            --since "${{ steps.cutoff.outputs.since }}" \
+            --buffer-km "$BUFFER_KM" \
+            --output artifacts/satellite_change.json \
+            $flag_arg
+
+      - name: Upload report artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satellite-change-${{ github.run_id }}
+          path: artifacts/satellite_change.json
+          if-no-files-found: error
+
+      - name: Open change-detected issue (on failure)
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = "Satellite-change robot detected new clear imagery over one or more towers.\n\n";
+            body += "Re-run RF predictions for the flagged sites and refresh `coverage_predict` caches.\n\n";
+            try {
+              body += "```json\n" + fs.readFileSync('artifacts/satellite_change.json', 'utf8') + "\n```";
+            } catch (e) { body += "(no report file)"; }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `satellite-change flagged sites on ${new Date().toISOString().slice(0,10)}`,
+              body,
+              labels: ['satellite-change', 'rf-engines'],
+            });
