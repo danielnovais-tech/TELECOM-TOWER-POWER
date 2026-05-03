@@ -58,14 +58,14 @@ jobs:
         continue-on-error: true
         run: bash scripts/build_signal_server.sh "$HOME/.local"
 
-      # rf-signals: intentionally NOT built in CI — upstream is
-      # unmaintained (5y), GPL-2.0, requires nightly Rust 2020. The
-      # registry tolerates an unavailable engine; revive when a fork
-      # exists. See docs/rf-engines.md.
+      - name: Build rf-signals (clean-room Rust)
+        continue-on-error: true
+        run: bash scripts/build_rf_signals.sh "$HOME/.local"
 
       - name: Run coverage diff
         env:
           SIGNAL_SERVER_BIN: ${{ github.workspace }}/../.local/bin/signalserverHD
+          RF_SIGNALS_BIN: ${{ github.workspace }}/../.local/bin/rfsignals-cli
         run: |
           python scripts/coverage_diff_robot.py \
             --links tests/data/coverage_diff_links.json \

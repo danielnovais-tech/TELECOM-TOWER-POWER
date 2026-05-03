@@ -94,9 +94,9 @@ class RfSignalsEngine(RFEngine):
             return None
 
         payload = {
-            # Schema mirrors a future rfsignals-cli `predict-loss`
-            # subcommand (see docs/rf-engines.md for the revival plan).
-            # Distances in km, heights AGL/AMSL in m, freq Hz.
+            # Schema matches the rfsignals-cli `predict-loss` command
+            # (see rf_signals/src/main.rs). Distances in km, heights
+            # AGL/AMSL in m, frequency Hz.
             "command": "predict-loss",
             "frequency_hz": float(f_hz),
             "distances_km": d_list,
