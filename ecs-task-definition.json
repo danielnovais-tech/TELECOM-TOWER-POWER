@@ -117,6 +117,14 @@
           "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-priority-prod"
         },
         {
+          "name": "BATCH_JOB_QUEUE_GPU",
+          "value": "arn:aws:batch:sa-east-1:490083271496:job-queue/jq-sionna-rt"
+        },
+        {
+          "name": "BATCH_JOB_DEFINITION_GPU",
+          "value": "sionna-rt-worker"
+        },
+        {
           "name": "COGNITO_REGION",
           "value": "sa-east-1"
         },
