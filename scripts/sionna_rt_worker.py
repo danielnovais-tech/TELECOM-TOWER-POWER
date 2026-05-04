@@ -285,10 +285,12 @@ class _SionnaRtTracer:
 
     Construction validates that the GPU stack is importable and fails
     loud otherwise — so a misconfigured ``$SIONNA_RT_BACKEND=sionna_rt``
-    is caught at boot, not mid-trace. The actual ``.trace()`` body is
-    deferred to Tijolo 8: today it raises ``NotImplementedError`` so
-    a half-wired prod can never silently ship FSPL numbers under the
-    Sionna label.
+    is caught at boot, not mid-trace.
+
+    Tijolo 8: ``.trace()`` now wires Mitsuba ``load_file`` + Sionna RT
+    ``PathSolver``. The actual GPU validation happens once ops rolls
+    a CUDA-capable instance — until then this code path is exercised
+    via mocked ``mitsuba`` / ``sionna_rt`` modules in tests.
     """
 
     name = "sionna_rt"
@@ -311,12 +313,149 @@ class _SionnaRtTracer:
                 "SIONNA_RT_BACKEND=fspl_stub."
             )
 
-    def trace(self, scene_dir: str, job: "Job") -> "Any":  # noqa: ARG002
-        raise NotImplementedError(
-            "sionna_rt tracer not yet implemented — Tijolo 8 wires "
-            "Mitsuba load_file + Sionna PathSolver. Use "
-            "SIONNA_RT_BACKEND=fspl_stub until then."
+    def trace(self, scene_dir: str, job: "Job") -> "Any":
+        import math
+        import mitsuba as mi  # type: ignore[import-not-found]
+        import numpy as np  # type: ignore[import-not-found]
+        import sionna_rt as srt  # type: ignore[import-not-found]
+
+        manifest = _load_manifest(scene_dir)
+        scene_xml = _resolve_scene_xml(scene_dir)
+
+        # Mitsuba variant: pick the best one available; ops may pin via
+        # $MITSUBA_VARIANT (e.g. force CPU on a GPU box for repro work).
+        variant = _select_mitsuba_variant(mi)
+        mi.set_variant(variant)
+
+        # Local-frame origin matches the scene-builder (mitsuba_scene.py:
+        # bbox centroid, equirectangular projection). Re-derive here so
+        # the worker stays decoupled from that module.
+        bbox = manifest.get("bbox") or [
+            job.bbox_south, job.bbox_west, job.bbox_north, job.bbox_east,
+        ]
+        m_south, m_west, m_north, m_east = (float(b) for b in bbox)
+        lon0 = (m_west + m_east) / 2.0
+        lat0 = (m_south + m_north) / 2.0
+        R = 6_371_008.8
+        cos_lat0 = math.cos(math.radians(lat0))
+
+        def _proj(lat: float, lon: float) -> tuple[float, float]:
+            x = math.radians(lon - lon0) * R * cos_lat0
+            y = math.radians(lat - lat0) * R
+            return x, y
+
+        scene = srt.load_scene(scene_xml)
+        scene.frequency = float(job.frequency_hz)
+        # Isotropic single-element TX/RX arrays: per-pixel coverage map
+        # values are antenna-independent path gain.
+        scene.tx_array = srt.PlanarArray(
+            num_rows=1, num_cols=1, pattern="iso", polarization="V",
         )
+        scene.rx_array = srt.PlanarArray(
+            num_rows=1, num_cols=1, pattern="iso", polarization="V",
+        )
+
+        tx_x, tx_y = _proj(job.tx_lat, job.tx_lon)
+        scene.add(srt.Transmitter(
+            name="tx", position=[tx_x, tx_y, float(job.tx_height_m)],
+        ))
+
+        # Receiver-grid coverage map over the requested raster bbox.
+        west_x, south_y = _proj(job.bbox_south, job.bbox_west)
+        east_x, north_y = _proj(job.bbox_north, job.bbox_east)
+        centre_x = (west_x + east_x) / 2.0
+        centre_y = (south_y + north_y) / 2.0
+        width = east_x - west_x
+        height = north_y - south_y
+        cell_w = width / float(job.cols)
+        cell_h = height / float(job.rows)
+
+        max_depth = int(os.getenv("SIONNA_RT_MAX_DEPTH", "5"))
+        samples = int(os.getenv("SIONNA_RT_SAMPLES", "1000000"))
+        rx_height = float(os.getenv("SIONNA_RT_RX_HEIGHT_M", "1.5"))
+
+        solver = srt.PathSolver()
+        cm = solver(
+            scene=scene,
+            max_depth=max_depth,
+            samples_per_tx=samples,
+            cell_size=(cell_w, cell_h),
+            center=[centre_x, centre_y, rx_height],
+            orientation=[0.0, 0.0, 0.0],
+            size=[width, height],
+        )
+
+        # path_gain: linear gain per cell. Convert to basic loss in dB.
+        path_gain = np.asarray(cm.path_gain).reshape(job.rows, job.cols)
+        path_gain = np.maximum(path_gain, 1e-30)  # avoid log(0)
+        loss_db = (-10.0 * np.log10(path_gain)).astype("float32")
+        return loss_db
+
+
+# ── Tracer helpers ───────────────────────────────────────────────
+
+def _load_manifest(scene_dir: str) -> dict:
+    """Read ``manifest.json`` from ``scene_dir``.
+
+    Raises ``FileNotFoundError`` if missing, ``ValueError`` if malformed.
+    The manifest is the contract between the scene-builder and the
+    tracer; refusing to proceed without it prevents silent local-frame
+    drift between TX placement and the receiver grid.
+    """
+    path = os.path.join(scene_dir, "manifest.json")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"manifest.json missing under {scene_dir}")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except json.JSONDecodeError as ex:
+        raise ValueError(f"manifest.json malformed: {ex}") from ex
+
+
+def _resolve_scene_xml(scene_dir: str) -> str:
+    """Return the absolute path to ``scene.xml`` inside ``scene_dir``."""
+    path = os.path.join(scene_dir, "scene.xml")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"scene.xml missing under {scene_dir}")
+    return path
+
+
+# Preference order matches mitsuba's own recommendation: GPU > CPU JIT
+# > scalar (last-resort, much slower). ``scalar_rgb`` is included so
+# laptop/CI runs that lack LLVM still work.
+_MITSUBA_VARIANT_PREFERENCE = (
+    "cuda_ad_rgb",
+    "llvm_ad_rgb",
+    "scalar_rgb",
+)
+
+
+def _select_mitsuba_variant(mi) -> str:
+    """Pick the best available Mitsuba variant.
+
+    Honours ``$MITSUBA_VARIANT`` if set (must be in
+    ``mi.variants()``). Otherwise picks the first preference that's
+    available. Raises ``RuntimeError`` when none of the preferred
+    variants are compiled into the local Mitsuba — better to fail at
+    boot than to dispatch a job that will explode later.
+    """
+    available = list(mi.variants())
+    pinned = os.getenv("MITSUBA_VARIANT")
+    if pinned:
+        if pinned not in available:
+            raise RuntimeError(
+                f"$MITSUBA_VARIANT={pinned!r} is not available in this "
+                f"Mitsuba build. Available: {available}"
+            )
+        return pinned
+    for v in _MITSUBA_VARIANT_PREFERENCE:
+        if v in available:
+            return v
+    raise RuntimeError(
+        "no supported Mitsuba variant available. "
+        f"Wanted any of {list(_MITSUBA_VARIANT_PREFERENCE)}, "
+        f"got {available}"
+    )
 
 
 _TRACERS = {
