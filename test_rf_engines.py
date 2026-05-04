@@ -363,5 +363,12 @@ def _patch_sionna_rt(monkeypatch, *, loss_db=None, exc=None, capture=None):
         Receiver=_fake_receiver,
         PathSolver=_FakePathSolver,
     )
+    # Inject under both PyPI 2.x layout (``sionna.rt``) and legacy 1.x
+    # layout (``sionna_rt``) so whichever import path the engine takes
+    # first hits the fake without touching the real wheel.
+    fake_sionna = types.ModuleType("sionna")
+    fake_sionna.rt = fake_srt  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sionna", fake_sionna)
+    monkeypatch.setitem(sys.modules, "sionna.rt", fake_srt)
     monkeypatch.setitem(sys.modules, "sionna_rt", fake_srt)
 

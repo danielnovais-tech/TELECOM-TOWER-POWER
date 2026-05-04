@@ -99,14 +99,46 @@ def _scene_path() -> str:
 
 
 def _has_gpu_stack() -> bool:
-    """Return True if mitsuba + sionna_rt are importable."""
-    for mod in ("mitsuba", "sionna_rt"):
-        if mod not in sys.modules:
-            try:
-                __import__(mod)
-            except ImportError:
-                return False
-    return True
+    """Return True if mitsuba + sionna RT are importable.
+
+    The PyPI ``sionna-rt`` 2.x wheel exposes the package as
+    ``sionna.rt`` (sub-module of ``sionna``), but the original Sionna
+    1.x convention used a top-level ``sionna_rt`` package — and some
+    redistributions still ship under that name. We accept either:
+    first try ``sionna.rt``, then fall back to ``sionna_rt``.
+    """
+    if "mitsuba" not in sys.modules:
+        try:
+            __import__("mitsuba")
+        except ImportError:
+            return False
+    if "sionna_rt" in sys.modules or "sionna.rt" in sys.modules:
+        return True
+    try:
+        __import__("sionna.rt")
+        return True
+    except ImportError:
+        pass
+    try:
+        __import__("sionna_rt")
+        return True
+    except ImportError:
+        return False
+
+
+def _import_sionna_rt():
+    """Return the active ``sionna.rt`` / ``sionna_rt`` module.
+
+    Mirrors :func:`_has_gpu_stack` resolution order so engine code
+    can do ``srt = _import_sionna_rt()`` once and use the same
+    handle regardless of which wheel was installed.
+    """
+    try:
+        import sionna.rt as srt  # type: ignore[import-not-found]
+        return srt
+    except ImportError:
+        import sionna_rt as srt  # type: ignore[import-not-found]
+        return srt
 
 
 class SionnaRTEngine(RFEngine):
@@ -208,7 +240,7 @@ class SionnaRTEngine(RFEngine):
 
         import mitsuba as mi          # type: ignore[import-not-found]
         import numpy as np            # type: ignore[import-not-found]
-        import sionna_rt as srt       # type: ignore[import-not-found]
+        srt = _import_sionna_rt()
 
         # Worker helpers: manifest parsing, scene.xml lookup, variant selection.
         # Lazy import keeps this module importable on CPU hosts without numpy.

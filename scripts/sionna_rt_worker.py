@@ -301,15 +301,22 @@ class _SionnaRtTracer:
             import mitsuba  # type: ignore[import-not-found]  # noqa: F401
         except ImportError:
             missing.append("mitsuba")
+        # Sionna RT 2.x PyPI wheel ships as ``sionna.rt`` (sub-module),
+        # but earlier 1.x and some redistributions exposed ``sionna_rt``
+        # at the top level.  Accept either — only flag missing when
+        # neither importable.
         try:
-            import sionna_rt  # type: ignore[import-not-found]  # noqa: F401
+            import sionna.rt  # type: ignore[import-not-found]  # noqa: F401
         except ImportError:
-            missing.append("sionna_rt")
+            try:
+                import sionna_rt  # type: ignore[import-not-found]  # noqa: F401
+            except ImportError:
+                missing.append("sionna.rt")
         if missing:
             raise RuntimeError(
                 "sionna_rt tracer selected but required modules are not "
                 f"installed: {missing}. Install mitsuba>=3.5 and "
-                "sionna-rt>=1.0 on a CUDA-capable host, or set "
+                "sionna-rt>=2.0 on a CUDA-capable host, or set "
                 "SIONNA_RT_BACKEND=fspl_stub."
             )
 
@@ -317,7 +324,10 @@ class _SionnaRtTracer:
         import math
         import mitsuba as mi  # type: ignore[import-not-found]
         import numpy as np  # type: ignore[import-not-found]
-        import sionna_rt as srt  # type: ignore[import-not-found]
+        try:
+            import sionna.rt as srt  # type: ignore[import-not-found]
+        except ImportError:
+            import sionna_rt as srt  # type: ignore[import-not-found]
 
         manifest = _load_manifest(scene_dir)
         scene_xml = _resolve_scene_xml(scene_dir)

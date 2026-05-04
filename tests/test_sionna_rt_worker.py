@@ -441,6 +441,10 @@ def _install_fake_sionna_rt(monkeypatch):
         Transmitter=_FakeTransmitter,
         PathSolver=_FakePathSolver,
     )
+    fake_sionna = types.ModuleType("sionna")
+    fake_sionna.rt = fake_srt  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sionna", fake_sionna)
+    monkeypatch.setitem(sys.modules, "sionna.rt", fake_srt)
     monkeypatch.setitem(sys.modules, "sionna_rt", fake_srt)
     return fake_mi, fake_srt
 
