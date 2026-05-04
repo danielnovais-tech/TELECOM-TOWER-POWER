@@ -373,6 +373,22 @@ Why ship the scaffold now (May 2026)?
   versions + CUDA visibility; `--poll` refuses unless
   `SIONNA_RT_DISABLED=0` AND a manifest with
   `implementation_status='complete'` is reachable).
+  **Tijolo 6 — kick-and-poll API endpoint (landed 2026-05-04):**
+  `POST /coverage/engines/sionna-rt/raster` enqueues a job onto
+  `$SIONNA_RT_QUEUE_URL` and returns `202 Accepted` with
+  `{job_id, poll_url, result_s3_uri}`. The SQS body matches the
+  Tijolo 5 worker's `parse_job_message` schema verbatim — a
+  round-trip test in `tests/test_sionna_rt_raster_endpoint.py`
+  feeds the API-emitted body back through the worker parser to
+  lock the contract end-to-end. `GET /coverage/engines/sionna-rt/raster/{job_id}`
+  polls S3 for the worker-uploaded `.npz` and returns a presigned
+  download URL (`$SIONNA_RT_PRESIGN_TTL_S`, default 1 h) once
+  available; until then the job stays `queued`. Refuses to enqueue
+  with `503` when ops haven't set `$SIONNA_RT_QUEUE_URL` /
+  `$SIONNA_RT_RESULTS_BUCKET`. SQS send failures bubble up as
+  `502`. The actual GPU trace is still the FSPL-shaped stub from
+  Tijolo 5 — replacing `compute_raster_loss()` with the real
+  Mitsuba/Sionna call is the remaining brick.
 - [ ] **Validation gate** — must stay within 6 dB RMSE vs.
   `itu-p1812` on sub-6 GHz golden links (sanity baseline) and
   produce non-trivial deltas (> 10 dB) on the mmWave golden links.

@@ -17,14 +17,21 @@ authenticated key, same posture as the rest of ``/coverage/*``.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Sequence
+import json
+import logging
+import os
+import time
+import uuid
+from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from rf_engines import get_engine, list_engines
 from rf_engines.compare import compare as _compare
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/coverage/engines", tags=["coverage-engines"])
 
@@ -110,3 +117,284 @@ async def compare_engines(req: CompareRequest) -> dict:
         **link,
     )
     return result.to_dict()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Sionna RT — async per-pixel loss raster (kick + poll)
+# ─────────────────────────────────────────────────────────────────────
+# POST /coverage/engines/sionna-rt/raster — enqueues an SQS job for the
+# GPU worker (scripts/sionna_rt_worker.py --poll), returning a job_id.
+# GET  /coverage/engines/sionna-rt/raster/{job_id} — poll for status +
+# the presigned URL to the resulting .npz raster.
+#
+# The endpoint is intentionally async-only: the trace is GPU-bound and
+# can take seconds-to-minutes; HTTP timeouts on ALB/Caddy would kill
+# any synchronous variant. The contract mirrors the existing
+# ``POST /plan_repeater/async`` + ``GET /plan_repeater/jobs/{id}`` pair.
+
+# Required env vars (the API container refuses to enqueue without them).
+_QUEUE_URL_ENV = "SIONNA_RT_QUEUE_URL"
+_RESULTS_BUCKET_ENV = "SIONNA_RT_RESULTS_BUCKET"
+_RESULTS_PREFIX_ENV = "SIONNA_RT_RESULTS_PREFIX"  # default 'sionna-rt-rasters/'
+_PRESIGN_TTL_S = int(os.getenv("SIONNA_RT_PRESIGN_TTL_S", "3600"))
+
+# In-memory job tracker. Lightweight: jobs are short-lived and the
+# authoritative state lives on SQS + S3. The dict only carries enough
+# metadata to: (a) enforce per-tenant ownership on GET, (b) build the
+# presigned URL once the result object exists. TTL reaper runs inline.
+_JOBS_TTL_S = int(os.getenv("SIONNA_RT_JOBS_TTL_S", "1800"))   # 30 min
+_JOBS_MAX = int(os.getenv("SIONNA_RT_JOBS_MAX", "1024"))
+_jobs: Dict[str, Dict[str, Any]] = {}
+
+# Lazy boto3 clients — keep import out of the API cold-start path.
+_sqs_client = None
+_s3_client = None
+
+
+def _get_sqs():
+    global _sqs_client
+    if _sqs_client is None:
+        import boto3  # type: ignore[import-not-found]
+        _sqs_client = boto3.client(
+            "sqs", region_name=os.getenv("AWS_REGION", "sa-east-1"),
+        )
+    return _sqs_client
+
+
+def _get_s3():
+    global _s3_client
+    if _s3_client is None:
+        import boto3  # type: ignore[import-not-found]
+        _s3_client = boto3.client(
+            "s3", region_name=os.getenv("AWS_REGION", "sa-east-1"),
+        )
+    return _s3_client
+
+
+def _reap_jobs(now: Optional[float] = None) -> None:
+    """Drop completed/failed/stale jobs older than TTL, oldest first."""
+    now = now if now is not None else time.time()
+    cutoff = now - _JOBS_TTL_S
+    stale = [
+        jid for jid, j in _jobs.items()
+        if (j.get("created_at") or 0) < cutoff
+    ]
+    for jid in stale:
+        _jobs.pop(jid, None)
+    # Hard cap (defence in depth against runaway dispatches).
+    if len(_jobs) > _JOBS_MAX:
+        # Drop oldest until back under cap.
+        for jid in sorted(_jobs, key=lambda k: _jobs[k].get("created_at") or 0)[
+            : len(_jobs) - _JOBS_MAX
+        ]:
+            _jobs.pop(jid, None)
+
+
+# ── Schemas ────────────────────────────────────────────────────────
+
+class _TxIn(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    height_m: float = Field(..., ge=0, le=500)
+    power_dbm: float = Field(default=43.0, ge=0, le=80)
+
+
+class _RasterGridIn(BaseModel):
+    rows: int = Field(..., ge=2, le=2000)
+    cols: int = Field(..., ge=2, le=2000)
+    bbox: List[float] = Field(
+        ...,
+        min_length=4, max_length=4,
+        description="[south, west, north, east]",
+    )
+
+    @model_validator(mode="after")
+    def _check_bbox(self) -> "_RasterGridIn":
+        s, w, n, e = self.bbox
+        if not (-90 <= s < n <= 90):
+            raise ValueError(f"bbox south/north invalid: {s}, {n}")
+        if not (-180 <= w < e <= 180):
+            raise ValueError(f"bbox west/east invalid: {w}, {e}")
+        if self.rows * self.cols > 4_000_000:
+            raise ValueError(
+                f"raster_grid too large ({self.rows}x{self.cols} > 4M cells); "
+                "split before submitting"
+            )
+        return self
+
+
+class SionnaRTRasterRequest(BaseModel):
+    """Submission body for ``POST /coverage/engines/sionna-rt/raster``.
+
+    ``scene_s3_uri`` points at the directory produced by
+    ``scripts/build_mitsuba_scene.py --emit-scene`` (must contain a
+    ``manifest.json`` with ``implementation_status='complete'``).
+    """
+
+    scene_s3_uri: str = Field(
+        ..., min_length=8, max_length=1024,
+        description="s3:// URI of the scene-bundle directory",
+    )
+    tx: _TxIn
+    frequency_hz: float = Field(..., gt=1e6, le=3e11)
+    raster_grid: _RasterGridIn
+
+    @model_validator(mode="after")
+    def _check_scene_uri(self) -> "SionnaRTRasterRequest":
+        if not self.scene_s3_uri.startswith("s3://"):
+            raise ValueError("scene_s3_uri must start with s3://")
+        return self
+
+
+class SionnaRTRasterAccepted(BaseModel):
+    job_id: str
+    status: str
+    poll_url: str
+    result_s3_uri: str
+
+
+class SionnaRTRasterStatus(BaseModel):
+    job_id: str
+    status: str  # queued | done | not-found
+    submitted_at: float
+    finished_at: Optional[float] = None
+    result_s3_uri: Optional[str] = None
+    raster_url: Optional[str] = None  # presigned, only when status == 'done'
+    raster_bytes: Optional[int] = None
+    error: Optional[str] = None
+
+
+def _build_result_s3_uri(job_id: str) -> tuple[str, str, str]:
+    bucket = os.getenv(_RESULTS_BUCKET_ENV, "")
+    prefix = os.getenv(_RESULTS_PREFIX_ENV, "sionna-rt-rasters/")
+    if not bucket:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"sionna-rt raster pipeline misconfigured: "
+                f"set ${_RESULTS_BUCKET_ENV}"
+            ),
+        )
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+    key = f"{prefix}{job_id}.npz"
+    return bucket, key, f"s3://{bucket}/{key}"
+
+
+def _resolve_queue_url() -> str:
+    q = os.getenv(_QUEUE_URL_ENV, "")
+    if not q:
+        raise HTTPException(
+            status_code=503,
+            detail=f"sionna-rt raster pipeline misconfigured: set ${_QUEUE_URL_ENV}",
+        )
+    return q
+
+
+@router.post("/sionna-rt/raster",
+             response_model=SionnaRTRasterAccepted, status_code=202)
+async def sionna_rt_raster_submit(
+    req: SionnaRTRasterRequest,
+) -> SionnaRTRasterAccepted:
+    """Enqueue a per-pixel loss-raster job for the Sionna RT GPU worker.
+
+    Returns ``202 Accepted`` with a ``job_id`` and ``poll_url``. The
+    raster lands at ``result_s3_uri`` once the worker is done; poll the
+    status endpoint for a presigned URL.
+
+    Status code is intentionally ``503`` (not ``500``) when ops haven't
+    set ``$SIONNA_RT_QUEUE_URL`` / ``$SIONNA_RT_RESULTS_BUCKET`` — the
+    feature is correctly *configured* off by default until the worker
+    pool is provisioned.
+    """
+    queue_url = _resolve_queue_url()
+    job_id = uuid.uuid4().hex
+    _, _, result_s3_uri = _build_result_s3_uri(job_id)
+
+    scene_uri = req.scene_s3_uri if req.scene_s3_uri.endswith("/") \
+        else req.scene_s3_uri + "/"
+
+    body = {
+        "job_id": job_id,
+        "scene_s3_uri": scene_uri,
+        "result_s3_uri": result_s3_uri,
+        "frequency_hz": float(req.frequency_hz),
+        "tx": req.tx.model_dump(),
+        "raster_grid": req.raster_grid.model_dump(),
+    }
+    try:
+        _get_sqs().send_message(QueueUrl=queue_url, MessageBody=json.dumps(body))
+    except Exception as ex:
+        logger.exception("sionna-rt raster submit: SQS send failed")
+        raise HTTPException(
+            status_code=502, detail=f"queue send failed: {type(ex).__name__}",
+        ) from ex
+
+    now = time.time()
+    _reap_jobs(now)
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "owner": None,
+        "result_s3_uri": result_s3_uri,
+        "scene_s3_uri": scene_uri,
+        "created_at": now,
+        "frequency_hz": float(req.frequency_hz),
+        "rows": req.raster_grid.rows,
+        "cols": req.raster_grid.cols,
+    }
+    return SionnaRTRasterAccepted(
+        job_id=job_id,
+        status="queued",
+        poll_url=f"/coverage/engines/sionna-rt/raster/{job_id}",
+        result_s3_uri=result_s3_uri,
+    )
+
+
+@router.get("/sionna-rt/raster/{job_id}",
+            response_model=SionnaRTRasterStatus)
+async def sionna_rt_raster_status(
+    job_id: str,
+) -> SionnaRTRasterStatus:
+    """Return the current status of a Sionna RT raster job.
+
+    Authoritative state for ``done`` is the existence of the
+    ``result_s3_uri`` object on S3 — the API container never sees the
+    worker directly. While the object is missing the job stays
+    ``queued``; once it appears we return a presigned download URL
+    valid for ``$SIONNA_RT_PRESIGN_TTL_S`` seconds (default 1 h).
+    """
+    j = _jobs.get(job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="job not found or expired")
+
+    s3 = _get_s3()
+    bucket, key, result_uri = _build_result_s3_uri(job_id)
+    status = j["status"]
+    finished_at: Optional[float] = j.get("finished_at")
+    raster_url: Optional[str] = None
+    raster_bytes: Optional[int] = None
+    try:
+        head = s3.head_object(Bucket=bucket, Key=key)
+        raster_bytes = int(head.get("ContentLength") or 0)
+        raster_url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": key},
+            ExpiresIn=_PRESIGN_TTL_S,
+        )
+        status = "done"
+        if finished_at is None:
+            finished_at = time.time()
+            j["finished_at"] = finished_at
+            j["status"] = "done"
+    except Exception:
+        logger.debug("sionna-rt raster head_object miss for %s", job_id)
+    return SionnaRTRasterStatus(
+        job_id=job_id,
+        status=status,
+        submitted_at=j["created_at"],
+        finished_at=finished_at,
+        result_s3_uri=result_uri,
+        raster_url=raster_url,
+        raster_bytes=raster_bytes,
+    )
