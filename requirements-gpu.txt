@@ -13,12 +13,11 @@
 # and ROADMAP.md § "Q2/2026 — Ray-tracing + mmWave".
 
 # ── Core ML / autodiff stack ─────────────────────────────────────────
-# torch is required by Sionna 2.x. Pin to the CUDA 12.x compatible
-# series; the +cu121 wheel is selected via the --extra-index-url
-# flag in Dockerfile.gpu (NOT here, to keep this file pip-resolvable
-# offline for `pip-compile --resolver=backtracking`).
-torch>=2.4,<2.6
-torchvision>=0.19,<0.21
+# torch is required by Sionna 2.x. sionna>=2.0 requires torch>=2.9.1.
+# The +cu124 wheel is selected via the --extra-index-url flag in
+# Dockerfile.gpu (NOT here, to keep this file pip-resolvable offline).
+torch>=2.9.1,<2.12
+torchvision>=0.24,<0.27
 
 # ── Sionna 2.x ray-tracing ───────────────────────────────────────────
 # `sionna` 2.x splits CPU (sionna.phy) and ray-tracing (sionna.rt)

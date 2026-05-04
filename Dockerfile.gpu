@@ -73,7 +73,7 @@ COPY requirements-gpu.txt /opt/rt/requirements-gpu.txt
 
 # torch+cu121 needs the explicit CUDA index URL. Sionna+Mitsuba+Dr.Jit
 # pull from PyPI normally.
-RUN pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
+RUN pip install --extra-index-url https://download.pytorch.org/whl/cu124 \
         -r requirements-gpu.txt \
     # Smoke-test the imports so a broken wheel selection fails the
     # build instead of the first SQS message.
