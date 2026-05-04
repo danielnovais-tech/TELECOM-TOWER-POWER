@@ -1,0 +1,11 @@
+{
+  "_comment": "Per-tower tx-side metadata for scripts/drivetest_to_observations.py. Pull canonical values from GET /tower/{id} (the tower_id key here must match the CSV's tower_id column verbatim).",
+  "SP-CENTRO-001": {
+    "tx_lat": -23.5505,
+    "tx_lon": -46.6383,
+    "tx_height_m": 32.0,
+    "tx_power_dbm": 43.0,
+    "tx_gain_dbi": 16.5,
+    "freq_hz": 2600000000
+  }
+}

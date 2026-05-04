@@ -1,0 +1,12 @@
+{
+  "_comment": "Per-vehicle rx-side calibration sidecar consumed by scripts/drivetest_to_observations.py. Measure cable_loss_db per band of acquisition with a calibrated CW source between the antenna SMA and the scanner RF input. Values below are PLACEHOLDERS — replace before any real run.",
+  "rx_gain_dbi": 4.5,
+  "rx_height_m": 1.75,
+  "cable_loss_db": {
+    "700":  2.8,
+    "1800": 3.1,
+    "2100": 3.3,
+    "2600": 3.6,
+    "3500": 4.2
+  }
+}
