@@ -1,0 +1,68 @@
+[
+  {
+    "_comment": "SUB6 — São Paulo urban 850 MHz (macro-cell)",
+    "_band": "sub6",
+    "f_hz": 850000000,
+    "d_km": [0.0, 0.5, 1.0, 1.5, 2.0],
+    "h_m":  [760.0, 763.0, 765.0, 762.0, 758.0],
+    "htg": 30.0,  "hrg": 1.5,
+    "phi_t": -23.5613, "lam_t": -46.6562,
+    "phi_r": -23.5800, "lam_r": -46.6750,
+    "pol": 2, "zone": 4
+  },
+  {
+    "_comment": "SUB6 — Campinas suburban 1800 MHz",
+    "_band": "sub6",
+    "f_hz": 1800000000,
+    "d_km": [0.0, 2.0, 4.0, 6.0],
+    "h_m":  [685.0, 690.0, 700.0, 695.0],
+    "htg": 45.0,  "hrg": 1.5,
+    "phi_t": -22.9056, "lam_t": -47.0608,
+    "phi_r": -22.9300, "lam_r": -47.0900,
+    "pol": 2, "zone": 4
+  },
+  {
+    "_comment": "SUB6 — Manaus rural 700 MHz (Amazon biome)",
+    "_band": "sub6",
+    "f_hz": 700000000,
+    "d_km": [0.0, 5.0, 10.0, 15.0],
+    "h_m":  [80.0, 85.0, 95.0, 110.0],
+    "htg": 60.0,  "hrg": 5.0,
+    "phi_t": -3.1190, "lam_t": -60.0217,
+    "phi_r": -3.2500, "lam_r": -60.1500,
+    "pol": 2, "zone": 4
+  },
+  {
+    "_comment": "SUB6 — Belo Horizonte suburban 2600 MHz",
+    "_band": "sub6",
+    "f_hz": 2600000000,
+    "d_km": [0.0, 1.0, 2.0, 3.0],
+    "h_m":  [840.0, 850.0, 855.0, 848.0],
+    "htg": 25.0,  "hrg": 1.5,
+    "phi_t": -19.9167, "lam_t": -43.9345,
+    "phi_r": -19.9400, "lam_r": -43.9600,
+    "pol": 2, "zone": 4
+  },
+  {
+    "_comment": "MMWAVE — São Paulo dense urban 28 GHz (5G NR FR2)",
+    "_band": "mmwave",
+    "f_hz": 28000000000,
+    "d_km": [0.0, 0.1, 0.2, 0.3],
+    "h_m":  [762.0, 763.0, 764.0, 763.5],
+    "htg": 10.0,  "hrg": 1.5,
+    "phi_t": -23.5613, "lam_t": -46.6562,
+    "phi_r": -23.5640, "lam_r": -46.6590,
+    "pol": 2, "zone": 4
+  },
+  {
+    "_comment": "MMWAVE — Porto Alegre dense urban 39 GHz (5G NR FR2)",
+    "_band": "mmwave",
+    "f_hz": 39000000000,
+    "d_km": [0.0, 0.05, 0.15, 0.25],
+    "h_m":  [10.0, 11.0, 12.0, 11.5],
+    "htg": 8.0,   "hrg": 1.5,
+    "phi_t": -30.0346, "lam_t": -51.2177,
+    "phi_r": -30.0360, "lam_r": -51.2190,
+    "pol": 2, "zone": 4
+  }
+]
