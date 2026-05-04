@@ -199,7 +199,7 @@ def _emit_manifest(
         "clutter_source": extras.get("clutter_source"),
         "buildings_geojson_sha256": extras.get("buildings_geojson_sha256"),
         "terrain_tif_sha256": extras.get("terrain_tif_sha256"),
-        "scene_xml_sha256": None,
+        "scene_xml_sha256": extras.get("scene_xml_sha256"),
         "implementation_status": implementation_status,
         "notes": notes,
     }
@@ -209,6 +209,11 @@ def _emit_manifest(
         manifest["terrain_summary"] = extras["terrain_summary"]
     if extras.get("materials_p2040") is not None:
         manifest["materials_p2040"] = extras["materials_p2040"]
+    for k in ("buildings_mesh_count", "buildings_mesh_vertices",
+              "buildings_mesh_faces", "buildings_ply_sha256",
+              "terrain_ply_sha256", "reference_frequency_hz"):
+        if extras.get(k) is not None:
+            manifest[k] = extras[k]
     if out_dir.startswith("s3://"):
         # Defensive: don't silently no-op an S3 push from the scaffold.
         # The intended uploader is the AWS Batch container, not a dev
@@ -266,21 +271,37 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--terrain-step-deg", type=float, default=None,
                    help="Terrain grid step in degrees (default 1/1200 ≈ 3″, "
                         "the native SRTM3 resolution).")
+    p.add_argument("--emit-scene", action="store_true",
+                   help="Tijolo 4: after the data phase, extrude building "
+                        "footprints to triangulated meshes (buildings.ply), "
+                        "emit a flat ground plane (terrain.ply) and write "
+                        "scene.xml with Sionna 'radio-material' BSDFs from "
+                        "the P.2040-3 library. Implies --fetch-data.")
+    p.add_argument("--reference-frequency-hz", type=float, default=28e9,
+                   help="Frequency stamped into the scene.xml radio-material "
+                        "BSDFs (default 28 GHz; Sionna RT recomputes per-"
+                        "trace, this is just the XML-time value).")
     args = p.parse_args(argv)
 
     frequencies_hz = _frequency_list(args.frequencies)
 
-    if args.allow_stub and args.fetch_data:
+    if args.allow_stub and (args.fetch_data or args.emit_scene):
         sys.stderr.write(
-            "ERROR: --allow-stub and --fetch-data are mutually exclusive.\n"
+            "ERROR: --allow-stub is mutually exclusive with --fetch-data "
+            "and --emit-scene.\n"
         )
         return 2
+    if args.emit_scene and not args.fetch_data:
+        # --emit-scene implies --fetch-data; flag it on for the caller
+        # rather than failing.
+        args.fetch_data = True
     if not args.allow_stub and not args.fetch_data:
         sys.stderr.write(
             "ERROR: scene-builder is a scaffold; pass --allow-stub to emit "
-            "the manifest only, or --fetch-data to run the Tijolo 2 data-"
-            "source phase (Overpass + SRTM). Tracked in docs/rf-engines.md "
-            "§ Q2/2026 delivery checklist.\n"
+            "the manifest only, --fetch-data for the Tijolo 2 data-source "
+            "phase, or --emit-scene for the full Tijolo 4 build (data + "
+            "scene.xml). Tracked in docs/rf-engines.md § Q2/2026 delivery "
+            "checklist.\n"
         )
         return 2
 
@@ -389,6 +410,19 @@ def _run_data_phase(args, frequencies_hz: Tuple[float, ...]) -> int:
         "clutter_source": None,
         "materials_p2040": materials_block,
     }
+
+    if getattr(args, "emit_scene", False):
+        return _run_scene_phase(
+            args=args,
+            frequencies_hz=frequencies_hz,
+            aoi_dir=aoi_dir,
+            bbox_tuple=bbox_tuple,
+            geojson=geojson,
+            terrain_summary=terrain_summary,
+            materials_eval=materials_eval,
+            extras=extras,
+        )
+
     _emit_manifest(
         aoi_name=args.aoi_name,
         bbox=bbox,
@@ -400,6 +434,93 @@ def _run_data_phase(args, frequencies_hz: Tuple[float, ...]) -> int:
             "data-only build: buildings.geojson + terrain.tif written from "
             "Overpass + SRTM3. scene.xml NOT emitted (Tijolo 4); the GPU "
             "worker still refuses to trace this manifest."
+        ),
+    )
+    return 0
+
+
+def _run_scene_phase(
+    *,
+    args,
+    frequencies_hz: Tuple[float, ...],
+    aoi_dir: str,
+    bbox_tuple: Tuple[float, float, float, float],
+    geojson: Dict[str, Any],
+    terrain_summary: Dict[str, Any],
+    materials_eval: Dict[str, Any],
+    extras: Dict[str, Any],
+) -> int:
+    """Tijolo 4: extrude footprints → PLY meshes + scene.xml.
+
+    Runs after ``_run_data_phase`` has produced ``buildings.geojson``
+    and ``terrain.tif``. The output is a self-contained Mitsuba 3
+    bundle that Sionna RT 1.x / 2.x can load directly.
+    """
+    from scripts.sources import mitsuba_scene
+
+    # 4a) Buildings → PLY mesh.
+    logger.info("phase 3/4: extruding building footprints → buildings.ply")
+    verts, faces, mesh_count = mitsuba_scene.buildings_to_mesh(
+        geojson, bbox_tuple, ground_z_m=0.0,
+    )
+    if mesh_count == 0:
+        sys.stderr.write(
+            "ERROR: no buildings produced a valid mesh; refusing to emit "
+            "an empty scene.xml.\n"
+        )
+        return 2
+    buildings_ply_path = os.path.join(aoi_dir, "buildings.ply")
+    mitsuba_scene.write_ply_binary(verts, faces, buildings_ply_path)
+    logger.info("wrote %s (%d buildings, %d vertices, %d faces)",
+                buildings_ply_path, mesh_count, len(verts), len(faces))
+
+    # 4b) Terrain plane.
+    logger.info("phase 4/4: terrain plane + scene.xml")
+    elev_mean = terrain_summary.get("elev_mean_m")
+    if elev_mean is None:
+        # All-void SRTM grid. Default to 0 m and warn — the trace will
+        # treat the scene as sea level, which is wrong but visible.
+        logger.warning(
+            "terrain grid is fully void; placing ground plane at z=0 m"
+        )
+        elev_mean = 0.0
+    t_verts, t_faces = mitsuba_scene.emit_terrain_plane(
+        bbox_tuple, float(elev_mean),
+    )
+    terrain_ply_path = os.path.join(aoi_dir, "terrain.ply")
+    mitsuba_scene.write_ply_binary(t_verts, t_faces, terrain_ply_path)
+
+    scene_xml_path = os.path.join(aoi_dir, "scene.xml")
+    mitsuba_scene.emit_scene_xml(
+        buildings_ply=buildings_ply_path,
+        terrain_ply=terrain_ply_path,
+        materials_eval=materials_eval,
+        out_path=scene_xml_path,
+        reference_frequency_hz=float(args.reference_frequency_hz),
+    )
+
+    extras = dict(extras)
+    extras["buildings_mesh_count"] = mesh_count
+    extras["buildings_mesh_vertices"] = len(verts)
+    extras["buildings_mesh_faces"] = len(faces)
+    extras["buildings_ply_sha256"] = _sha256_file(buildings_ply_path)
+    extras["terrain_ply_sha256"] = _sha256_file(terrain_ply_path)
+    extras["scene_xml_sha256"] = _sha256_file(scene_xml_path)
+    extras["reference_frequency_hz"] = float(args.reference_frequency_hz)
+
+    _emit_manifest(
+        aoi_name=args.aoi_name,
+        bbox=args.bbox,
+        frequencies_hz=frequencies_hz,
+        out_dir=args.out_dir,
+        extras=extras,
+        implementation_status="complete",
+        notes=(
+            "complete build: buildings.geojson, terrain.tif, buildings.ply, "
+            "terrain.ply, and scene.xml emitted from Overpass + SRTM3 + "
+            "P.2040-3 materials. Sionna RT may load this manifest "
+            "(implementation_status='complete'). Terrain is a flat plane "
+            "at AOI mean elevation — a heightfield emitter is a follow-up."
         ),
     )
     return 0

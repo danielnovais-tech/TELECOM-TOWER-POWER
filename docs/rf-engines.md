@@ -303,7 +303,7 @@ Why ship the scaffold now (May 2026)?
   EC2 G5 instance behind SQS) consuming `coverage:rt` jobs. Single
   predictions stay an HTTP "kick + poll" — no inline GPU calls from
   the API container.
-- [~] **Scene builder** — `scripts/build_mitsuba_scene.py` CLI
+- [x] **Scene builder** — `scripts/build_mitsuba_scene.py` CLI
   scaffold landed 2026-05-03 (manifest-only, refuses to write
   `scene.xml` without `--allow-stub`). Manifest schema fixed
   (`schema_version=1`) so the Batch infra can be provisioned ahead
@@ -318,9 +318,23 @@ Why ship the scaffold now (May 2026)?
   realistic height stats (mean 14.94 m, max 170 m). Mutually
   exclusive with `--allow-stub`; `--prefetch-srtm` opts in to USGS
   tile downloads.
-  Remaining work: MapBiomas/clutter classes → ITU-R P.2040 material
-  tags; building footprints → triangulated meshes; Mitsuba `.xml`
-  emission with `implementation_status='complete'`.
+  **Tijolo 4 — Mitsuba `.xml` emission (landed 2026-05-04):**
+  `--emit-scene` (implies `--fetch-data`) extrudes building
+  footprints into triangulated meshes via stdlib ear-clipping
+  (lon/lat → ENU equirectangular projection at the AOI centroid),
+  writes binary little-endian `buildings.ply` and a flat
+  `terrain.ply` ground plane at AOI mean elevation, then emits
+  `scene.xml` (Mitsuba 3.5.0) carrying four `<bsdf type="radio-material">`
+  blocks (concrete / glass / metal / vegetation) stamped with the
+  `--reference-frequency-hz` evaluation (default 28 GHz) from the
+  P.2040 library. Manifest advances to `implementation_status='complete'`
+  with `buildings_mesh_count`, `buildings_ply_sha256`,
+  `terrain_ply_sha256`, `scene_xml_sha256`, and
+  `reference_frequency_hz`. `sp-centro` smoke build: 16 151 buildings
+  → 330 426 vertices, 596 248 faces, scene.xml 1.5 KB. All buildings
+  currently tagged `mat_concrete`; per-building material attribution
+  (e.g. `building=commercial` → `mat_glass`) is a follow-up.
+  Heightfield terrain replacing the flat plane is also a follow-up.
 - [x] **mmWave material library** — `data/materials_p2040.json`
   landed 2026-05-04 (Tijolo 3). Four materials parameterised by the
   P.2040-3 Annex 1 four-coefficient model (`a, b, c, d`):
