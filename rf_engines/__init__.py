@@ -73,6 +73,7 @@ def _autoregister() -> None:
         "rf_engines.rf_signals_engine",
         "rf_engines.signal_server_engine",
         "rf_engines.sionna_engine",
+        "rf_engines.sionna_rt_engine",
     ):
         try:
             __import__(mod)

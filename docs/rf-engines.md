@@ -13,6 +13,7 @@ ITU-R P.1812 wrapper, without any commercial licence.
 | `rf-signals`    | clean-room (this repo, `rf_signals/`)        | LicenseRef-TTP-Proprietary | **available** — empirical models |
 | `signal-server` | [`W3AXL/Signal-Server`][css] (active fork)   | **GPL-2.0**| operator-buildable (see note) |
 | `sionna`        | NVIDIA Sionna (learned model)                | Apache 2.0 | scaffolding only  |
+| `sionna-rt`     | NVIDIA Sionna 2.x RT (Mitsuba 3 / Dr.Jit)    | Apache 2.0 | **roadmap Q2/2026** — scaffold registered, GPU runtime pending |
 
 [rfs]: https://github.com/thebracket/rf-signals
 [css]: https://github.com/W3AXL/Signal-Server
@@ -229,3 +230,83 @@ code change required.
 This caution is intentional: production traffic will not depend on a
 learned predictor until it has been benchmarked against P.1812 on the
 coverage-diff golden set for at least 14 consecutive nights.
+
+## Sionna RT 2.x — full 3D ray-tracing (roadmap Q2/2026)
+
+A second Sionna-branded adapter, **`sionna-rt`**, was scaffolded on
+2026-05-03 to track the upgrade path to NVIDIA Sionna 2.x's
+`sionna.rt` module — a Mitsuba 3 / Dr.Jit GPU ray-tracer that
+launches deterministic rays against a textured 3D scene with
+frequency-dependent material parameters from ITU-R P.2040.
+
+### Why a second engine, not a replacement
+
+The existing `sionna` adapter is a learned **MLP/TFLite** path-loss
+predictor (Sionna 1.x era, CPU-only, drive-test trained). It stays.
+`sionna-rt` is the **physics** path: deterministic, no labels needed,
+mandatory at FR2/mmWave (24-100 GHz) where P.1812 over-predicts
+coverage by 20+ dB indoors and in dense urban canyons because it
+has no diffraction-free LOS-bounce model.
+
+### Status — scaffold only
+
+The `SionnaRTEngine` class is registered with the registry so it
+shows up in `GET /coverage/engines`, but `is_available()` is
+hard-coded to `False` until the GPU runtime lands. `predict_basic_loss`
+returns `None` on every call — there is intentionally no CPU fallback
+because path-loss extracted from a degenerate (no-bounce) ray trace
+is indistinguishable from FSPL and would mislead `compare`.
+
+Why ship the scaffold now (May 2026)?
+
+* The env-var contract (`SIONNA_RT_*`) is frozen — ops can pre-create
+  SSM parameters and IAM grants without waiting for the implementation.
+* `GET /coverage/engines` already exposes the placeholder so the SPA
+  can render a "coming Q2/2026" badge.
+* The autoregister + compare plumbing is exercised in CI without any
+  GPU dependency.
+
+### Q2/2026 delivery checklist
+
+- [ ] **Dependencies (separate `requirements-gpu.txt`)**
+  `sionna>=2.0`, `mitsuba>=3.5`, `drjit>=1.0`, `torch>=2.4`. Kept out
+  of the API container — these add ~3 GB of CUDA wheels.
+- [ ] **GPU image variant** — `Dockerfile.gpu` based on
+  `nvidia/cuda:12.x-runtime-ubuntu22.04`, used only by the worker pool.
+- [ ] **Worker pool** — AWS Batch with a GPU job queue (or a single
+  EC2 G5 instance behind SQS) consuming `coverage:rt` jobs. Single
+  predictions stay an HTTP "kick + poll" — no inline GPU calls from
+  the API container.
+- [ ] **Scene builder** — `scripts/build_mitsuba_scene.py`: OSM
+  building footprints (Overpass) → triangulated meshes; SRTM tiles
+  → terrain backdrop; MapBiomas/clutter classes → ITU-R P.2040
+  material tags (concrete, glass, metal, vegetation). Output is an
+  `.xml` Mitsuba scene + per-material `.json` sidecar.
+- [ ] **mmWave material library** — concrete/glass/metal/vegetation
+  permittivity at 28 / 39 / 60 GHz from ITU-R P.2040-3 Annex 1.
+- [ ] **Per-pixel loss raster API** — `POST /coverage/engines/sionna-rt/raster`
+  → SQS job → S3 output → presigned-URL response. Single-link
+  `predict_basic_loss` is implemented as a 1×1 raster crop.
+- [ ] **Validation gate** — must stay within 6 dB RMSE vs.
+  `itu-p1812` on sub-6 GHz golden links (sanity baseline) and
+  produce non-trivial deltas (> 10 dB) on the mmWave golden links.
+  Only then promote to the rotation in `/coverage/engines/compare`.
+- [ ] **Docs** — design doc, scene-build runbook, GPU cost model
+  (a 1 km² 3D trace at 28 GHz is ~$0.05 on a single G5.2xlarge —
+  worth quoting per request before the SPA exposes the button).
+
+### Why Q2/2026 and not now
+
+ETA pulled in from Q3 → Q2/2026 on 2026-05-03 — mmWave moved up the
+priority list. Three blockers still gate immediate implementation,
+all mechanical:
+
+1. **GPU infrastructure** — the platform is currently CPU-only ECS
+   Fargate. Adding a Batch GPU queue is a multi-week ops effort.
+2. **Scene data** — Brazilian OSM building coverage is patchy outside
+   capitals; the scene builder needs a fallback to LIDAR-derived
+   building footprints from IBGE, which is itself a separate task.
+3. **mmWave pilots landing** — Brazilian 5G NR rollout (3.5 GHz) was
+   the live priority through 2026-Q1; the FR2/mmWave deployments
+   (26 GHz auctioned 2024) reach pilot density in Q2/2026, which is
+   when accurate coverage predictions stop being academic.
