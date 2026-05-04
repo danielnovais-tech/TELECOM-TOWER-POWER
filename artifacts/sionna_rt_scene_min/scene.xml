@@ -1,0 +1,11 @@
+<scene version="3.0.0">
+  <shape type="rectangle">
+    <transform name="to_world">
+      <scale x="500" y="500" z="1"/>
+      <translate x="0" y="0" z="0"/>
+    </transform>
+    <bsdf type="diffuse">
+      <rgb name="reflectance" value="0.5,0.5,0.5"/>
+    </bsdf>
+  </shape>
+</scene>

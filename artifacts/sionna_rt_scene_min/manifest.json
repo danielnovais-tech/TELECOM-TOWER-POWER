@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "aoi_name": "t12-min-scene",
+  "bbox": [-23.70, -46.80, -23.40, -46.50],
+  "frequencies_hz": [850000000, 1800000000, 28000000000],
+  "p2040_table_version": "1",
+  "implementation_status": "complete"
+}
