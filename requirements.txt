@@ -57,12 +57,5 @@ opentelemetry-instrumentation-requests>=0.48b0
 itmlogic==1.2            # NTIA Longley-Rice/ITM wrapper (Oughton 2020, JOSS)
 deap==1.4.4              # GA framework used by scripts/optimize_sites.py
 # Note: rf_engines.sionna_engine needs a TFLite runtime at inference time.
-# We deliberately do NOT pin tflite-runtime here because:
-#   * the base image is python:3.13-slim and tflite-runtime has no 3.13
-#     wheels yet (only 3.9-3.11 as of 2026-05);
-#   * full tensorflow is ~600 MB and unacceptable in the API container.
-# Until upstream ships 3.13 wheels (track ai-edge-litert), the sionna
-# engine fails closed (is_available()=False) and the platform falls
-# back to ITU-R P.1812 + ridge. Operators that want it enabled today
-# can pin the API base image to python:3.11 and add `tflite-runtime>=2.14`
-# to a deployment-specific overlay.
+# Base image is now python:3.11-slim so tflite-runtime wheels are available.
+tflite-runtime>=2.14      # Sionna ML inference (TFLite); 3.11 wheels on PyPI

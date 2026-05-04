@@ -102,7 +102,7 @@
         },
         {
           "name": "SIONNA_DISABLED",
-          "value": "1"
+          "value": "0"
         },
         {
           "name": "SQS_QUEUE_URL",
