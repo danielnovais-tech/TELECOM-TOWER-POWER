@@ -255,6 +255,30 @@ else
         --region "$REGION" >/dev/null || true
 fi
 
+# Wait for CE to become VALID before attaching it to a job queue
+echo "  waiting for CE to become VALID …"
+for i in $(seq 1 60); do
+  CE_NOW=$(aws batch describe-compute-environments \
+            --compute-environments "$CE_NAME" --region "$REGION" \
+            --query 'computeEnvironments[0].status' --output text 2>/dev/null || echo "")
+  if [[ "$CE_NOW" == "VALID" ]]; then
+    echo "  CE is VALID"
+    break
+  fi
+  if [[ "$CE_NOW" == "INVALID" ]]; then
+    aws batch describe-compute-environments \
+      --compute-environments "$CE_NAME" --region "$REGION" \
+      --query 'computeEnvironments[0].statusReason' --output text >&2
+    echo "ERROR: CE went INVALID" >&2
+    exit 1
+  fi
+  sleep 5
+done
+if [[ "$CE_NOW" != "VALID" ]]; then
+  echo "ERROR: CE did not reach VALID in 5 min (last status: $CE_NOW)" >&2
+  exit 1
+fi
+
 # ── 5) Job queue ────────────────────────────────────────────────────
 echo "[5/6] Batch job queue $JQ_NAME"
 JQ_STATE=$(aws batch describe-job-queues --job-queues "$JQ_NAME" --region "$REGION" \
