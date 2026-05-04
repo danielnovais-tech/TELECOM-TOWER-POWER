@@ -104,8 +104,11 @@ DLQ_URL=$(aws sqs get-queue-url --queue-name "$DLQ_NAME" --region "$REGION" \
             --query QueueUrl --output text 2>/dev/null || true)
 if [[ -z "${DLQ_URL}" || "${DLQ_URL}" == "None" ]]; then
   echo "  creating DLQ $DLQ_NAME"
+  DLQ_ATTRS=$(mktemp)
+  printf '{"MessageRetentionPeriod": "1209600"}\n' > "$DLQ_ATTRS"
   run aws sqs create-queue --queue-name "$DLQ_NAME" --region "$REGION" \
-        --attributes MessageRetentionPeriod=1209600 >/dev/null
+        --attributes "file://$DLQ_ATTRS" >/dev/null
+  rm -f "$DLQ_ATTRS"
   DLQ_URL=$(aws sqs get-queue-url --queue-name "$DLQ_NAME" --region "$REGION" \
               --query QueueUrl --output text 2>/dev/null || echo "")
 fi
@@ -120,13 +123,26 @@ QUEUE_URL=$(aws sqs get-queue-url --queue-name "$QUEUE_NAME" --region "$REGION" 
               --query QueueUrl --output text 2>/dev/null || true)
 if [[ -z "${QUEUE_URL}" || "${QUEUE_URL}" == "None" ]]; then
   echo "  creating queue $QUEUE_NAME (visibility=5400s, redrive→DLQ after 3 receives)"
-  REDRIVE='{}'
+  Q_ATTRS=$(mktemp)
   if [[ -n "$DLQ_ARN" ]]; then
-    REDRIVE="{\"deadLetterTargetArn\":\"$DLQ_ARN\",\"maxReceiveCount\":\"3\"}"
+    cat > "$Q_ATTRS" <<EOF
+{
+  "VisibilityTimeout": "5400",
+  "MessageRetentionPeriod": "345600",
+  "RedrivePolicy": "{\"deadLetterTargetArn\":\"$DLQ_ARN\",\"maxReceiveCount\":\"3\"}"
+}
+EOF
+  else
+    cat > "$Q_ATTRS" <<EOF
+{
+  "VisibilityTimeout": "5400",
+  "MessageRetentionPeriod": "345600"
+}
+EOF
   fi
   run aws sqs create-queue --queue-name "$QUEUE_NAME" --region "$REGION" \
-        --attributes "VisibilityTimeout=5400,MessageRetentionPeriod=345600,RedrivePolicy=${REDRIVE}" \
-        >/dev/null
+        --attributes "file://$Q_ATTRS" >/dev/null
+  rm -f "$Q_ATTRS"
 fi
 
 # ── 2) CloudWatch log group ─────────────────────────────────────────
