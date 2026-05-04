@@ -13,11 +13,12 @@
     ],
     "environment": [
       { "name": "AWS_DEFAULT_REGION", "value": "AWS_REGION" },
+      { "name": "AWS_REGION", "value": "AWS_REGION" },
       { "name": "SIONNA_RT_DISABLED", "value": "0" },
       { "name": "SIONNA_RT_BACKEND", "value": "sionna_rt" },
-      { "name": "SCENE_BUCKET", "value": "telecom-tower-power-scenes" },
-      { "name": "RESULTS_BUCKET", "value": "telecom-tower-power-results" },
-      { "name": "SQS_QUEUE_URL", "value": "https://sqs.AWS_REGION.amazonaws.com/ACCOUNT_ID/telecom-tower-power-rt-jobs" }
+      { "name": "SIONNA_RT_QUEUE_URL", "value": "https://sqs.AWS_REGION.amazonaws.com/ACCOUNT_ID/telecom-tower-power-rt-jobs" },
+      { "name": "SIONNA_RT_MAX_DEPTH", "value": "5" },
+      { "name": "SIONNA_RT_SAMPLES", "value": "1000000" }
     ],
     "logConfiguration": {
       "logDriver": "awslogs",
