@@ -105,6 +105,10 @@
           "value": "0"
         },
         {
+          "name": "SIONNA_FEATURES_VERSION",
+          "value": "v1"
+        },
+        {
           "name": "SQS_QUEUE_URL",
           "value": "https://sqs.sa-east-1.amazonaws.com/490083271496/telecom-batch-jobs-prod"
         },

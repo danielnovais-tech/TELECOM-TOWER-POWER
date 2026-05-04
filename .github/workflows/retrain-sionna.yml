@@ -44,6 +44,14 @@ on:
           - auto
           - always
           - never
+      feature_version:
+        description: 'Feature schema version. v2 adds NDVI-delta slots (dim=30). Requires PLANET_API_KEY secret. Deploy the resulting artefact before flipping SIONNA_FEATURES_VERSION=v2 in ECS.'
+        required: false
+        default: 'v1'
+        type: choice
+        options:
+          - v1
+          - v2
 
 concurrency:
   group: retrain-sionna
@@ -106,6 +114,38 @@ jobs:
             s3://telecom-tower-power-results/srtm/ srtm_data/ \
             --only-show-errors || echo "SRTM sync skipped — training will use flat terrain"
 
+      - name: Refresh NDVI cache (v2 only)
+        if: ${{ (inputs.feature_version || 'v1') == 'v2' }}
+        env:
+          PLANET_API_KEY: ${{ secrets.PLANET_API_KEY }}
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          # Export tower AOIs from the production DB so the NDVI cache covers
+          # the same sites the trainer will actually use.
+          python - <<'PYEOF'
+          import os, json, psycopg2
+          conn = psycopg2.connect(os.environ["DATABASE_URL"])
+          cur  = conn.cursor()
+          cur.execute("""
+            SELECT DISTINCT t.id, t.lat, t.lon
+            FROM link_observations lo
+            JOIN towers t ON t.id = lo.tx_id OR t.id = lo.rx_id
+            WHERE t.lat IS NOT NULL AND t.lon IS NOT NULL
+            LIMIT 5000
+          """)
+          rows = [{"id": str(r[0]), "lat": float(r[1]), "lon": float(r[2])} for r in cur.fetchall()]
+          conn.close()
+          with open("towers_for_ndvi.json", "w") as f:
+              json.dump(rows, f)
+          print(f"Exported {len(rows)} tower AOIs for NDVI cache refresh")
+          PYEOF
+          python scripts/refresh_ndvi_cache.py \
+            --towers towers_for_ndvi.json \
+            --out planet_ndvi_cache.json \
+            --planet-api-key "$PLANET_API_KEY"
+          echo "NDVI cache entries: $(python -c "import json; d=json.load(open('planet_ndvi_cache.json')); print(len(d))")"
+
       - name: Train
         id: train
         env:
@@ -116,6 +156,9 @@ jobs:
           # raster is mirrored to a local NVMe.
           MAPBIOMAS_RASTER_PATH: ""
           SRTM_DATA_DIR: ./srtm_data
+          # v2 feature schema: NDVI-delta slots. Only active when
+          # feature_version=v2; v1 path is bit-identical to deployed model.
+          SIONNA_FEATURES_VERSION: ${{ inputs.feature_version || 'v1' }}
         run: |
           set -euo pipefail
           OUT=models/sionna_$(date -u +%Y%m%d_%H%M)
@@ -190,12 +233,57 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          aws ecs update-service \
+          FV="${{ inputs.feature_version || 'v1' }}"
+          # When promoting a v2 model, update the ECS service env var so
+          # the feature builder at runtime uses the matching schema.
+          # Uses a minimal task-def override rather than re-registering
+          # the full task definition — avoids a git commit per retrain.
+          TASK_DEF_ARN=$(aws ecs describe-services \
             --cluster telecom-tower-power \
-            --service telecom-tower-power \
-            --force-new-deployment \
+            --services telecom-tower-power \
             --region "$AWS_REGION" \
-            --output json | jq -r '.service.deployments[0].id // empty'
+            --query 'services[0].taskDefinition' --output text)
+          if [[ "$FV" == "v2" ]]; then
+            # Register a new task-def revision with SIONNA_FEATURES_VERSION=v2
+            # by patching the current revision's environment override.
+            CURR_DEF=$(aws ecs describe-task-definition \
+              --task-definition "$TASK_DEF_ARN" \
+              --region "$AWS_REGION" --query 'taskDefinition' --output json)
+            NEW_DEF=$(echo "$CURR_DEF" | python3 - <<'PYEOF'
+          import json, sys
+          td = json.load(sys.stdin)
+          for cd in td["containerDefinitions"]:
+              env = cd.get("environment", [])
+              env = [e for e in env if e["name"] != "SIONNA_FEATURES_VERSION"]
+              env.append({"name": "SIONNA_FEATURES_VERSION", "value": "v2"})
+              cd["environment"] = env
+          # Strip read-only fields before re-register
+          for k in ("taskDefinitionArn","revision","status","requiresAttributes",
+                    "compatibilities","registeredAt","registeredBy"):
+              td.pop(k, None)
+          print(json.dumps(td))
+          PYEOF
+            )
+            NEW_ARN=$(echo "$NEW_DEF" | aws ecs register-task-definition \
+              --cli-input-json file:///dev/stdin \
+              --region "$AWS_REGION" \
+              --query 'taskDefinition.taskDefinitionArn' --output text)
+            echo "Registered v2 task def: $NEW_ARN"
+            aws ecs update-service \
+              --cluster telecom-tower-power \
+              --service telecom-tower-power \
+              --task-definition "$NEW_ARN" \
+              --force-new-deployment \
+              --region "$AWS_REGION" \
+              --output json | jq -r '.service.deployments[0].id // empty'
+          else
+            aws ecs update-service \
+              --cluster telecom-tower-power \
+              --service telecom-tower-power \
+              --force-new-deployment \
+              --region "$AWS_REGION" \
+              --output json | jq -r '.service.deployments[0].id // empty'
+          fi
 
       - name: Job summary
         if: always()
