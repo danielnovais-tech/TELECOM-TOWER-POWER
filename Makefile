@@ -25,6 +25,7 @@ LAMBDA_PY_FILES = \
 	repeater_jobs_store.py \
 	hop_cache.py \
 	graphql_schema.py \
+	interference_engine.py \
 	tracing.py
 
 # Data files needed at runtime
