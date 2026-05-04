@@ -78,6 +78,9 @@ COPY sso_auth.py .
 COPY graphql_schema.py .
 COPY rf_engines_router.py .
 COPY rf_engines/ rf_engines/
+COPY interference_engine.py .
+COPY sqs_lambda_worker.py .
+COPY batch_gpu_interference_worker.py .
 COPY coverage_export.py .
 COPY batch_worker.py .
 COPY tracing.py .
