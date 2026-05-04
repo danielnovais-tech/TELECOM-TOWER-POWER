@@ -1,0 +1,133 @@
+name: Build & push GPU worker image (Sionna RT)
+
+# Builds Dockerfile.gpu (CUDA 12.4 + Mitsuba + Sionna RT 2.x) and pushes
+# it to ECR repo `telecom-tower-power-rt`. Consumed by AWS Batch G-instance
+# job definitions — NOT by the API/Fargate service (that uses the root
+# Dockerfile + repo `telecom-tower-power`).
+#
+# Manual trigger only — GPU builds are slow (~10–15 min) and the image
+# is large (~7 GB). Don't run on every push.
+#
+# Required repo secrets:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY  — ECR push perms (sa-east-1)
+#   AWS_ACCOUNT_ID                            — e.g. 490083271496
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag (default: git SHA short)'
+        required: false
+        default: ''
+      aws_region:
+        description: 'AWS region'
+        required: false
+        default: 'sa-east-1'
+      push_latest:
+        description: 'Also tag/push as :latest'
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: build-gpu-image
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # GPU image is ~7 GB; full build needs ~12 min on a 4-vCPU runner.
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+
+    env:
+      AWS_REGION: ${{ github.event.inputs.aws_region || 'sa-east-1' }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      ECR_REPO: telecom-tower-power-rt
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.image_tag }}"
+          if [ -z "$TAG" ]; then TAG="${GITHUB_SHA::7}"; fi
+          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $TAG"
+
+      - name: Free disk space on runner
+        # The CUDA base + torch + sionna stack easily exceeds the
+        # default 14 GB free-space budget on GH-hosted runners. Drop
+        # the .NET/Android/Haskell tarballs we don't need.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories \
+              --repository-names "$ECR_REPO" \
+              --region "$AWS_REGION" >/dev/null 2>&1 \
+            || aws ecr create-repository \
+                 --repository-name "$ECR_REPO" \
+                 --region "$AWS_REGION" \
+                 --image-scanning-configuration scanOnPush=true >/dev/null
+
+      - name: Build and push image
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}
+          TAG: ${{ steps.tag.outputs.image_tag }}
+          PUSH_LATEST: ${{ github.event.inputs.push_latest }}
+        run: |
+          set -euo pipefail
+          TAGS=(--tag "$IMAGE:$TAG")
+          if [ "$PUSH_LATEST" = "true" ]; then
+            TAGS+=(--tag "$IMAGE:latest")
+          fi
+          docker buildx build \
+            --platform linux/amd64 \
+            --file Dockerfile.gpu \
+            --cache-from "type=registry,ref=$IMAGE:buildcache" \
+            --cache-to   "type=registry,ref=$IMAGE:buildcache,mode=max" \
+            "${TAGS[@]}" \
+            --push \
+            .
+
+      - name: Image summary
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}
+          TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          {
+            echo "## GPU worker image pushed"
+            echo ""
+            echo "- Repository: \`$ECR_REPO\`"
+            echo "- Tag: \`$TAG\`"
+            echo "- Full URI: \`$IMAGE:$TAG\`"
+            echo ""
+            echo "Update the AWS Batch job definition to point at this URI"
+            echo "to roll out (no automatic Batch deployment from this"
+            echo "workflow — that's intentional for the GPU pool)."
+          } >> "$GITHUB_STEP_SUMMARY"
