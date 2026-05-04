@@ -2799,11 +2799,13 @@ def _interference_select_engine(requested: str) -> str:
         )
     if requested in ("auto", "fspl"):
         return "fspl"
+    if requested == "sionna-rt":
+        return "sionna-rt"
     raise HTTPException(
         status_code=501,
         detail=f"engine {requested!r} not yet supported in /coverage/interference; "
-               "use engine='fspl' (or 'auto'). ITM / P.1812 / Sionna RT path "
-               "is on the T17.5+ roadmap.",
+               "use engine='fspl' (or 'auto') or 'sionna-rt' "
+               "(GPU + scene required). ITM / P.1812 path is on the T17.5+ roadmap.",
     )
 
 
@@ -2853,6 +2855,27 @@ async def coverage_interference(
     co_count = 0
     adj_count = 0
     in_radius = 0
+    n_engine_failures = 0
+
+    # Engine selection: FSPL is computed inline (cheap closed-form);
+    # Sionna RT defers to the dedicated handler in
+    # ``rf_engines.interference_engine`` which calls predict_basic_loss
+    # per aggressor. Other engines were rejected upstream by
+    # ``_interference_select_engine``.
+    sionna_rt_handler = None
+    if engine_name == "sionna-rt":
+        from rf_engines.interference_engine import (
+            SionnaRTInterferenceHandler,
+        )
+        sionna_rt_handler = SionnaRTInterferenceHandler()
+        if not sionna_rt_handler.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="sionna-rt engine not available: set SIONNA_RT_DISABLED=0, "
+                       "SIONNA_RT_SCENE_PATH to a directory with scene.xml + "
+                       "manifest.json, and ensure mitsuba + sionna_rt imports succeed",
+            )
+
     for t in candidates:
         d_km = LinkEngine.haversine_km(
             body.victim.lat, body.victim.lon, t.lat, t.lon,
@@ -2875,9 +2898,31 @@ async def coverage_interference(
         # per-band Gt from the request.
         eirp_dbm = float(t.power_dbm) + body.aggressor_tx_gain_dbi
 
-        # FSPL only for v1. Engine plug-points (ITM, Sionna RT) reuse the
-        # contribution builder verbatim with a different ``path_loss_db``.
-        pl_db = LinkEngine.free_space_path_loss(d_km, agg_f_hz)
+        if sionna_rt_handler is not None:
+            # Sionna RT path-loss per aggressor (deterministic 3D ray
+            # tracing). Falls back to skipping the aggressor when the
+            # ray solver returns None (e.g. RX outside scene bbox).
+            try:
+                est = sionna_rt_handler._engine.predict_basic_loss(
+                    f_hz=agg_f_hz,
+                    d_km=(0.0, max(d_km, 0.001)),
+                    h_m=(0.0, 0.0),
+                    htg=float(getattr(t, "height_m", 0.0) or 0.0),
+                    hrg=body.victim.rx_height_m,
+                    phi_t=t.lat, lam_t=t.lon,
+                    phi_r=body.victim.lat, lam_r=body.victim.lon,
+                )
+            except Exception:
+                logger.exception("sionna-rt predict_basic_loss raised for tower=%s", t.id)
+                est = None
+            if est is None:
+                n_engine_failures += 1
+                continue
+            pl_db = float(est.basic_loss_db)
+        else:
+            # FSPL only for v1. Engine plug-points (ITM, etc.) reuse the
+            # contribution builder verbatim with a different ``path_loss_db``.
+            pl_db = LinkEngine.free_space_path_loss(d_km, agg_f_hz)
 
         c = build_contribution(
             aggressor_id=t.id,

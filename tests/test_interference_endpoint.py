@@ -138,12 +138,90 @@ def test_interference_unknown_engine_returns_400(app_client):
     assert r.status_code == 400
 
 
-def test_interference_unsupported_engine_returns_501(app_client):
-    # Sionna RT path is recognised but not yet wired for /interference.
+def test_interference_sionna_rt_unavailable_returns_503(app_client):
+    # Sionna RT is recognised; in CI the engine is not wired
+    # (no GPU, no scene file) so the handler reports unavailable
+    # and the endpoint surfaces that as HTTP 503.
     r = app_client.post("/coverage/interference",
                         json=_body(engine="sionna-rt"))
-    assert r.status_code == 501
+    assert r.status_code == 503
     assert "sionna-rt" in r.json()["detail"]
+
+
+def test_interference_sionna_rt_available_uses_engine(app_client, monkeypatch):
+    """When SionnaRTEngine reports available, the endpoint dispatches to
+    it for path-loss and the response is_engine="sionna-rt"."""
+    from rf_engines import interference_engine as rf_intf
+    from rf_engines.base import LossEstimate
+
+    class _FakeEngine:
+        def is_available(self):
+            return True
+
+        def predict_basic_loss(self, *, f_hz, d_km, h_m, htg, hrg,
+                               phi_t, lam_t, phi_r, lam_r):
+            # Constant 110 dB, ignoring geometry — deterministic for assertion.
+            return LossEstimate(basic_loss_db=110.0, engine="sionna-rt")
+
+    monkeypatch.setattr(
+        rf_intf, "SionnaRTEngine", lambda: _FakeEngine(),
+    )
+
+    r = app_client.post("/coverage/interference",
+                        json=_body(engine="sionna-rt"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["engine"] == "sionna-rt"
+    # All 3 synthetic aggressors saw PL=110 dB → identical Pr per aggressor.
+    top = body["top_n_aggressors"]
+    assert len(top) == 3
+    assert all(a["path_loss_db"] == 110.0 for a in top)
+    # Co-channel @ 2600 with EIRP=60 dBm → Pr = 60 - 110 + 12 = -38 dBm each.
+    for a in top:
+        assert a["rx_power_dbm"] == pytest.approx(-38.0, abs=0.01)
+
+
+def test_interference_sionna_rt_skips_failed_links(app_client, monkeypatch):
+    """A None return from predict_basic_loss decrements n_contributing."""
+    from rf_engines import interference_engine as rf_intf
+    from rf_engines.base import LossEstimate
+
+    class _PartialEngine:
+        def __init__(self):
+            self._n = 0
+
+        def is_available(self):
+            return True
+
+        def predict_basic_loss(self, *, f_hz, d_km, h_m, htg, hrg,
+                               phi_t, lam_t, phi_r, lam_r):
+            self._n += 1
+            # Second call → None (simulate RX outside scene bbox).
+            if self._n == 2:
+                return None
+            return LossEstimate(basic_loss_db=120.0, engine="sionna-rt")
+
+    monkeypatch.setattr(
+        rf_intf, "SionnaRTEngine", lambda: _PartialEngine(),
+    )
+
+    r = app_client.post("/coverage/interference",
+                        json=_body(engine="sionna-rt"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["engine"] == "sionna-rt"
+    assert body["n_in_radius"] == 3
+    # 1 of 3 aggressors dropped by the engine → 2 contributing.
+    assert body["n_contributing"] == 2
+    assert len(body["top_n_aggressors"]) == 2
+
+
+def test_interference_unsupported_engine_returns_501(app_client):
+    # ITM and P.1812 are recognised but not yet wired for /interference.
+    r = app_client.post("/coverage/interference",
+                        json=_body(engine="itu-p1812"))
+    assert r.status_code == 501
+    assert "itu-p1812" in r.json()["detail"]
 
 
 def test_interference_co_channel_only_drops_adjacent(app_client, monkeypatch):
