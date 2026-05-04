@@ -88,11 +88,27 @@ def fakes(monkeypatch, env):
     return sqs, s3
 
 
+def _make_app(*, tier="business", owner="tenant-a", api_key="ttp_test_key",
+              is_admin=False):
+    """Build a TestClient app whose middleware seeds request.state with
+    the auth context that production's `verify_api_key` would set."""
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _seed_auth(request, call_next):
+        request.state.tier = tier
+        request.state.owner = owner
+        request.state.api_key = api_key
+        request.state.is_admin = is_admin
+        return await call_next(request)
+
+    app.include_router(rrouter.router)
+    return app
+
+
 @pytest.fixture
 def client(fakes):
-    app = FastAPI()
-    app.include_router(rrouter.router)
-    return TestClient(app)
+    return TestClient(_make_app())
 
 
 def _payload(**overrides):
@@ -270,3 +286,164 @@ def test_reaper_drops_old_jobs(monkeypatch, client, fakes):
     # Polling a reaped job is a 404 (not a 500).
     r2 = client.get(f"/coverage/engines/sionna-rt/raster/{job_id}")
     assert r2.status_code == 404
+
+
+# ── Tier gating ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("tier", ["free", "starter", "pro", "", "unknown"])
+def test_submit_403_for_low_or_unknown_tier(fakes, tier):
+    """Sionna RT is restricted to BUSINESS / ENTERPRISE / ULTRA."""
+    app = _make_app(tier=tier)
+    client = TestClient(app)
+    r = client.post("/coverage/engines/sionna-rt/raster", json=_payload())
+    assert r.status_code == 403
+    detail = r.json()["detail"].lower()
+    assert "business" in detail or "tier" in detail
+
+
+@pytest.mark.parametrize("tier", ["business", "enterprise", "ultra"])
+def test_submit_accepts_paying_tiers(fakes, tier):
+    app = _make_app(tier=tier)
+    client = TestClient(app)
+    r = client.post("/coverage/engines/sionna-rt/raster", json=_payload())
+    assert r.status_code == 202, r.text
+
+
+def test_admin_bypasses_tier_gate(fakes):
+    """Admin keys may submit even when their tenant-tier would deny."""
+    app = _make_app(tier="free", is_admin=True)
+    client = TestClient(app)
+    r = client.post("/coverage/engines/sionna-rt/raster", json=_payload())
+    assert r.status_code == 202, r.text
+
+
+# ── Per-tier cell caps ───────────────────────────────────────────
+
+@pytest.mark.parametrize("tier,rows,cols,expect_status", [
+    # business cap = 40k
+    ("business", 200, 200, 202),
+    ("business", 201, 200, 403),
+    # enterprise cap = 160k
+    ("enterprise", 400, 400, 202),
+    ("enterprise", 401, 400, 403),
+    # ultra cap = 640k (800x800)
+    ("ultra", 800, 800, 202),
+    ("ultra", 801, 800, 403),
+])
+def test_per_tier_cell_caps(fakes, tier, rows, cols, expect_status):
+    app = _make_app(tier=tier)
+    client = TestClient(app)
+    body = _payload(raster_grid={
+        "rows": rows, "cols": cols,
+        "bbox": [-23.56, -46.64, -23.54, -46.62],
+    })
+    r = client.post("/coverage/engines/sionna-rt/raster", json=body)
+    assert r.status_code == expect_status, r.text
+    if expect_status == 403:
+        assert tier in r.json()["detail"].lower()
+
+
+# ── OWASP A01: cross-tenant IDOR on GET ──────────────────────────
+
+def test_get_404_when_other_tenant_polls(fakes):
+    """Tenant B polling Tenant A's job_id must see 404 (not 200, not 403)."""
+    app_a = _make_app(tier="business", owner="tenant-a")
+    client_a = TestClient(app_a)
+    r = client_a.post("/coverage/engines/sionna-rt/raster", json=_payload())
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+
+    app_b = _make_app(tier="business", owner="tenant-b")
+    client_b = TestClient(app_b)
+    r2 = client_b.get(f"/coverage/engines/sionna-rt/raster/{job_id}")
+    assert r2.status_code == 404
+    assert r2.json()["detail"] == "job not found or expired"
+
+    # Owner can still poll their own job successfully.
+    r3 = client_a.get(f"/coverage/engines/sionna-rt/raster/{job_id}")
+    assert r3.status_code == 200
+    assert r3.json()["status"] in {"queued", "done"}
+
+
+def test_get_admin_can_poll_any_tenant_job(fakes):
+    """Admin keys are allowed cross-tenant reads (impersonation use-case)."""
+    app_a = _make_app(tier="business", owner="tenant-a")
+    client_a = TestClient(app_a)
+    r = client_a.post("/coverage/engines/sionna-rt/raster", json=_payload())
+    job_id = r.json()["job_id"]
+
+    app_admin = _make_app(tier="business", owner="admin-ops", is_admin=True)
+    client_admin = TestClient(app_admin)
+    r2 = client_admin.get(f"/coverage/engines/sionna-rt/raster/{job_id}")
+    assert r2.status_code == 200
+
+
+# ── Audit logging ────────────────────────────────────────────────
+
+def test_submit_writes_audit_row(monkeypatch, client, fakes):
+    captured: list[dict] = []
+
+    async def _fake_log(api_key, action, **kwargs):
+        captured.append({"api_key": api_key, "action": action, **kwargs})
+
+    import audit_log
+    monkeypatch.setattr(audit_log, "log", _fake_log)
+
+    r = client.post("/coverage/engines/sionna-rt/raster", json=_payload())
+    assert r.status_code == 202
+
+    actions = [c["action"] for c in captured]
+    assert "coverage.rt.raster.submit" in actions
+    submit_row = next(c for c in captured if c["action"] == "coverage.rt.raster.submit")
+    assert submit_row["api_key"] == "ttp_test_key"
+    assert submit_row["tier"] == "business"
+    assert submit_row["target"].startswith("job:")
+    assert submit_row["metadata"]["rows"] == 64
+    assert submit_row["metadata"]["cols"] == 64
+
+
+def test_poll_audit_only_on_terminal_transition(monkeypatch, client, fakes):
+    """Polls while still queued must not emit poll-audit rows; the row
+    appears exactly once on the transition to 'done'."""
+    captured: list[dict] = []
+
+    async def _fake_log(api_key, action, **kwargs):
+        captured.append({"api_key": api_key, "action": action, **kwargs})
+
+    import audit_log
+    monkeypatch.setattr(audit_log, "log", _fake_log)
+
+    sqs, s3 = fakes
+    r = client.post("/coverage/engines/sionna-rt/raster", json=_payload())
+    job_id = r.json()["job_id"]
+
+    # First poll while object missing — no poll-audit.
+    client.get(f"/coverage/engines/sionna-rt/raster/{job_id}")
+    poll_rows = [c for c in captured if c["action"] == "coverage.rt.raster.poll"]
+    assert poll_rows == []
+
+    # Worker uploads result; next poll transitions to done and audits.
+    s3.store[("ttp-rt-results", f"rasters/{job_id}.npz")] = b"\x00" * 100
+    client.get(f"/coverage/engines/sionna-rt/raster/{job_id}")
+    poll_rows = [c for c in captured if c["action"] == "coverage.rt.raster.poll"]
+    assert len(poll_rows) == 1
+    assert poll_rows[0]["metadata"]["status"] == "done"
+    assert poll_rows[0]["metadata"]["raster_bytes"] == 100
+
+    # Subsequent polls (already done) do NOT re-audit.
+    client.get(f"/coverage/engines/sionna-rt/raster/{job_id}")
+    client.get(f"/coverage/engines/sionna-rt/raster/{job_id}")
+    poll_rows = [c for c in captured if c["action"] == "coverage.rt.raster.poll"]
+    assert len(poll_rows) == 1
+
+
+def test_audit_failure_does_not_break_submit(monkeypatch, client, fakes):
+    """A broken audit_log must not propagate as a 500 to the caller."""
+    async def _broken(api_key, action, **kwargs):
+        raise RuntimeError("audit DB down")
+
+    import audit_log
+    monkeypatch.setattr(audit_log, "log", _broken)
+
+    r = client.post("/coverage/engines/sionna-rt/raster", json=_payload())
+    assert r.status_code == 202

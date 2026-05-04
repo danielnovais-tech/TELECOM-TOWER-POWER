@@ -1087,6 +1087,12 @@ async def verify_api_key(request: Request, api_key: str = Security(api_key_heade
     request.state.rate_limit_remaining = remaining
     request.state.rate_limit_limit = limit
     request.state.is_demo = bool(key_data.get("demo"))
+    # Mounted sub-routers (e.g. rf_engines_router) inherit verify_api_key
+    # via FastAPI's `dependencies=[…]` form, which doesn't pass key_data
+    # to handlers. Surface the owner/api_key on request.state so those
+    # handlers can enforce tier + IDOR without a circular import.
+    request.state.api_key = api_key
+    request.state.owner = key_data.get("owner")
     # Carry the api_key in the dependency payload so downstream handlers
     # (tenant branding, usage portal) can look up per-key state without
     # re-parsing the header.

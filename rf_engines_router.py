@@ -24,7 +24,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Sequence
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
 from rf_engines import get_engine, list_engines
@@ -137,6 +137,22 @@ _QUEUE_URL_ENV = "SIONNA_RT_QUEUE_URL"
 _RESULTS_BUCKET_ENV = "SIONNA_RT_RESULTS_BUCKET"
 _RESULTS_PREFIX_ENV = "SIONNA_RT_RESULTS_PREFIX"  # default 'sionna-rt-rasters/'
 _PRESIGN_TTL_S = int(os.getenv("SIONNA_RT_PRESIGN_TTL_S", "3600"))
+
+# Sionna RT is GPU-expensive. Restrict it to paying tiers from BUSINESS up;
+# FREE/STARTER/PRO callers get a hard 403 even though they could otherwise
+# hit /coverage/engines/* (the registry's cheap engines remain open). Admin
+# keys bypass the gate, mirroring the rest of the API.
+_RT_ALLOWED_TIERS = frozenset({"business", "enterprise", "ultra"})
+
+# Per-tier cell-count caps for the loss raster. Distinct from
+# `_HEATMAP_MAX_CELLS` in telecom_tower_power_api.py because RT is roughly
+# an order of magnitude more expensive than the regression heatmap. The
+# global hard ceiling (4M cells) in `_RasterGridIn` still applies.
+_RT_RASTER_MAX_CELLS = {
+    "business":     40_000,    # 200 x 200
+    "enterprise":  160_000,    # 400 x 400
+    "ultra":       640_000,    # 800 x 800
+}
 
 # In-memory job tracker. Lightweight: jobs are short-lived and the
 # authoritative state lives on SQS + S3. The dict only carries enough
@@ -291,10 +307,69 @@ def _resolve_queue_url() -> str:
     return q
 
 
+def _auth_context(request: Request) -> tuple[str, Optional[str], Optional[str], bool]:
+    """Pull (tier, owner, api_key, is_admin) off ``request.state``.
+
+    The API container's ``verify_api_key`` populates these (see
+    telecom_tower_power_api.py); the router is mounted *after* that
+    dependency so the values are guaranteed to be present in production.
+    Tests can stub them via a tiny ASGI middleware on the test app.
+    """
+    state = request.state
+    tier = (getattr(state, "tier", None) or "").lower()
+    owner = getattr(state, "owner", None)
+    api_key = getattr(state, "api_key", None)
+    is_admin = bool(getattr(state, "is_admin", False))
+    return tier, owner, api_key, is_admin
+
+
+def _enforce_rt_tier(tier: str, is_admin: bool) -> None:
+    if is_admin:
+        return
+    if tier not in _RT_ALLOWED_TIERS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "sionna-rt raster requires Business / Enterprise / Ultra tier. "
+                f"Your tier: {tier or 'unknown'}"
+            ),
+        )
+
+
+def _enforce_rt_cell_cap(rows: int, cols: int, tier: str, is_admin: bool) -> None:
+    if is_admin:
+        return
+    cap = _RT_RASTER_MAX_CELLS.get(tier)
+    if cap is None:
+        # Unknown / disallowed tier — _enforce_rt_tier will already
+        # have raised; this is defence in depth.
+        raise HTTPException(status_code=403, detail="sionna-rt raster: tier not allowed")
+    if rows * cols > cap:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"raster_grid {rows}x{cols} ({rows * cols} cells) exceeds "
+                f"{tier} tier cap of {cap} cells. Reduce the grid or upgrade."
+            ),
+        )
+
+
+async def _audit_log_safe(api_key: Optional[str], action: str, **fields: Any) -> None:
+    """Best-effort audit logging — never fails the request."""
+    if not api_key:
+        return
+    try:
+        import audit_log as _audit  # lazy: keeps this module standalone-importable
+        await _audit.log(api_key, action, **fields)
+    except Exception:
+        logger.exception("rf_engines audit log failed for %s", action)
+
+
 @router.post("/sionna-rt/raster",
              response_model=SionnaRTRasterAccepted, status_code=202)
 async def sionna_rt_raster_submit(
     req: SionnaRTRasterRequest,
+    request: Request,
 ) -> SionnaRTRasterAccepted:
     """Enqueue a per-pixel loss-raster job for the Sionna RT GPU worker.
 
@@ -302,11 +377,16 @@ async def sionna_rt_raster_submit(
     raster lands at ``result_s3_uri`` once the worker is done; poll the
     status endpoint for a presigned URL.
 
-    Status code is intentionally ``503`` (not ``500``) when ops haven't
-    set ``$SIONNA_RT_QUEUE_URL`` / ``$SIONNA_RT_RESULTS_BUCKET`` — the
-    feature is correctly *configured* off by default until the worker
-    pool is provisioned.
+    Restricted to Business / Enterprise / Ultra (RT is the GPU-priced
+    engine). Cell-count caps are per-tier. Status code is intentionally
+    ``503`` (not ``500``) when ops haven't set ``$SIONNA_RT_QUEUE_URL``
+    / ``$SIONNA_RT_RESULTS_BUCKET`` — the feature is correctly
+    *configured* off by default until the worker pool is provisioned.
     """
+    tier, owner, api_key, is_admin = _auth_context(request)
+    _enforce_rt_tier(tier, is_admin)
+    _enforce_rt_cell_cap(req.raster_grid.rows, req.raster_grid.cols, tier, is_admin)
+
     queue_url = _resolve_queue_url()
     job_id = uuid.uuid4().hex
     _, _, result_s3_uri = _build_result_s3_uri(job_id)
@@ -335,7 +415,9 @@ async def sionna_rt_raster_submit(
     _jobs[job_id] = {
         "job_id": job_id,
         "status": "queued",
-        "owner": None,
+        # OWASP A01: lock the job to the caller's owner so cross-tenant
+        # polls return 404 (not 403) on the GET handler — see below.
+        "owner": owner,
         "result_s3_uri": result_s3_uri,
         "scene_s3_uri": scene_uri,
         "created_at": now,
@@ -343,6 +425,20 @@ async def sionna_rt_raster_submit(
         "rows": req.raster_grid.rows,
         "cols": req.raster_grid.cols,
     }
+    await _audit_log_safe(
+        api_key,
+        "coverage.rt.raster.submit",
+        tier=tier,
+        target=f"job:{job_id}",
+        ip=(request.client.host if request.client else None),
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "rows": req.raster_grid.rows,
+            "cols": req.raster_grid.cols,
+            "frequency_hz": float(req.frequency_hz),
+            "scene_s3_uri": scene_uri,
+        },
+    )
     return SionnaRTRasterAccepted(
         job_id=job_id,
         status="queued",
@@ -355,6 +451,7 @@ async def sionna_rt_raster_submit(
             response_model=SionnaRTRasterStatus)
 async def sionna_rt_raster_status(
     job_id: str,
+    request: Request,
 ) -> SionnaRTRasterStatus:
     """Return the current status of a Sionna RT raster job.
 
@@ -363,9 +460,20 @@ async def sionna_rt_raster_status(
     worker directly. While the object is missing the job stays
     ``queued``; once it appears we return a presigned download URL
     valid for ``$SIONNA_RT_PRESIGN_TTL_S`` seconds (default 1 h).
+
+    Cross-tenant polls return ``404`` (OWASP A01 — never disclose
+    job_id existence to non-owners).
     """
+    tier, owner, api_key, is_admin = _auth_context(request)
     j = _jobs.get(job_id)
-    if not j:
+    # Combine "missing" and "wrong owner" into a single 404 so an
+    # attacker can't distinguish "job never existed" from "belongs to
+    # another tenant" by timing or response shape.
+    if not j or (
+        not is_admin
+        and j.get("owner") is not None
+        and j.get("owner") != owner
+    ):
         raise HTTPException(status_code=404, detail="job not found or expired")
 
     s3 = _get_s3()
@@ -374,6 +482,7 @@ async def sionna_rt_raster_status(
     finished_at: Optional[float] = j.get("finished_at")
     raster_url: Optional[str] = None
     raster_bytes: Optional[int] = None
+    transitioned_to_done = False
     try:
         head = s3.head_object(Bucket=bucket, Key=key)
         raster_bytes = int(head.get("ContentLength") or 0)
@@ -382,6 +491,8 @@ async def sionna_rt_raster_status(
             Params={"Bucket": bucket, "Key": key},
             ExpiresIn=_PRESIGN_TTL_S,
         )
+        if status != "done":
+            transitioned_to_done = True
         status = "done"
         if finished_at is None:
             finished_at = time.time()
@@ -389,6 +500,18 @@ async def sionna_rt_raster_status(
             j["status"] = "done"
     except Exception:
         logger.debug("sionna-rt raster head_object miss for %s", job_id)
+    # Audit only on terminal-state transitions to keep the table sane —
+    # callers may poll dozens of times before the worker finishes.
+    if transitioned_to_done:
+        await _audit_log_safe(
+            api_key,
+            "coverage.rt.raster.poll",
+            tier=tier,
+            target=f"job:{job_id}",
+            ip=(request.client.host if request.client else None),
+            user_agent=request.headers.get("user-agent"),
+            metadata={"status": "done", "raster_bytes": raster_bytes},
+        )
     return SionnaRTRasterStatus(
         job_id=job_id,
         status=status,
