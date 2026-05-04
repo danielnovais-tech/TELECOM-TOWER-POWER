@@ -4,21 +4,37 @@
 
 Status
 ------
-**Tijolo 9 (2026-05-04) — feature-flag gated.** The engine is
-``is_available()=True`` when all three conditions are met:
+**Tijolo 11 (2026-05-04) — real single-link prediction.**
+``predict_basic_loss`` now uses Sionna RT's *paths mode*: an explicit
+``srt.Receiver`` is placed at ``(phi_r, lam_r, hrg)`` alongside a
+``srt.Transmitter`` at ``(phi_t, lam_t, htg)``; ``PathSolver`` runs
+deterministic ray launching and returns a ``Paths`` object; the total
+path gain ``Σ|aᵢ|²`` is converted to basic loss in dB.
 
-1. ``$SIONNA_RT_DISABLED`` is ``0`` / ``false`` / ``no`` (default
-   ``1`` — disabled).
-2. ``$SIONNA_RT_SCENE_PATH`` points to a directory that holds a
-   valid ``scene.xml`` and ``manifest.json`` (produced by
-   ``scripts/build_mitsuba_scene.py``).
-3. ``mitsuba`` and ``sionna_rt`` are importable (GPU stack installed).
+This replaces the T9 scaffold that delegated to the raster
+``_SionnaRtTracer.trace()`` — a Coverage-Map path designed for large
+tile jobs, not single-link predictions.  The key improvements:
 
-When available, ``predict_basic_loss`` runs a 1×1 raster (a single
-receiver pixel centred on ``(phi_r, lam_r)``) via the T8
-``_SionnaRtTracer`` and returns the loss for that pixel. The full
-per-tile raster path (SQS async, ``POST /coverage/engines/sionna-rt/raster``)
-is unchanged and remains the preferred route for large requests.
+* **``hrg`` is respected** — the receiver z-coordinate is set from the
+  actual antenna height above ground, not a global env-var default.
+* **Exact receiver coordinates** — no 500 m area averaging.
+* **mmWave-correct** — deterministic ray paths capture LOS/NLOS
+  transitions that a coverage-map cell at 28 GHz would smear out.
+* **Scene bbox guard** — returns ``None`` (fail-closed) when the RX
+  point is outside the scene, rather than emitting a spurious 300 dB
+  sentinel from zero-path gain.
+
+Availability (all three conditions required):
+
+1. ``$SIONNA_RT_DISABLED=0`` (default: ``1``).
+2. ``$SIONNA_RT_SCENE_PATH`` points to a directory with a valid
+   ``scene.xml`` + ``manifest.json``.
+3. ``mitsuba`` and ``sionna_rt`` importable.
+
+The raster path (``POST /coverage/engines/sionna-rt/raster`` → SQS →
+``_SionnaRtTracer.trace()``) is unchanged.  That path is preferred for
+large coverage sweeps; ``predict_basic_loss`` is the per-link fast path
+used by ``/coverage/engines/compare`` and the T10 validation gate.
 
 Distinction from the existing ``sionna`` engine
 -----------------------------------------------
@@ -171,46 +187,107 @@ class SionnaRTEngine(RFEngine):
         phi_r: float,
         lam_r: float,
     ) -> Optional[LossEstimate]:
-        # Lazy import here so the module stays importable on CPU hosts.
-        import sys as _sys
-        _worker_mod = _sys.modules.get("scripts.sionna_rt_worker")
-        if _worker_mod is None:
-            import importlib
-            _worker_mod = importlib.import_module("scripts.sionna_rt_worker")
+        """Single-link prediction via Sionna RT paths mode.
 
-        tracer = _worker_mod._SionnaRtTracer()
+        Places an explicit ``srt.Transmitter`` at (phi_t, lam_t, htg) and an
+        explicit ``srt.Receiver`` at (phi_r, lam_r, hrg), runs
+        ``PathSolver`` without a coverage-map grid, and converts the total
+        path gain ``Σ|aᵢ|²`` to basic loss in dB.
 
-        # Build a minimal 1-cell Job that places the receiver pixel
-        # directly at (phi_r, lam_r).  The bbox spans ±_CELL_HALF_DEG
-        # so the cell covers a ~500 m × 500 m footprint — wide enough
-        # to avoid the pixel straddling the scene edge on any input.
-        _CELL_HALF_DEG = 0.0025  # ≈ 250 m at equator
-        job = _worker_mod.Job(
-            job_id="inline-predict",
-            scene_s3_uri="",         # not used for local traces
-            result_s3_uri="",        # not used
-            tx_lat=float(phi_t),
-            tx_lon=float(lam_t),
-            tx_height_m=float(htg),
-            tx_power_dbm=43.0,       # irrelevant — path loss is geometry
-            frequency_hz=float(f_hz),
-            rows=1,
-            cols=1,
-            bbox_south=float(phi_r) - _CELL_HALF_DEG,
-            bbox_west=float(lam_r) - _CELL_HALF_DEG,
-            bbox_north=float(phi_r) + _CELL_HALF_DEG,
-            bbox_east=float(lam_r) + _CELL_HALF_DEG,
+        This is fundamentally different from the raster/CoverageMap path in
+        ``_SionnaRtTracer.trace()`` — that code is designed for large tile
+        jobs (1000×1000 cells, SQS async queue).  For a single link we want:
+
+        * exact receiver coordinates (respecting ``hrg``);
+        * deterministic ray paths, not a Monte-Carlo area average;
+        * a result that is physically meaningful at mmWave, where a 500 m
+          coverage-map cell would average over LOS and deep-NLOS pixels.
+        """
+        import importlib
+        import math
+
+        import mitsuba as mi          # type: ignore[import-not-found]
+        import numpy as np            # type: ignore[import-not-found]
+        import sionna_rt as srt       # type: ignore[import-not-found]
+
+        # Worker helpers: manifest parsing, scene.xml lookup, variant selection.
+        # Lazy import keeps this module importable on CPU hosts without numpy.
+        _w = sys.modules.get("scripts.sionna_rt_worker")
+        if _w is None:
+            _w = importlib.import_module("scripts.sionna_rt_worker")
+
+        scene_dir = _scene_path()
+        manifest = _w._load_manifest(scene_dir)
+        scene_xml = _w._resolve_scene_xml(scene_dir)
+
+        # Guard: an RX outside the scene bbox produces degenerate path gains
+        # (all rays miss the geometry).  Returning None is safer than emitting
+        # a spurious 300 dB sentinel that might slip into A/B comparisons.
+        bbox = manifest.get("bbox")  # [south, west, north, east]
+        if bbox:
+            s, w, n, e = (float(b) for b in bbox)
+            if not (s <= phi_r <= n and w <= lam_r <= e):
+                logger.warning(
+                    "RX (%.6f, %.6f) is outside scene bbox "
+                    "[%.4f, %.4f, %.4f, %.4f] — returning None",
+                    phi_r, lam_r, s, w, n, e,
+                )
+                return None
+
+        # ENU projection centred on the scene bbox midpoint — must match the
+        # coordinate frame used by scripts/build_mitsuba_scene.py so that
+        # TX / RX positions align with the loaded Mitsuba geometry.
+        if bbox:
+            lon0 = (float(bbox[1]) + float(bbox[3])) / 2.0
+            lat0_c = (float(bbox[0]) + float(bbox[2])) / 2.0
+        else:
+            lon0 = (lam_t + lam_r) / 2.0
+            lat0_c = (phi_t + phi_r) / 2.0
+        R = 6_371_008.8
+        cos_lat0 = math.cos(math.radians(lat0_c))
+
+        def _proj(lat: float, lon: float, z: float) -> list:
+            x = math.radians(lon - lon0) * R * cos_lat0
+            y = math.radians(lat - lat0_c) * R
+            return [x, y, float(z)]
+
+        variant = _w._select_mitsuba_variant(mi)
+        mi.set_variant(variant)
+
+        scene = srt.load_scene(scene_xml)
+        scene.frequency = float(f_hz)
+
+        # Isotropic single-element arrays — path gain is antenna-independent.
+        scene.tx_array = srt.PlanarArray(
+            num_rows=1, num_cols=1, pattern="iso", polarization="V",
         )
+        scene.rx_array = srt.PlanarArray(
+            num_rows=1, num_cols=1, pattern="iso", polarization="V",
+        )
+        scene.add(srt.Transmitter(name="tx", position=_proj(phi_t, lam_t, float(htg))))
+        scene.add(srt.Receiver(name="rx",    position=_proj(phi_r, lam_r, float(hrg))))
 
-        arr = tracer.trace(_scene_path(), job)
-        loss_db = float(arr[0, 0])
+        max_depth = int(os.getenv("SIONNA_RT_MAX_DEPTH", "5"))
+        solver = srt.PathSolver()
+        paths = solver(scene=scene, max_depth=max_depth)
+
+        # Σ|aᵢ|² over all paths → total linear path gain (dimensionless).
+        # paths.a shape: [batch, num_rx, rx_ant, num_tx, tx_ant, max_paths]
+        a = np.asarray(paths.a)
+        path_gain = float(np.sum(np.abs(a) ** 2))
+        path_gain = max(path_gain, 1e-30)  # clamp zero-path case → 300 dB cap
+
+        loss_db = -10.0 * math.log10(path_gain)
         return LossEstimate(
             basic_loss_db=loss_db,
             engine=self.name,
             confidence=1.0,
             extra={
-                "rx_height_m": float(os.getenv("SIONNA_RT_RX_HEIGHT_M", "1.5")),
-                "scene_path": _scene_path(),
+                "rx_height_m": float(hrg),
+                "tx_height_m": float(htg),
+                "scene_path": scene_dir,
+                "mitsuba_variant": variant,
+                "frequency_hz": float(f_hz),
             },
         )
 

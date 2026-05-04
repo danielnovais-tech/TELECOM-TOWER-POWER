@@ -188,7 +188,7 @@ def test_is_available_true_when_all_conditions_met(monkeypatch, tmp_path):
 def test_predict_basic_loss_returns_loss_estimate(monkeypatch, tmp_path):
     _make_scene_dir(tmp_path)
     _fake_gpu_stack(monkeypatch)
-    _patch_tracer(monkeypatch, loss_db=95.3)
+    _patch_sionna_rt(monkeypatch, loss_db=95.3)
     monkeypatch.setenv("SIONNA_RT_DISABLED", "0")
     monkeypatch.setenv("SIONNA_RT_SCENE_PATH", str(tmp_path))
 
@@ -196,37 +196,63 @@ def test_predict_basic_loss_returns_loss_estimate(monkeypatch, tmp_path):
     est = eng.predict_basic_loss(**_LINK)
     assert est is not None
     assert est.engine == "sionna-rt"
-    assert est.basic_loss_db == pytest.approx(95.3)
+    assert est.basic_loss_db == pytest.approx(95.3, abs=0.05)
     assert est.confidence == 1.0
 
 
-def test_predict_basic_loss_job_has_1x1_raster(monkeypatch, tmp_path):
-    """The job fired at the tracer must be exactly a 1×1 grid."""
+def test_predict_basic_loss_hrg_used_as_rx_height(monkeypatch, tmp_path):
+    """hrg must appear as the z-coordinate of the placed srt.Receiver."""
     _make_scene_dir(tmp_path)
     _fake_gpu_stack(monkeypatch)
-    captured_jobs: list = []
-    _patch_tracer(monkeypatch, loss_db=80.0, capture=captured_jobs)
+    captured: list = []
+    _patch_sionna_rt(monkeypatch, loss_db=80.0, capture=captured)
     monkeypatch.setenv("SIONNA_RT_DISABLED", "0")
     monkeypatch.setenv("SIONNA_RT_SCENE_PATH", str(tmp_path))
 
     SionnaRTEngine().predict_basic_loss(**_LINK)
-    assert len(captured_jobs) == 1
-    job = captured_jobs[0]
-    assert job.rows == 1 and job.cols == 1
-    assert job.frequency_hz == _LINK["f_hz"]
-    assert job.tx_lat == _LINK["phi_t"]
-    assert job.tx_lon == _LINK["lam_t"]
-    assert job.tx_height_m == _LINK["htg"]
-    # Receiver bbox must straddle phi_r / lam_r
-    assert job.bbox_south < _LINK["phi_r"] < job.bbox_north
-    assert job.bbox_west  < _LINK["lam_r"] < job.bbox_east
+    rx_calls = [c for c in captured if c.get("type") == "receiver" and c["name"] == "rx"]
+    assert rx_calls, "srt.Receiver(name='rx') was not called"
+    rx_z = rx_calls[0]["position"][2]
+    assert rx_z == pytest.approx(_LINK["hrg"])
 
 
-def test_predict_basic_loss_returns_none_on_tracer_exception(monkeypatch, tmp_path):
-    """Tracer errors must fail closed (None), not 500."""
+def test_predict_basic_loss_rx_outside_bbox_returns_none(monkeypatch, tmp_path):
+    """An RX point outside the scene's bbox should return None, not raise."""
+    import json as _json
+    # Tight bbox that excludes _LINK's phi_r/lam_r
+    tight_manifest = dict(_GOOD_MANIFEST)
+    tight_manifest["bbox"] = [-23.55, -46.65, -23.50, -46.60]  # RX is further south/west
+    (tmp_path / "scene.xml").write_text("<scene/>")
+    (tmp_path / "manifest.json").write_text(_json.dumps(tight_manifest))
+    _fake_gpu_stack(monkeypatch)
+    _patch_sionna_rt(monkeypatch, loss_db=80.0)
+    monkeypatch.setenv("SIONNA_RT_DISABLED", "0")
+    monkeypatch.setenv("SIONNA_RT_SCENE_PATH", str(tmp_path))
+
+    assert SionnaRTEngine().predict_basic_loss(**_LINK) is None
+
+
+def test_predict_basic_loss_extra_contains_metadata(monkeypatch, tmp_path):
+    """extra dict must carry rx_height_m, tx_height_m, mitsuba_variant, etc."""
     _make_scene_dir(tmp_path)
     _fake_gpu_stack(monkeypatch)
-    _patch_tracer(monkeypatch, exc=RuntimeError("GPU OOM"))
+    _patch_sionna_rt(monkeypatch, loss_db=100.0)
+    monkeypatch.setenv("SIONNA_RT_DISABLED", "0")
+    monkeypatch.setenv("SIONNA_RT_SCENE_PATH", str(tmp_path))
+
+    est = SionnaRTEngine().predict_basic_loss(**_LINK)
+    assert est is not None
+    assert est.extra["rx_height_m"] == pytest.approx(_LINK["hrg"])
+    assert est.extra["tx_height_m"] == pytest.approx(_LINK["htg"])
+    assert "mitsuba_variant" in est.extra
+    assert "frequency_hz" in est.extra
+
+
+def test_predict_basic_loss_returns_none_on_solver_exception(monkeypatch, tmp_path):
+    """PathSolver errors must fail closed (None), not 500."""
+    _make_scene_dir(tmp_path)
+    _fake_gpu_stack(monkeypatch)
+    _patch_sionna_rt(monkeypatch, exc=RuntimeError("GPU OOM"))
     monkeypatch.setenv("SIONNA_RT_DISABLED", "0")
     monkeypatch.setenv("SIONNA_RT_SCENE_PATH", str(tmp_path))
 
@@ -239,7 +265,7 @@ def test_predict_basic_loss_in_compare_loop(monkeypatch, tmp_path):
 
     _make_scene_dir(tmp_path)
     _fake_gpu_stack(monkeypatch)
-    _patch_tracer(monkeypatch, loss_db=110.0)
+    _patch_sionna_rt(monkeypatch, loss_db=110.0)
     monkeypatch.setenv("SIONNA_RT_DISABLED", "0")
     monkeypatch.setenv("SIONNA_RT_SCENE_PATH", str(tmp_path))
 
@@ -253,8 +279,8 @@ def test_predict_basic_loss_in_compare_loop(monkeypatch, tmp_path):
     )
     by_name = {r.engine: r for r in res.rows}
     assert by_name["sionna-rt"].available is True
-    assert by_name["sionna-rt"].basic_loss_db == pytest.approx(110.0)
-    assert by_name["sionna-rt"].delta_db == pytest.approx(10.0)
+    assert by_name["sionna-rt"].basic_loss_db == pytest.approx(110.0, abs=0.05)
+    assert by_name["sionna-rt"].delta_db == pytest.approx(10.0, abs=0.05)
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -262,7 +288,8 @@ def test_predict_basic_loss_in_compare_loop(monkeypatch, tmp_path):
 _GOOD_MANIFEST = {
     "schema_version": 1,
     "aoi_name": "sp-centro",
-    "bbox": [-23.56, -46.66, -23.54, -46.62],
+    # Covers _LINK TX (phi_t=-23.5, lam_t=-46.6) and RX (phi_r=-23.6, lam_r=-46.7)
+    "bbox": [-23.65, -46.75, -23.45, -46.55],
     "frequencies_hz": [28e9],
     "p2040_table_version": "1",
     "implementation_status": "complete",
@@ -288,27 +315,53 @@ def _fake_gpu_stack(monkeypatch):
     monkeypatch.setitem(sys.modules, "sionna_rt", fake_srt)
 
 
-def _patch_tracer(monkeypatch, *, loss_db=None, exc=None, capture=None):
-    """Replace _SionnaRtTracer in sionna_rt_engine's dynamic import path."""
+def _patch_sionna_rt(monkeypatch, *, loss_db=None, exc=None, capture=None):
+    """Replace sys.modules['sionna_rt'] with a full fake for _run_trace().
+
+    The fake provides:
+    * ``load_scene`` → a minimal scene stub
+    * ``PlanarArray`` / ``Transmitter`` / ``Receiver`` → simple namespaces
+    * ``PathSolver`` → a callable that returns ``Paths`` whose ``.a`` encodes
+      ``loss_db`` as a single-path complex amplitude.
+
+    When *capture* is a list, every call to ``srt.Receiver(...)`` appends
+    ``{'name': …, 'position': …}`` so tests can assert on the receiver
+    coordinates (e.g. that ``hrg`` ends up as the z-component).
+    """
     import numpy as np  # type: ignore[import-not-found]
 
-    class _FakeTracer:
-        def __init__(self): pass
+    class _FakeScene:
+        frequency = None
+        tx_array = None
+        rx_array = None
+        def add(self, obj): pass
 
-        def trace(self, scene_dir, job):
+    class _FakePaths:
+        def __init__(self):
+            # |a|² = path_gain = 10^(−loss_db/10).  Shape chosen to match
+            # real Sionna RT: [batch, num_rx, rx_ant, num_tx, tx_ant, paths].
+            pg = 10 ** (-float(loss_db) / 10.0) if loss_db is not None else 1.0
+            self.a = np.full((1, 1, 1, 1, 1, 1), np.sqrt(pg), dtype=np.complex64)
+
+    class _FakePathSolver:
+        def __call__(self, *, scene, max_depth=5):
             if capture is not None:
-                capture.append(job)
+                capture.append({"type": "solver_call", "max_depth": max_depth})
             if exc is not None:
                 raise exc
-            arr = np.full((job.rows, job.cols), float(loss_db), dtype="float32")
-            return arr
+            return _FakePaths()
 
-    # The engine imports the worker module dynamically; inject a fake
-    # that exposes _SionnaRtTracer + the Job dataclass.
-    import scripts.sionna_rt_worker as _real_worker
-    fake_worker = types.ModuleType("scripts.sionna_rt_worker")
-    # Copy everything from the real worker; only replace _SionnaRtTracer.
-    fake_worker.__dict__.update(_real_worker.__dict__)
-    fake_worker._SionnaRtTracer = _FakeTracer  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "scripts.sionna_rt_worker", fake_worker)
+    def _fake_receiver(*, name, position):
+        if capture is not None:
+            capture.append({"type": "receiver", "name": name, "position": position})
+        return types.SimpleNamespace(name=name, position=position)
+
+    fake_srt = types.SimpleNamespace(
+        load_scene=lambda _: _FakeScene(),
+        PlanarArray=lambda **kw: None,
+        Transmitter=lambda **kw: None,
+        Receiver=_fake_receiver,
+        PathSolver=_FakePathSolver,
+    )
+    monkeypatch.setitem(sys.modules, "sionna_rt", fake_srt)
 
