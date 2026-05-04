@@ -1,0 +1,108 @@
+# syntax=docker/dockerfile:1.7
+#
+# Dockerfile.gpu — Sionna RT 2.x worker image (AWS Batch / EC2 G-instance)
+#
+# This image is NOT the API container. It is the GPU-side worker that
+# consumes `coverage:rt` jobs from SQS, runs the trace on a GPU, and
+# uploads per-pixel loss rasters to S3. The API container stays CPU-only
+# on ECS Fargate (see Dockerfile in repo root).
+#
+# Build:
+#   docker build -f Dockerfile.gpu -t telecom-tower-power-rt:dev .
+#
+# Run (locally with GPU):
+#   docker run --rm --gpus all \
+#     -e SIONNA_RT_DISABLED=0 \
+#     -e SQS_QUEUE_URL=... \
+#     -e SCENE_BUCKET=... \
+#     -e RESULTS_BUCKET=... \
+#     telecom-tower-power-rt:dev
+#
+# Roadmap: see docs/rf-engines.md § "Sionna RT 2.x — full 3D ray-tracing"
+# (Q2/2026 milestone — scaffold, not yet wired to AWS Batch).
+
+# ── Stage 1: CUDA 12.4 runtime + Python 3.11 ─────────────────────────
+# Sionna 2.x officially supports Python 3.10-3.11 as of writing. Pin to
+# 3.11 for reproducibility; do NOT bump to 3.12+ until upstream ships
+# wheels (Mitsuba 3.6 lacked them on initial release).
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS base
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        software-properties-common \
+        ca-certificates \
+        curl \
+        gnupg \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3.11 \
+        python3.11-venv \
+        python3.11-dev \
+        python3-pip \
+        # Mitsuba 3 runtime needs OpenGL + libGLU for the (rare) interactive
+        # preview. We don't render previews on the worker but the .so
+        # imports fail without these.
+        libgl1 \
+        libglu1-mesa \
+        libxrender1 \
+        libxkbcommon0 \
+        # Triangulation + spatial deps for the scene builder.
+        libgeos-dev \
+        libproj-dev \
+        # Scene cache tarball helpers.
+        zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make python3.11 the default `python` / `pip`.
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && python -m ensurepip --upgrade \
+    && python -m pip install --upgrade pip
+
+# ── Stage 2: install GPU deps (separated so layer caches well) ───────
+WORKDIR /opt/rt
+
+# Copy requirements file FIRST so the pip layer caches across code changes.
+COPY requirements-gpu.txt /opt/rt/requirements-gpu.txt
+
+# torch+cu121 needs the explicit CUDA index URL. Sionna+Mitsuba+Dr.Jit
+# pull from PyPI normally.
+RUN pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
+        -r requirements-gpu.txt \
+    # Smoke-test the imports so a broken wheel selection fails the
+    # build instead of the first SQS message.
+    && python -c "import torch, mitsuba, drjit, sionna; \
+                  assert torch.cuda.is_available() or 'CUDA' in str(torch.version.cuda), \
+                  'torch built without CUDA — check --extra-index-url'; \
+                  print('torch=', torch.__version__, \
+                        'mitsuba=', mitsuba.__version__, \
+                        'drjit=', drjit.__version__, \
+                        'sionna=', sionna.__version__)"
+
+# ── Stage 3: bring in the scene builder + worker code ────────────────
+# Keep the copy minimal — only what the GPU worker actually needs at
+# runtime. The full repo (frontend, API, etc.) does not belong here.
+COPY rf_engines/                  /opt/rt/rf_engines/
+COPY scripts/build_mitsuba_scene.py /opt/rt/scripts/build_mitsuba_scene.py
+COPY scripts/sionna_rt_worker.py    /opt/rt/scripts/sionna_rt_worker.py
+COPY itu_p1812.py                 /opt/rt/itu_p1812.py
+COPY srtm_elevation.py            /opt/rt/srtm_elevation.py
+COPY mapbiomas_clutter.py         /opt/rt/mapbiomas_clutter.py
+COPY models.py                    /opt/rt/models.py
+
+ENV PYTHONPATH=/opt/rt \
+    SIONNA_RT_DISABLED=0 \
+    # Default scene path inside the container; the worker overrides
+    # this from the SQS message body or a presigned-URL download.
+    SIONNA_RT_SCENE_PATH=/opt/rt/scenes/active.xml
+
+# AWS Batch sets the entrypoint via the Job Definition, but expose a
+# sane default for `docker run --gpus all <image>`.
+ENTRYPOINT ["python", "/opt/rt/scripts/sionna_rt_worker.py"]
+CMD ["--poll"]

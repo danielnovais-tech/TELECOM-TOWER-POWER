@@ -290,25 +290,38 @@ Why ship the scaffold now (May 2026)?
 
 ### Q2/2026 delivery checklist
 
-- [ ] **Dependencies (separate `requirements-gpu.txt`)**
-  `sionna>=2.0`, `mitsuba>=3.5`, `drjit>=1.0`, `torch>=2.4`. Kept out
-  of the API container — these add ~3 GB of CUDA wheels.
-- [ ] **GPU image variant** — `Dockerfile.gpu` based on
-  `nvidia/cuda:12.x-runtime-ubuntu22.04`, used only by the worker pool.
+- [x] **Dependencies (separate `requirements-gpu.txt`)** — landed
+  2026-05-03. `sionna>=2.0,<2.2`, `mitsuba>=3.5,<3.7`,
+  `drjit>=1.0,<2.0`, `torch>=2.4,<2.6`. Kept out of the API container —
+  these add ~3 GB of CUDA wheels.
+- [x] **GPU image variant** — `Dockerfile.gpu` landed 2026-05-03,
+  based on `nvidia/cuda:12.4.1-runtime-ubuntu22.04` + Python 3.11
+  via deadsnakes PPA, used only by the worker pool. Build-time
+  `python -c 'import torch, mitsuba, drjit, sionna'` smoke-test
+  fails the build if the CUDA wheel selection is wrong.
 - [ ] **Worker pool** — AWS Batch with a GPU job queue (or a single
   EC2 G5 instance behind SQS) consuming `coverage:rt` jobs. Single
   predictions stay an HTTP "kick + poll" — no inline GPU calls from
   the API container.
-- [ ] **Scene builder** — `scripts/build_mitsuba_scene.py`: OSM
-  building footprints (Overpass) → triangulated meshes; SRTM tiles
-  → terrain backdrop; MapBiomas/clutter classes → ITU-R P.2040
-  material tags (concrete, glass, metal, vegetation). Output is an
-  `.xml` Mitsuba scene + per-material `.json` sidecar.
+- [~] **Scene builder** — `scripts/build_mitsuba_scene.py` CLI
+  scaffold landed 2026-05-03 (manifest-only, refuses to write
+  `scene.xml` without `--allow-stub`). Manifest schema fixed
+  (`schema_version=1`) so the Batch infra can be provisioned ahead
+  of the implementation phases. Remaining work: OSM building
+  footprints (Overpass) → triangulated meshes; SRTM tiles →
+  terrain backdrop; MapBiomas/clutter classes → ITU-R P.2040
+  material tags. Output goal: `.xml` Mitsuba scene + per-material
+  `.json` sidecar + `manifest.json` with `implementation_status='complete'`.
 - [ ] **mmWave material library** — concrete/glass/metal/vegetation
   permittivity at 28 / 39 / 60 GHz from ITU-R P.2040-3 Annex 1.
-- [ ] **Per-pixel loss raster API** — `POST /coverage/engines/sionna-rt/raster`
+- [~] **Per-pixel loss raster API** — `POST /coverage/engines/sionna-rt/raster`
   → SQS job → S3 output → presigned-URL response. Single-link
-  `predict_basic_loss` is implemented as a 1×1 raster crop.
+  `predict_basic_loss` is implemented as a 1×1 raster crop. Worker
+  entrypoint scaffold landed 2026-05-03
+  (`scripts/sionna_rt_worker.py --probe` reports torch/mitsuba/drjit/sionna
+  versions + CUDA visibility; `--poll` refuses unless
+  `SIONNA_RT_DISABLED=0` AND a manifest with
+  `implementation_status='complete'` is reachable).
 - [ ] **Validation gate** — must stay within 6 dB RMSE vs.
   `itu-p1812` on sub-6 GHz golden links (sanity baseline) and
   produce non-trivial deltas (> 10 dB) on the mmWave golden links.

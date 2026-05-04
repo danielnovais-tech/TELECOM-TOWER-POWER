@@ -1,0 +1,48 @@
+# requirements-gpu.txt — Sionna RT 2.x worker dependencies
+#
+# DO NOT install this in the API container. The CUDA wheels add ~3 GB
+# and the API stays CPU-only (ECS Fargate). This file feeds Dockerfile.gpu,
+# which produces the AWS Batch / EC2 G-instance image that consumes
+# `coverage:rt` jobs from SQS.
+#
+# Pinning policy: tight upper bounds. Sionna 2.x is still moving fast
+# and Mitsuba/Dr.Jit ABI changes occasionally — float the patch level,
+# pin minor.
+#
+# Roadmap: see docs/rf-engines.md § "Sionna RT 2.x — full 3D ray-tracing"
+# and ROADMAP.md § "Q2/2026 — Ray-tracing + mmWave".
+
+# ── Core ML / autodiff stack ─────────────────────────────────────────
+# torch is required by Sionna 2.x. Pin to the CUDA 12.x compatible
+# series; the +cu121 wheel is selected via the --extra-index-url
+# flag in Dockerfile.gpu (NOT here, to keep this file pip-resolvable
+# offline for `pip-compile --resolver=backtracking`).
+torch>=2.4,<2.6
+torchvision>=0.19,<0.21
+
+# ── Sionna 2.x ray-tracing ───────────────────────────────────────────
+# `sionna` 2.x splits CPU (sionna.phy) and ray-tracing (sionna.rt)
+# subpackages. Both are required even for RT-only workloads because
+# rt re-uses the channel-model glue from phy.
+sionna>=2.0,<2.2
+
+# Mitsuba 3 differentiable renderer + Dr.Jit JIT kernel.
+# These are the *physics* — the GPU ray launcher itself.
+mitsuba>=3.5,<3.7
+drjit>=1.0,<2.0
+
+# ── Scene-builder support (CPU-only; safe to also install in the
+#    API container later if we want a /coverage/engines/sionna-rt/scene
+#    endpoint, but currently used only by scripts/build_mitsuba_scene.py)
+# ── These are pinned loosely because they are also pulled by the API
+# ── via requirements.txt (numpy, shapely, pyproj). Reusing the same
+# ── major versions avoids ABI clashes at import time.
+shapely>=2.0,<3.0
+pyproj>=3.6,<4.0
+trimesh>=4.0,<5.0
+# Overpass / OSM client (CPU-side).
+osmium>=3.7,<4.0
+
+# ── Observability for the GPU worker ─────────────────────────────────
+prometheus-client>=0.20,<1.0
+boto3>=1.34,<2.0  # SQS consumer + S3 uploader
