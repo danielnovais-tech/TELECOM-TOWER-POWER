@@ -231,6 +231,28 @@ This caution is intentional: production traffic will not depend on a
 learned predictor until it has been benchmarked against P.1812 on the
 coverage-diff golden set for at least 14 consecutive nights.
 
+### Real-data ingestion plan (RMSE < 5 dB target — roadmap Q3/2026)
+
+The `cable_loss_db` column (commit `9a0796d`) plus the drive-test
+source validator (commit `a64c014`) close the calibration gap that
+otherwise caps achievable RMSE around 5-6 dB regardless of sample
+count. With those two landed, the ingestion plan runs in three
+gated phases (`source` prefix `drivetest_*` → validator enforced):
+
+| Phase | Rows | Source tag | Goal | Promotion gate |
+|------:|-----:|------------|------|----------------|
+| 1 | ≤ 500 | `drivetest_pilot` | plumbing | residuals visible on `/metrics`, 14-night coverage-diff golden run green |
+| 2 | ~5 k  | `drivetest_v2`    | MAE ≈ 4 dB | retrain `--exclude-source synthetic_p1812_v1`, MAE ≥ 1 dB better than baseline |
+| 3 | ≥ 30 k | `drivetest_fleet` | RMSE < 5 dB | `exclude_synthetic=always`, no per-tier regression on residual gauges |
+
+Bulk S3 → Lambda → `COPY link_observations FROM …` ingestion
+(designed for ~10⁶ rows/day) is **deliberately deferred** until
+Phase 1 schedules a real drive: the manual
+`POST /coverage/observations/batch` path scales cleanly to 30 k
+rows per request and avoids building infrastructure for a dataset
+that does not yet exist. See `ROADMAP.md` § "Q3/2026" for the
+full milestone.
+
 ## Sionna RT 2.x — full 3D ray-tracing (roadmap Q2/2026)
 
 A second Sionna-branded adapter, **`sionna-rt`**, was scaffolded on

@@ -32,3 +32,43 @@ Non-goals for Q2/2026:
 - Replacing the existing learned `sionna` (TFLite) engine — both stay.
 - Inline GPU calls from the API container — ray-tracing is async only.
 - Indoor in-building modelling (separate Q4/2026 item).
+
+
+## Q3 / 2026 — Real drive-test ML retrain (RMSE < 5 dB)
+
+**Status:** ingestion plumbing landed 2026-05-03 (commits 9a0796d,
+a64c014). Awaiting first scheduled drive-test session to graduate
+beyond Phase 1.
+**Tracking:** `observation_store.py`, `scripts/train_sionna.py`,
+`POST /coverage/observations`, `s3://telecom-tower-power-results/models/sionna/`.
+
+Goal: replace the 100% synthetic training set (P.1812 + σ=4 dB
+log-normal shadowing — fundamental floor that caps test_mae at
+~6.5 dB) with calibrated real-world labels and graduate the
+production model below RMSE = 5 dB on the held-out city-pair fold.
+
+Phased ingestion plan (sequential gates — each must pass before
+green-lighting the next phase to avoid spending field hours on
+poisoned plumbing):
+
+- **Phase 1 — plumbing validation (≤ 500 rows, manual upload).**
+  One-day pilot drive (≈ 30 km, 1-2 cells, source `drivetest_pilot`).
+  Verify: rows persist with `cable_loss_db != 0`, validator rejects
+  default-fill payloads, residual histogram on `/metrics` shifts
+  visibly. 14-night automated coverage-diff golden run before the
+  data is allowed near a training pass.
+- **Phase 2 — calibration scaling (≈ 5 k rows, target MAE ≈ 4 dB).**
+  Multi-cell weekend drive across two morphologies (urban dense +
+  suburban). Re-train with `--exclude-sources synthetic_p1812_v1`
+  on a 50/50 mix; promote only if held-out MAE improves ≥ 1 dB
+  vs. the synthetic baseline.
+- **Phase 3 — production retrain (≥ 30 k rows, target RMSE < 5 dB).**
+  Fleet-mounted continuous logging across ≥ 5 cities. Train with
+  `exclude_synthetic=always`. Promotion gate: RMSE < 5 dB on the
+  city-pair fold AND no per-tier regression on the residual gauges.
+
+Bulk S3 + Lambda + COPY ingestion (sized for ~10⁶ rows/day) is
+deliberately deferred until Phase 1 schedules a real drive: the
+manual `POST /coverage/observations/batch` path scales easily to
+30 k rows and avoids premature infrastructure on a dataset that
+does not yet exist.
