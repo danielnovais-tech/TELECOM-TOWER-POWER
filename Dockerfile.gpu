@@ -45,7 +45,7 @@ RUN apt-get update \
         python3.11 \
         python3.11-venv \
         python3.11-dev \
-        python3-pip \
+        python3.11-distutils \
         # Mitsuba 3 runtime needs OpenGL + libGLU for the (rare) interactive
         # preview. We don't render previews on the worker but the .so
         # imports fail without these.
@@ -61,8 +61,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Make python3.11 the default `python` / `pip`.
+# Use get-pip.py bootstrap instead of ensurepip — the ubuntu jammy
+# python3.11 package (3.11.0~rc1) ships without a working ensurepip.
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
-    && python -m ensurepip --upgrade \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python \
     && python -m pip install --upgrade pip
 
 # ── Stage 2: install GPU deps (separated so layer caches well) ───────
