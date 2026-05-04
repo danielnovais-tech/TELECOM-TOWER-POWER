@@ -2707,6 +2707,253 @@ async def coverage_predict_export(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# /coverage/interference — co-channel + adjacent-channel aggregation
+# ─────────────────────────────────────────────────────────────────────
+# Sums received interference power at a victim receiver from every
+# tower in the database within ``search_radius_km`` whose primary band
+# falls within the spectral mask of the victim. Pluggable propagation
+# engine (FSPL today; ITM / P.1812 / Sionna RT in T17.5+).
+#
+# Pure additive feature: it neither reads nor mutates the heatmap
+# pipeline. The maths lives in ``interference_engine.py``; this
+# endpoint only does the DB lookup, engine selection, response
+# packaging and audit logging.
+
+class _InterferenceVictim(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    freq_mhz: float = Field(..., gt=0, le=300_000)
+    bw_mhz: float = Field(default=20.0, gt=0, le=2000)
+    rx_height_m: float = Field(default=10.0, ge=0, le=500)
+    rx_gain_dbi: float = Field(default=12.0, ge=-10, le=40)
+    noise_figure_db: float = Field(default=5.0, ge=0, le=20)
+    # If supplied, the response includes SINR. Otherwise only I/N.
+    victim_signal_dbm: Optional[float] = Field(default=None, ge=-160, le=30)
+
+
+class InterferenceRequest(BaseModel):
+    """Body for ``POST /coverage/interference``."""
+
+    victim: _InterferenceVictim
+    search_radius_km: float = Field(default=30.0, gt=0, le=200)
+    top_n: int = Field(default=10, ge=1, le=50)
+    include_aci: bool = Field(default=True,
+        description="Include adjacent-channel aggressors with mask attenuation. "
+                    "Set false for co-channel-only studies.")
+    engine: str = Field(default="auto",
+        description="Path-loss engine: auto | fspl | itu-p1812 | itmlogic | sionna-rt")
+    aggressor_tx_gain_dbi: float = Field(default=17.0, ge=-10, le=40,
+        description="Assumed Tx antenna gain when the tower record has none")
+    aci_floor_db: Optional[float] = Field(default=None, ge=10, le=120,
+        description="Override the far-out ACI mask floor (default 60 dB)")
+    max_aggressors: int = Field(default=200, ge=10, le=2000,
+        description="Hard cap on candidate towers fetched from DB before "
+                    "in-radius filtering (latency vs completeness)")
+
+
+class _AggressorOut(BaseModel):
+    aggressor_id: str
+    operator: str
+    distance_km: float
+    aggressor_freq_mhz: float
+    aggressor_bw_mhz: float
+    delta_f_mhz: float
+    eirp_dbm: float
+    path_loss_db: float
+    aci_db: float
+    rx_power_dbm: float
+
+
+class InterferenceResponse(BaseModel):
+    victim: dict
+    engine: str
+    n_candidates: int                # towers fetched from DB
+    n_in_radius: int                 # within search_radius_km
+    n_contributing: int              # finite Rx power after ACI mask
+    co_channel_count: int
+    adjacent_channel_count: int
+    aggregate_i_dbm: Optional[float]
+    noise_dbm: float
+    i_over_n_db: Optional[float]
+    sinr_db: Optional[float]
+    top_n_aggressors: List[_AggressorOut]
+
+
+_INTERFERENCE_SUPPORTED_ENGINES = {"auto", "fspl", "itu-p1812", "itmlogic", "sionna-rt"}
+
+
+def _interference_select_engine(requested: str) -> str:
+    """Resolve ``engine='auto'`` to a concrete engine name.
+
+    For v1 we only ship FSPL (no terrain fetch — interference studies
+    span 200+ aggressors and the SRTM round-trip would 30× the latency).
+    Other engines return 501 until the synchronous path is wired in
+    T17.5 (ITM / P.1812 with cached terrain) and T18 (Sionna RT async
+    job pattern).
+    """
+    if requested not in _INTERFERENCE_SUPPORTED_ENGINES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown engine: {requested!r}; "
+                   f"choose from {sorted(_INTERFERENCE_SUPPORTED_ENGINES)}",
+        )
+    if requested in ("auto", "fspl"):
+        return "fspl"
+    raise HTTPException(
+        status_code=501,
+        detail=f"engine {requested!r} not yet supported in /coverage/interference; "
+               "use engine='fspl' (or 'auto'). ITM / P.1812 / Sionna RT path "
+               "is on the T17.5+ roadmap.",
+    )
+
+
+@app.post("/coverage/interference", response_model=InterferenceResponse)
+async def coverage_interference(
+    body: InterferenceRequest,
+    request: Request,
+    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
+) -> InterferenceResponse:
+    """Aggregate co-channel + adjacent-channel interference at a victim Rx.
+
+    Returns the summed interference power, I/N, and (when
+    ``victim.victim_signal_dbm`` is provided) SINR, plus a top-N list
+    of the strongest aggressors so the operator can sequence their
+    re-tilt / re-frequency mitigation work.
+
+    Pro / Business / Enterprise / Ultra. Free / Starter excluded —
+    the DB radius scan is meaningfully more expensive than a single
+    point predict and the answer materially affects operator capex
+    decisions.
+    """
+    from interference_engine import (
+        aggregate_interference_dbm,
+        build_contribution,
+        i_over_n_db as _i_over_n,
+        sinr_db as _sinr,
+        thermal_noise_dbm,
+        top_n_contributions,
+    )
+
+    engine_name = _interference_select_engine(body.engine)
+
+    victim_f_hz = body.victim.freq_mhz * 1e6
+    victim_bw_hz = body.victim.bw_mhz * 1e6
+
+    # 1) Candidate aggressors from the DB. We over-fetch (max_aggressors)
+    #    and then filter by haversine — find_nearest_towers returns a
+    #    bounded set ordered by approximate distance, which is enough.
+    owner = _caller_owner(request, key_data)
+    candidates = platform.find_nearest_towers(
+        body.victim.lat, body.victim.lon,
+        operator=None, limit=body.max_aggressors, owner=owner,
+    )
+
+    # 2) Filter by exact distance and build per-pair contributions.
+    contributions: List = []
+    co_count = 0
+    adj_count = 0
+    in_radius = 0
+    for t in candidates:
+        d_km = LinkEngine.haversine_km(
+            body.victim.lat, body.victim.lon, t.lat, t.lon,
+        )
+        if d_km > body.search_radius_km:
+            continue
+        if d_km <= 0.001:
+            # Co-located receiver/aggressor — degenerate, skip to avoid
+            # log10(0) blowup. Operator should re-aim, not re-compute.
+            continue
+        in_radius += 1
+
+        agg_f_hz = float(t.primary_freq_hz())
+        # Most rows in the DB lack an explicit channel bandwidth — assume
+        # the same BW as the victim (worst case for ACI mask: equal-BW
+        # produces 0 dB co-channel attenuation, which is conservative).
+        agg_bw_hz = victim_bw_hz
+
+        # EIRP = Pt + Gt. Tower record carries Pt; assume the operator
+        # per-band Gt from the request.
+        eirp_dbm = float(t.power_dbm) + body.aggressor_tx_gain_dbi
+
+        # FSPL only for v1. Engine plug-points (ITM, Sionna RT) reuse the
+        # contribution builder verbatim with a different ``path_loss_db``.
+        pl_db = LinkEngine.free_space_path_loss(d_km, agg_f_hz)
+
+        c = build_contribution(
+            aggressor_id=t.id,
+            distance_km=d_km,
+            aggressor_f_hz=agg_f_hz,
+            aggressor_bw_hz=agg_bw_hz,
+            aggressor_eirp_dbm=eirp_dbm,
+            victim_f_hz=victim_f_hz,
+            victim_bw_hz=victim_bw_hz,
+            rx_gain_dbi=body.victim.rx_gain_dbi,
+            path_loss_db=pl_db,
+            include_aci=body.include_aci,
+            aci_floor_db=body.aci_floor_db,
+        )
+        if c.aci_db == 0.0:
+            co_count += 1
+        elif math.isfinite(c.rx_power_dbm):
+            adj_count += 1
+        contributions.append((t, c))
+
+    # 3) Aggregate + noise + SINR.
+    raw_contribs = [c for _, c in contributions]
+    i_dbm = aggregate_interference_dbm(raw_contribs)
+    n_dbm = thermal_noise_dbm(victim_bw_hz, body.victim.noise_figure_db)
+    i_n = _i_over_n(i_dbm, n_dbm)
+    sinr = _sinr(body.victim.victim_signal_dbm, i_dbm, n_dbm)
+
+    # 4) Top-N for the response.
+    top = top_n_contributions(raw_contribs, n=body.top_n)
+    # Re-attach the operator string from the matching tower (the
+    # contribution dataclass is engine-agnostic and doesn't carry it).
+    by_id = {t.id: t for t, _ in contributions}
+    top_out: List[_AggressorOut] = []
+    for c in top:
+        t = by_id.get(c.aggressor_id)
+        delta_mhz = (c.aggressor_f_hz - victim_f_hz) / 1e6
+        top_out.append(_AggressorOut(
+            aggressor_id=c.aggressor_id,
+            operator=(t.operator if t else "unknown"),
+            distance_km=round(c.distance_km, 3),
+            aggressor_freq_mhz=round(c.aggressor_f_hz / 1e6, 3),
+            aggressor_bw_mhz=round(c.aggressor_bw_hz / 1e6, 3),
+            delta_f_mhz=round(delta_mhz, 3),
+            eirp_dbm=round(c.eirp_dbm, 2),
+            path_loss_db=round(c.path_loss_db, 2),
+            aci_db=round(c.aci_db, 2),
+            rx_power_dbm=round(c.rx_power_dbm, 2),
+        ))
+
+    n_contrib = sum(1 for c in raw_contribs if math.isfinite(c.rx_power_dbm))
+
+    return InterferenceResponse(
+        victim={
+            "lat": body.victim.lat,
+            "lon": body.victim.lon,
+            "freq_mhz": body.victim.freq_mhz,
+            "bw_mhz": body.victim.bw_mhz,
+            "rx_height_m": body.victim.rx_height_m,
+            "rx_gain_dbi": body.victim.rx_gain_dbi,
+            "noise_figure_db": body.victim.noise_figure_db,
+        },
+        engine=engine_name,
+        n_candidates=len(candidates),
+        n_in_radius=in_radius,
+        n_contributing=n_contrib,
+        co_channel_count=co_count,
+        adjacent_channel_count=adj_count,
+        aggregate_i_dbm=(round(i_dbm, 2) if i_dbm is not None else None),
+        noise_dbm=round(n_dbm, 2),
+        i_over_n_db=(round(i_n, 2) if i_n is not None else None),
+        sinr_db=(round(sinr, 2) if sinr is not None else None),
+        top_n_aggressors=top_out,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
 # White-label / tenant branding (Enterprise)
 # ─────────────────────────────────────────────────────────────────────
 
