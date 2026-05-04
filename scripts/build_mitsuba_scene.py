@@ -48,7 +48,7 @@ import os
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("build_mitsuba_scene")
 
@@ -147,17 +147,42 @@ def _frequency_list(raw: str) -> Tuple[float, ...]:
     return tuple(out)
 
 
+def _sha256_file(path: str) -> str:
+    """SHA-256 of the file contents — recorded in the manifest."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _emit_manifest(
     *,
     aoi_name: str,
     bbox: BoundingBox,
     frequencies_hz: Tuple[float, ...],
     out_dir: str,
+    extras: Optional[Dict[str, Any]] = None,
+    implementation_status: str = "scaffold",
+    notes: Optional[str] = None,
 ) -> dict:
     """Compute the manifest dict and write it to ``out_dir``.
 
-    The manifest is the *only* artefact this scaffold writes today.
+    ``extras`` overrides the optional schema fields filled in by the
+    data-source phase (``buildings_count``, ``buildings_geojson_sha256``,
+    ``terrain_source``, ``terrain_tif_sha256`` and the per-source
+    summaries). ``implementation_status`` is ``"scaffold"`` for the
+    manifest-only path and ``"data-only"`` once the buildings/terrain
+    artefacts have been written. ``"complete"`` is reserved for the
+    Mitsuba-XML phase landing in Tijolo 4.
     """
+    extras = extras or {}
+    if notes is None:
+        notes = (
+            "scaffold-only build: scene.xml NOT emitted, the GPU worker "
+            "will refuse to trace against this manifest "
+            "(implementation_status != 'complete')."
+        )
     manifest = {
         "schema_version": 1,
         "aoi_name": aoi_name,
@@ -169,19 +194,19 @@ def _emit_manifest(
         # Empty until the actual builder phases land. Keeping the
         # fields present in the schema lets the worker's manifest
         # validator stay stable across the rollout.
-        "buildings_count": None,
-        "terrain_source": None,
-        "clutter_source": None,
-        "buildings_geojson_sha256": None,
-        "terrain_tif_sha256": None,
+        "buildings_count": extras.get("buildings_count"),
+        "terrain_source": extras.get("terrain_source"),
+        "clutter_source": extras.get("clutter_source"),
+        "buildings_geojson_sha256": extras.get("buildings_geojson_sha256"),
+        "terrain_tif_sha256": extras.get("terrain_tif_sha256"),
         "scene_xml_sha256": None,
-        "implementation_status": "scaffold",
-        "notes": (
-            "scaffold-only build: scene.xml NOT emitted, the GPU worker "
-            "will refuse to trace against this manifest "
-            "(implementation_status != 'complete')."
-        ),
+        "implementation_status": implementation_status,
+        "notes": notes,
     }
+    if extras.get("buildings_summary") is not None:
+        manifest["buildings_summary"] = extras["buildings_summary"]
+    if extras.get("terrain_summary") is not None:
+        manifest["terrain_summary"] = extras["terrain_summary"]
     if out_dir.startswith("s3://"):
         # Defensive: don't silently no-op an S3 push from the scaffold.
         # The intended uploader is the AWS Batch container, not a dev
@@ -219,23 +244,142 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="emit only manifest.json — scene.xml stays unwritten "
                         "(default behaviour today; required until the Q2/2026 "
                         "scene-builder phases land)")
+    p.add_argument("--fetch-data", action="store_true",
+                   help="Tijolo 2: fetch OSM building footprints (Overpass) "
+                        "+ SRTM terrain into <out-dir>/<aoi>/buildings.geojson "
+                        "and terrain.tif. Manifest implementation_status "
+                        "becomes 'data-only'. Mutually exclusive with "
+                        "--allow-stub.")
+    p.add_argument("--overpass-url", default=None,
+                   help="Override the Overpass endpoint (defaults to the "
+                        "public rotation; set this to a private mirror for "
+                        "production builds).")
+    p.add_argument("--srtm-data-dir", default="./srtm_data",
+                   help="Directory containing SRTM3 .hgt tiles (default "
+                        "./srtm_data — same as srtm_elevation.SRTMReader).")
+    p.add_argument("--prefetch-srtm", action="store_true",
+                   help="Download missing SRTM tiles from USGS before "
+                        "sampling. Off by default to keep the build offline-"
+                        "safe.")
+    p.add_argument("--terrain-step-deg", type=float, default=None,
+                   help="Terrain grid step in degrees (default 1/1200 ≈ 3″, "
+                        "the native SRTM3 resolution).")
     args = p.parse_args(argv)
 
     frequencies_hz = _frequency_list(args.frequencies)
 
-    if not args.allow_stub:
+    if args.allow_stub and args.fetch_data:
+        sys.stderr.write(
+            "ERROR: --allow-stub and --fetch-data are mutually exclusive.\n"
+        )
+        return 2
+    if not args.allow_stub and not args.fetch_data:
         sys.stderr.write(
             "ERROR: scene-builder is a scaffold; pass --allow-stub to emit "
-            "the manifest only. Wiring the OSM/SRTM/clutter pipelines is "
-            "tracked in docs/rf-engines.md § Q2/2026 delivery checklist.\n"
+            "the manifest only, or --fetch-data to run the Tijolo 2 data-"
+            "source phase (Overpass + SRTM). Tracked in docs/rf-engines.md "
+            "§ Q2/2026 delivery checklist.\n"
         )
         return 2
 
+    if args.allow_stub:
+        _emit_manifest(
+            aoi_name=args.aoi_name,
+            bbox=args.bbox,
+            frequencies_hz=frequencies_hz,
+            out_dir=args.out_dir,
+        )
+        return 0
+
+    return _run_data_phase(args, frequencies_hz)
+
+
+def _run_data_phase(args, frequencies_hz: Tuple[float, ...]) -> int:
+    """Tijolo 2: fetch Overpass + SRTM and emit a data-only manifest.
+
+    Local out-dir only. S3 staging is the next phase's job (the
+    AWS Batch container will run this same code with a local out-dir
+    and then sync to S3 with checksums).
+    """
+    if args.out_dir.startswith("s3://"):
+        sys.stderr.write(
+            "ERROR: --fetch-data writes large binary artefacts; point "
+            "--out-dir at a local path. The S3 staging step lives in the "
+            "Batch entrypoint, not in this script.\n"
+        )
+        return 2
+
+    # Lazy imports — keep the manifest-only path free of numpy/rasterio.
+    from scripts.sources import overpass_buildings, srtm_terrain
+
+    bbox = args.bbox
+    bbox_tuple = (bbox.south, bbox.west, bbox.north, bbox.east)
+    aoi_dir = os.path.join(args.out_dir, args.aoi_name)
+    os.makedirs(aoi_dir, exist_ok=True)
+
+    # 1) Overpass → buildings.geojson
+    logger.info("phase 1/2: Overpass building footprints")
+    overpass_url = (
+        args.overpass_url
+        or os.environ.get("OVERPASS_URL")
+        or overpass_buildings.DEFAULT_OVERPASS_URL
+    )
+    geojson = overpass_buildings.fetch_buildings(
+        bbox_tuple, overpass_url=overpass_url,
+    )
+    buildings_path = os.path.join(aoi_dir, "buildings.geojson")
+    with open(buildings_path, "w", encoding="utf-8") as fh:
+        json.dump(geojson, fh)
+        fh.write("\n")
+    buildings_summary = overpass_buildings.summarise(geojson)
+    logger.info("wrote %s (%d buildings)",
+                buildings_path, buildings_summary["count"])
+
+    # 2) SRTM → terrain.tif
+    logger.info("phase 2/2: SRTM terrain crop")
+    # Import locally so a missing srtm_elevation (unlikely) doesn't
+    # poison the manifest-only path.
+    sys.path.insert(0, os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    from srtm_elevation import SRTMReader  # type: ignore[import-not-found]
+
+    reader = SRTMReader(data_dir=args.srtm_data_dir)
+    if args.prefetch_srtm:
+        missing = reader.missing_tiles(
+            bbox.south, bbox.west, bbox.north, bbox.east,
+        )
+        for tile in missing:
+            logger.info("prefetching SRTM tile %s", tile)
+            reader.download_tile(tile)
+    step = args.terrain_step_deg or srtm_terrain.DEFAULT_GRID_STEP_DEG
+    grid = srtm_terrain.sample_grid(reader, bbox_tuple, step_deg=step)
+    terrain_path = os.path.join(aoi_dir, "terrain.tif")
+    srtm_terrain.write_geotiff(
+        grid, bbox_tuple, step_deg=step, path=terrain_path,
+    )
+    terrain_summary = srtm_terrain.summarise(grid)
+
+    extras: Dict[str, Any] = {
+        "buildings_count": buildings_summary["count"],
+        "buildings_geojson_sha256": _sha256_file(buildings_path),
+        "buildings_summary": buildings_summary,
+        "terrain_source": "SRTM3 (USGS v2.1)",
+        "terrain_tif_sha256": _sha256_file(terrain_path),
+        "terrain_summary": terrain_summary,
+        "clutter_source": None,
+    }
     _emit_manifest(
         aoi_name=args.aoi_name,
-        bbox=args.bbox,
+        bbox=bbox,
         frequencies_hz=frequencies_hz,
         out_dir=args.out_dir,
+        extras=extras,
+        implementation_status="data-only",
+        notes=(
+            "data-only build: buildings.geojson + terrain.tif written from "
+            "Overpass + SRTM3. scene.xml NOT emitted (Tijolo 4); the GPU "
+            "worker still refuses to trace this manifest."
+        ),
     )
     return 0
 

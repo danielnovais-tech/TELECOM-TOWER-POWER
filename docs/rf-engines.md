@@ -307,11 +307,20 @@ Why ship the scaffold now (May 2026)?
   scaffold landed 2026-05-03 (manifest-only, refuses to write
   `scene.xml` without `--allow-stub`). Manifest schema fixed
   (`schema_version=1`) so the Batch infra can be provisioned ahead
-  of the implementation phases. Remaining work: OSM building
-  footprints (Overpass) → triangulated meshes; SRTM tiles →
-  terrain backdrop; MapBiomas/clutter classes → ITU-R P.2040
-  material tags. Output goal: `.xml` Mitsuba scene + per-material
-  `.json` sidecar + `manifest.json` with `implementation_status='complete'`.
+  of the implementation phases.
+  **Tijolo 2 — data sources (landed 2026-05-04):** `--fetch-data`
+  flag now writes `buildings.geojson` (Overpass `way["building"]`
+  with `height` / `building:levels` resolution) and `terrain.tif`
+  (SRTM3 EPSG:4326 Float32 GeoTIFF, native 3″ grid) under
+  `<out-dir>/<aoi>/`. Manifest gains `buildings_summary` /
+  `terrain_summary` and `implementation_status='data-only'`. Live
+  smoke-test on `sp-centro` (5 km²) returns ~16 k buildings with
+  realistic height stats (mean 14.94 m, max 170 m). Mutually
+  exclusive with `--allow-stub`; `--prefetch-srtm` opts in to USGS
+  tile downloads.
+  Remaining work: MapBiomas/clutter classes → ITU-R P.2040 material
+  tags; building footprints → triangulated meshes; Mitsuba `.xml`
+  emission with `implementation_status='complete'`.
 - [ ] **mmWave material library** — concrete/glass/metal/vegetation
   permittivity at 28 / 39 / 60 GHz from ITU-R P.2040-3 Annex 1.
 - [~] **Per-pixel loss raster API** — `POST /coverage/engines/sionna-rt/raster`
