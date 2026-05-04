@@ -162,6 +162,10 @@ def _row_to_link(row: Dict[str, object]) -> Optional[LabelledLink]:
         gt = float(row["tx_gain_dbi"])   # type: ignore[arg-type]
         gr = float(row["rx_gain_dbi"])   # type: ignore[arg-type]
         prx = float(row["observed_dbm"])  # type: ignore[arg-type]
+        # Aggregate rx-side passive loss (jumper + connector + lightning
+        # protector). Defaults to 0 for legacy/synthetic rows so prior
+        # labels remain bit-identical; populated for drive-test rows.
+        cable_loss = float(row.get("cable_loss_db") or 0.0)
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -176,11 +180,11 @@ def _row_to_link(row: Dict[str, object]) -> Optional[LabelledLink]:
     if d_km[-1] < 0.05:  # co-located, no propagation problem to learn
         return None
 
-    # Basic transmission loss: Lb = (Pt + Gt + Gr) - Prx.
+    # Basic transmission loss: Lb = (Pt + Gt + Gr) - (Prx + L_cable).
     # Antenna gains here are *isotropic* — boresight assumption — and
     # represent the dominant uncertainty in drive-test labels. The Huber
     # loss in fitting absorbs the resulting heavy tail.
-    lb = (pt + gt + gr) - prx
+    lb = (pt + gt + gr) - prx - cable_loss
     if not (40.0 <= lb <= 250.0):
         return None
 

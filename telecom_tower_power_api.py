@@ -2076,6 +2076,12 @@ class CoverageObservationInput(BaseModel):
     rx_lon: float = Field(..., ge=-180, le=180)
     rx_height_m: float = Field(default=1.5, ge=0, le=500)
     rx_gain_dbi: float = 0.0
+    # Aggregate rx-side passive loss (jumper + connector + lightning
+    # protector). Kept default 0.0 so legacy and synthetic submissions
+    # remain exactly correct; drive-test sources (`source=drivetest_*`)
+    # are required to populate it explicitly — see the validator on the
+    # POST /coverage/observations endpoints.
+    cable_loss_db: float = Field(default=0.0, ge=0, le=20)
     freq_hz: float = Field(..., gt=1e6, le=100e9)
     observed_dbm: float = Field(..., ge=-150, le=30)
     source: str = Field(default="api", max_length=32)

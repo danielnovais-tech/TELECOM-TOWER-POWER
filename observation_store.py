@@ -80,12 +80,23 @@ class _SQLiteObservationStore:
                     rx_lon        REAL    NOT NULL,
                     rx_height_m   REAL    NOT NULL DEFAULT 1.5,
                     rx_gain_dbi   REAL    NOT NULL DEFAULT 0.0,
+                    cable_loss_db REAL    NOT NULL DEFAULT 0.0,
                     freq_hz       REAL    NOT NULL,
                     observed_dbm  REAL    NOT NULL,
                     source        TEXT    NOT NULL DEFAULT 'api',
                     submitted_by  TEXT
                 )
             """)
+            # Defensive ALTER for dev DBs that pre-date the cable_loss_db
+            # column (Alembic owns the canonical migration in prod).
+            try:
+                conn.execute(
+                    "ALTER TABLE link_observations "
+                    "ADD COLUMN cable_loss_db REAL NOT NULL DEFAULT 0.0"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_obs_tower
                 ON link_observations(tower_id)
@@ -111,8 +122,9 @@ class _SQLiteObservationStore:
                 """INSERT INTO link_observations
                    (ts, tower_id, tx_lat, tx_lon, tx_height_m, tx_power_dbm,
                     tx_gain_dbi, rx_lat, rx_lon, rx_height_m, rx_gain_dbi,
+                    cable_loss_db,
                     freq_hz, observed_dbm, source, submitted_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     obs.get("ts") or time.time(),
                     obs.get("tower_id"),
@@ -122,6 +134,7 @@ class _SQLiteObservationStore:
                     obs["rx_lat"], obs["rx_lon"],
                     obs.get("rx_height_m") or 1.5,
                     obs.get("rx_gain_dbi") or 0.0,
+                    float(obs.get("cable_loss_db") or 0.0),
                     obs["freq_hz"], obs["observed_dbm"],
                     obs.get("source") or "api",
                     obs.get("submitted_by"),
@@ -138,8 +151,9 @@ class _SQLiteObservationStore:
                 """INSERT INTO link_observations
                    (ts, tower_id, tx_lat, tx_lon, tx_height_m, tx_power_dbm,
                     tx_gain_dbi, rx_lat, rx_lon, rx_height_m, rx_gain_dbi,
+                    cable_loss_db,
                     freq_hz, observed_dbm, source, submitted_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         r.get("ts") or time.time(),
@@ -150,6 +164,7 @@ class _SQLiteObservationStore:
                         r["rx_lat"], r["rx_lon"],
                         r.get("rx_height_m") or 1.5,
                         r.get("rx_gain_dbi") or 0.0,
+                        float(r.get("cable_loss_db") or 0.0),
                         r["freq_hz"], r["observed_dbm"],
                         r.get("source") or "api",
                         r.get("submitted_by"),
@@ -246,12 +261,21 @@ class _PgObservationStore:
                         rx_lon        DOUBLE PRECISION NOT NULL,
                         rx_height_m   DOUBLE PRECISION NOT NULL DEFAULT 1.5,
                         rx_gain_dbi   DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                        cable_loss_db DOUBLE PRECISION NOT NULL DEFAULT 0.0,
                         freq_hz       DOUBLE PRECISION NOT NULL,
                         observed_dbm  DOUBLE PRECISION NOT NULL,
                         source        TEXT NOT NULL DEFAULT 'api',
                         submitted_by  TEXT
                     )
                 """)
+                # Defensive ALTER for legacy DBs created before this
+                # column existed. Alembic owns the canonical path in
+                # prod; this guards against partial-migration boots.
+                cur.execute(
+                    "ALTER TABLE link_observations "
+                    "ADD COLUMN IF NOT EXISTS cable_loss_db "
+                    "DOUBLE PRECISION NOT NULL DEFAULT 0.0"
+                )
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_obs_tower
                     ON link_observations(tower_id)
@@ -277,8 +301,9 @@ class _PgObservationStore:
                     """INSERT INTO link_observations
                        (ts, tower_id, tx_lat, tx_lon, tx_height_m, tx_power_dbm,
                         tx_gain_dbi, rx_lat, rx_lon, rx_height_m, rx_gain_dbi,
+                        cable_loss_db,
                         freq_hz, observed_dbm, source, submitted_by)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        RETURNING id""",
                     (
                         obs.get("ts") or time.time(),
@@ -289,6 +314,7 @@ class _PgObservationStore:
                         obs["rx_lat"], obs["rx_lon"],
                         obs.get("rx_height_m") or 1.5,
                         obs.get("rx_gain_dbi") or 0.0,
+                        float(obs.get("cable_loss_db") or 0.0),
                         obs["freq_hz"], obs["observed_dbm"],
                         obs.get("source") or "api",
                         obs.get("submitted_by"),
@@ -310,6 +336,7 @@ class _PgObservationStore:
                 r["rx_lat"], r["rx_lon"],
                 r.get("rx_height_m") or 1.5,
                 r.get("rx_gain_dbi") or 0.0,
+                float(r.get("cable_loss_db") or 0.0),
                 r["freq_hz"], r["observed_dbm"],
                 r.get("source") or "api",
                 r.get("submitted_by"),
@@ -323,6 +350,7 @@ class _PgObservationStore:
                     """INSERT INTO link_observations
                        (ts, tower_id, tx_lat, tx_lon, tx_height_m, tx_power_dbm,
                         tx_gain_dbi, rx_lat, rx_lon, rx_height_m, rx_gain_dbi,
+                        cable_loss_db,
                         freq_hz, observed_dbm, source, submitted_by)
                        VALUES %s""",
                     records,
