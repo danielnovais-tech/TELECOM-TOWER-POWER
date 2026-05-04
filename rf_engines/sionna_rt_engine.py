@@ -4,15 +4,21 @@
 
 Status
 ------
-**Roadmap Q2/2026 — scaffold only.** This module registers the engine
-under the name ``sionna-rt`` so the registry, ``/coverage/engines``
-listing, and the nightly compare robot all *know about* it, but the
-adapter unconditionally reports ``is_available() == False`` until the
-GPU-backed runtime is actually provisioned. ``predict_basic_loss``
-returns ``None`` on every call — there is intentionally no CPU
-fallback because path-loss extracted from a degenerate (no-bounce)
-ray trace would be indistinguishable from FSPL and would mislead
-the compare endpoint.
+**Tijolo 9 (2026-05-04) — feature-flag gated.** The engine is
+``is_available()=True`` when all three conditions are met:
+
+1. ``$SIONNA_RT_DISABLED`` is ``0`` / ``false`` / ``no`` (default
+   ``1`` — disabled).
+2. ``$SIONNA_RT_SCENE_PATH`` points to a directory that holds a
+   valid ``scene.xml`` and ``manifest.json`` (produced by
+   ``scripts/build_mitsuba_scene.py``).
+3. ``mitsuba`` and ``sionna_rt`` are importable (GPU stack installed).
+
+When available, ``predict_basic_loss`` runs a 1×1 raster (a single
+receiver pixel centred on ``(phi_r, lam_r)``) via the T8
+``_SionnaRtTracer`` and returns the loss for that pixel. The full
+per-tile raster path (SQS async, ``POST /coverage/engines/sionna-rt/raster``)
+is unchanged and remains the preferred route for large requests.
 
 Distinction from the existing ``sionna`` engine
 -----------------------------------------------
@@ -58,6 +64,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from typing import Optional, Sequence
 
 from . import register_engine
@@ -67,11 +74,7 @@ logger = logging.getLogger(__name__)
 
 
 def _is_disabled() -> bool:
-    """Default-on disable flag.
-
-    Stays at ``1`` even on the GPU image until ops has built and
-    benchmarked a Mitsuba scene for the AOI being served.
-    """
+    """Default-on disable flag. ``SIONNA_RT_DISABLED=0`` opt-in."""
     return os.getenv("SIONNA_RT_DISABLED", "1").lower() in {"1", "true", "yes"}
 
 
@@ -79,18 +82,32 @@ def _scene_path() -> str:
     return os.getenv("SIONNA_RT_SCENE_PATH", "")
 
 
+def _has_gpu_stack() -> bool:
+    """Return True if mitsuba + sionna_rt are importable."""
+    for mod in ("mitsuba", "sionna_rt"):
+        if mod not in sys.modules:
+            try:
+                __import__(mod)
+            except ImportError:
+                return False
+    return True
+
+
 class SionnaRTEngine(RFEngine):
-    """3D ray-tracing path-loss engine — Sionna 2.x roadmap scaffold.
+    """3D ray-tracing path-loss engine — Sionna RT 2.x, Mitsuba 3.
 
-    The class is intentionally a no-op until the GPU runtime lands.
-    Keeping it registered (but unavailable) lets us:
+    Availability (all three required):
+    * ``$SIONNA_RT_DISABLED=0`` (default: ``1``).
+    * ``$SIONNA_RT_SCENE_PATH`` points to a directory with a valid
+      ``scene.xml`` + ``manifest.json``.
+    * ``mitsuba`` and ``sionna_rt`` importable.
 
-    * surface a placeholder row in ``GET /coverage/engines`` so the
-      operator UI can show a "coming Q2/2026" badge;
-    * exercise the autoregister + compare plumbing in CI without any
-      heavyweight deps;
-    * ship the env-var contract (``SIONNA_RT_*``) ahead of the actual
-      implementation so ops can pre-provision SSM parameters.
+    When available, ``predict_basic_loss`` fires a 1×1 raster
+    centred on ``(phi_r, lam_r)`` via the T8 ``_SionnaRtTracer``
+    and returns the single-pixel loss. The cell is sized so the
+    receiver pixel spans ±250 m around the RX point (the minimum
+    meaningful resolution for a Mitsuba city-scale scene; finer
+    cells just alias to the nearest mesh triangle).
     """
 
     name = "sionna-rt"
@@ -98,20 +115,14 @@ class SionnaRTEngine(RFEngine):
     def is_available(self) -> bool:
         if _is_disabled():
             return False
-        # Defence in depth: even if someone flips SIONNA_RT_DISABLED=0
-        # on a CPU image, refuse to claim availability without a scene
-        # file *and* an importable sionna.rt module. We probe lazily so
-        # the import cost is paid once, not every compare call.
-        if not _scene_path() or not os.path.isfile(_scene_path()):
+        scene = _scene_path()
+        if not scene:
             return False
-        try:  # pragma: no cover — exercised only with the GPU dep set
-            import sionna.rt  # type: ignore[import-not-found]  # noqa: F401
-        except Exception:
+        if not os.path.isfile(os.path.join(scene, "scene.xml")):
             return False
-        # Roadmap stub: even with deps + scene present we still return
-        # False until the predict path is implemented. Flip this when
-        # the Q2/2026 milestone lands.
-        return False
+        if not os.path.isfile(os.path.join(scene, "manifest.json")):
+            return False
+        return _has_gpu_stack()
 
     def predict_basic_loss(
         self,
@@ -131,14 +142,78 @@ class SionnaRTEngine(RFEngine):
         time_pct: Optional[float] = None,
         loc_pct: Optional[float] = None,
     ) -> Optional[LossEstimate]:
-        # Roadmap scaffold — never serve a number from this engine.
-        # Returning None is the documented fail-closed contract; the
-        # registry will simply skip the row in /coverage/engines/compare.
-        del (
-            f_hz, d_km, h_m, htg, hrg, phi_t, lam_t, phi_r, lam_r,
-            clutter_heights_m, pol, zone, time_pct, loc_pct,
+        """Single-link prediction: 1×1 raster at the receiver location.
+
+        Unused link-profile arguments (``d_km``, ``h_m``,
+        ``clutter_heights_m``, ``pol``, ``zone``, ``time_pct``,
+        ``loc_pct``) are accepted for interface compatibility but
+        discarded — the ray tracer derives all geometry from the
+        scene file and the Tx/Rx lat/lon pair.
+        """
+        try:
+            return self._run_trace(
+                f_hz=f_hz, htg=htg, hrg=hrg,
+                phi_t=phi_t, lam_t=lam_t,
+                phi_r=phi_r, lam_r=lam_r,
+            )
+        except Exception:
+            logger.exception("sionna-rt predict_basic_loss failed; returning None")
+            return None
+
+    def _run_trace(
+        self,
+        *,
+        f_hz: float,
+        htg: float,
+        hrg: float,
+        phi_t: float,
+        lam_t: float,
+        phi_r: float,
+        lam_r: float,
+    ) -> Optional[LossEstimate]:
+        # Lazy import here so the module stays importable on CPU hosts.
+        import sys as _sys
+        _worker_mod = _sys.modules.get("scripts.sionna_rt_worker")
+        if _worker_mod is None:
+            import importlib
+            _worker_mod = importlib.import_module("scripts.sionna_rt_worker")
+
+        tracer = _worker_mod._SionnaRtTracer()
+
+        # Build a minimal 1-cell Job that places the receiver pixel
+        # directly at (phi_r, lam_r).  The bbox spans ±_CELL_HALF_DEG
+        # so the cell covers a ~500 m × 500 m footprint — wide enough
+        # to avoid the pixel straddling the scene edge on any input.
+        _CELL_HALF_DEG = 0.0025  # ≈ 250 m at equator
+        job = _worker_mod.Job(
+            job_id="inline-predict",
+            scene_s3_uri="",         # not used for local traces
+            result_s3_uri="",        # not used
+            tx_lat=float(phi_t),
+            tx_lon=float(lam_t),
+            tx_height_m=float(htg),
+            tx_power_dbm=43.0,       # irrelevant — path loss is geometry
+            frequency_hz=float(f_hz),
+            rows=1,
+            cols=1,
+            bbox_south=float(phi_r) - _CELL_HALF_DEG,
+            bbox_west=float(lam_r) - _CELL_HALF_DEG,
+            bbox_north=float(phi_r) + _CELL_HALF_DEG,
+            bbox_east=float(lam_r) + _CELL_HALF_DEG,
         )
-        return None
+
+        arr = tracer.trace(_scene_path(), job)
+        loss_db = float(arr[0, 0])
+        return LossEstimate(
+            basic_loss_db=loss_db,
+            engine=self.name,
+            confidence=1.0,
+            extra={
+                "rx_height_m": float(os.getenv("SIONNA_RT_RX_HEIGHT_M", "1.5")),
+                "scene_path": _scene_path(),
+            },
+        )
 
 
 register_engine(SionnaRTEngine())
+
