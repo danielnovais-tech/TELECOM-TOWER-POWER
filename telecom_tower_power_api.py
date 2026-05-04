@@ -36,7 +36,7 @@ from fastapi import FastAPI, HTTPException, Query, Depends, Security, UploadFile
 from fastapi.security import APIKeyHeader
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 # uvicorn is imported lazily inside ``__main__`` so the module loads cleanly
 # under AWS Lambda (Mangum), which does not bundle uvicorn.
 from pdf_generator import build_pdf_report
@@ -2086,6 +2086,37 @@ class CoverageObservationInput(BaseModel):
     observed_dbm: float = Field(..., ge=-150, le=30)
     source: str = Field(default="api", max_length=32)
     ts: Optional[float] = None  # epoch seconds; default to ingest time
+
+    # Drive-test rows must NOT silently inherit the synthetic-friendly
+    # defaults (17 dBi tx gain, 0 dBi rx gain, 0 dB cable loss). Those
+    # defaults exist purely for backward compatibility with `source=api`
+    # and synthetic ingest paths; if a real-world calibrated label
+    # arrives without them populated, the model would learn against a
+    # systematically biased basic-loss target. We therefore require
+    # `drivetest_*` rows to set every rx-side calibration field
+    # explicitly. `tx_power_dbm` is already mandatory via `Field(...)`.
+    _DRIVETEST_REQUIRED_FIELDS = (
+        "tx_gain_dbi",
+        "rx_gain_dbi",
+        "cable_loss_db",
+        "rx_height_m",
+    )
+
+    @model_validator(mode="after")
+    def _require_explicit_calibration_for_drivetest(self) -> "CoverageObservationInput":
+        if not self.source.startswith("drivetest_"):
+            return self
+        missing = [
+            f for f in self._DRIVETEST_REQUIRED_FIELDS
+            if f not in self.model_fields_set
+        ]
+        if missing:
+            raise ValueError(
+                "source=drivetest_* requires explicit values for: "
+                + ", ".join(missing)
+                + " (defaults are calibrated for synthetic data only)"
+            )
+        return self
 
 
 class CoverageObservationsBatch(BaseModel):
