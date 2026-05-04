@@ -238,13 +238,14 @@ CR_JSON=$(cat <<EOF
 EOF
 )
 
-if [[ "$CE_STATE" == "MISSING" ]]; then
+if [[ "$CE_STATE" == "MISSING" || "$CE_STATE" == "None" || -z "$CE_STATE" ]]; then
   echo "  creating CE (this can take ~2 min to settle)"
+  # --service-role omitted: AWS Batch auto-creates the service-linked
+  # role (AWSServiceRoleForBatch) on first compute-environment create.
   run aws batch create-compute-environment \
         --compute-environment-name "$CE_NAME" \
         --type MANAGED --state ENABLED \
         --compute-resources "$CR_JSON" \
-        --service-role "arn:aws:iam::${ACCOUNT_ID}:role/aws-service-role/batch.amazonaws.com/${BATCH_SERVICE_ROLE}" \
         --region "$REGION" >/dev/null
 else
   echo "  CE exists ($CE_STATE) — updating maxvCpus + instanceTypes"
@@ -259,7 +260,7 @@ echo "[5/6] Batch job queue $JQ_NAME"
 JQ_STATE=$(aws batch describe-job-queues --job-queues "$JQ_NAME" --region "$REGION" \
             --query 'jobQueues[0].status' --output text 2>/dev/null || echo "MISSING")
 CEO_JSON="[{\"order\":1,\"computeEnvironment\":\"$CE_NAME\"}]"
-if [[ "$JQ_STATE" == "MISSING" ]]; then
+if [[ "$JQ_STATE" == "MISSING" || "$JQ_STATE" == "None" || -z "$JQ_STATE" ]]; then
   run aws batch create-job-queue \
         --job-queue-name "$JQ_NAME" \
         --priority 1 --state ENABLED \
