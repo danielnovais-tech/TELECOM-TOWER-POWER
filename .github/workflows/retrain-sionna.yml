@@ -128,13 +128,12 @@ jobs:
           conn = psycopg2.connect(os.environ["DATABASE_URL"])
           cur  = conn.cursor()
           cur.execute("""
-            SELECT DISTINCT t.id, t.lat, t.lon
-            FROM link_observations lo
-            JOIN towers t ON t.id = lo.tx_id OR t.id = lo.rx_id
-            WHERE t.lat IS NOT NULL AND t.lon IS NOT NULL
+            SELECT DISTINCT tower_id, tx_lat, tx_lon
+            FROM link_observations
+            WHERE tx_lat IS NOT NULL AND tx_lon IS NOT NULL
             LIMIT 5000
           """)
-          rows = [{"id": str(r[0]), "lat": float(r[1]), "lon": float(r[2])} for r in cur.fetchall()]
+          rows = [{"id": str(r[0] or ""), "lat": float(r[1]), "lon": float(r[2])} for r in cur.fetchall()]
           conn.close()
           with open("towers_for_ndvi.json", "w") as f:
               json.dump(rows, f)
