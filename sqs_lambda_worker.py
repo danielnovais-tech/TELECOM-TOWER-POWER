@@ -419,6 +419,119 @@ def _fetch_job(job_id: str) -> Optional[Dict[str, Any]]:
 
 # ── Core job processor ───────────────────────────────────────────
 
+def _process_interference_job(job_id: str, tier: str = ""):
+    """Process one async interference job: run FSPL math → JSON → S3.
+
+    The submit-time API embeds the full request + pre-resolved candidate
+    aggressors in the ``receivers`` JSON column (see
+    ``INTERFERENCE_JOB_SENTINEL`` in ``telecom_tower_power_api``), so the
+    worker has no DB lookups beyond the job row itself — keeps cold-start
+    times low and lets a stripped-down Lambda image (no SRTM, no
+    psycopg2 if the API runs on Aurora Data API) handle these.
+    """
+    from interference_engine import (
+        CandidateAggressor,
+        compute_interference_fspl,
+        top_n_contributions,
+    )
+
+    logger.info("Processing interference job %s", job_id)
+    start = time.monotonic()
+    _update_job_status(job_id, "running")
+
+    job = _fetch_job(job_id)
+    if job is None:
+        logger.error("Interference job %s not found in DB", job_id)
+        return
+
+    try:
+        payload = json.loads(job["receivers"])
+    except json.JSONDecodeError:
+        _update_job_status(job_id, "failed",
+                           error="invalid job payload (receivers JSON)")
+        return
+
+    request_body = payload.get("request") or {}
+    victim = request_body.get("victim") or {}
+    candidates_raw = payload.get("candidates") or []
+
+    try:
+        candidates = [CandidateAggressor.from_dict(c) for c in candidates_raw]
+    except (KeyError, ValueError, TypeError) as exc:
+        _update_job_status(job_id, "failed",
+                           error=f"invalid candidate record: {exc}")
+        return
+
+    victim_f_hz = float(victim["freq_mhz"]) * 1e6
+    victim_bw_hz = float(victim["bw_mhz"]) * 1e6
+    comp = compute_interference_fspl(
+        victim_lat=float(victim["lat"]),
+        victim_lon=float(victim["lon"]),
+        victim_f_hz=victim_f_hz,
+        victim_bw_hz=victim_bw_hz,
+        victim_rx_gain_dbi=float(victim.get("rx_gain_dbi", 12.0)),
+        victim_signal_dbm=victim.get("victim_signal_dbm"),
+        noise_figure_db=float(victim.get("noise_figure_db", 5.0)),
+        candidates=candidates,
+        search_radius_km=float(request_body.get("search_radius_km", 30.0)),
+        include_aci=bool(request_body.get("include_aci", True)),
+        aci_floor_db=request_body.get("aci_floor_db"),
+    )
+
+    top_n = int(request_body.get("top_n", 10))
+    top = top_n_contributions(comp.contributions, n=top_n)
+    top_out = []
+    for c in top:
+        delta_mhz = (c.aggressor_f_hz - victim_f_hz) / 1e6
+        top_out.append({
+            "aggressor_id": c.aggressor_id,
+            "operator": comp.operator_by_id.get(c.aggressor_id, "unknown"),
+            "distance_km": round(c.distance_km, 3),
+            "aggressor_freq_mhz": round(c.aggressor_f_hz / 1e6, 3),
+            "aggressor_bw_mhz": round(c.aggressor_bw_hz / 1e6, 3),
+            "delta_f_mhz": round(delta_mhz, 3),
+            "eirp_dbm": round(c.eirp_dbm, 2),
+            "path_loss_db": round(c.path_loss_db, 2),
+            "aci_db": round(c.aci_db, 2),
+            "rx_power_dbm": round(c.rx_power_dbm, 2),
+        })
+
+    response = {
+        "victim": victim,
+        "engine": "fspl",
+        "n_candidates": len(candidates),
+        "n_in_radius": comp.n_in_radius,
+        "n_contributing": comp.n_contributing,
+        "co_channel_count": comp.co_channel_count,
+        "adjacent_channel_count": comp.adjacent_channel_count,
+        "aggregate_i_dbm": (round(comp.aggregate_i_dbm, 2)
+                            if comp.aggregate_i_dbm is not None else None),
+        "noise_dbm": round(comp.noise_dbm, 2),
+        "i_over_n_db": (round(comp.i_over_n_db, 2)
+                        if comp.i_over_n_db is not None else None),
+        "sinr_db": (round(comp.sinr_db, 2)
+                    if comp.sinr_db is not None else None),
+        "top_n_aggressors": top_out,
+    }
+
+    tier_segment = f"{tier}/" if tier else ""
+    s3_key = f"{S3_PREFIX}{tier_segment}{job_id}/result.json"
+    _get_s3().put_object(
+        Bucket=S3_BUCKET,
+        Key=s3_key,
+        Body=json.dumps(response).encode("utf-8"),
+        ContentType="application/json",
+    )
+    s3_path = f"s3://{S3_BUCKET}/{s3_key}"
+    _update_job_status(job_id, "completed", result_path=s3_path)
+
+    elapsed = time.monotonic() - start
+    logger.info(
+        "Interference job %s completed: %d aggressors in radius, %.2fs, %s",
+        job_id, comp.n_in_radius, elapsed, s3_path,
+    )
+
+
 def _process_single_job(job_id: str, tier: str = ""):
     """Process one batch job: generate PDFs → ZIP → S3."""
     from pdf_generator import build_pdf_report
@@ -566,7 +679,11 @@ def handler(event, context):
                             receivers_json, len(body["receivers"]),
                         )
 
-            _process_single_job(job_id, tier=body.get("tier", ""))
+            job_type = body.get("job_type", "batch")
+            if job_type == "interference":
+                _process_interference_job(job_id, tier=body.get("tier", ""))
+            else:
+                _process_single_job(job_id, tier=body.get("tier", ""))
 
         except Exception:
             logger.exception("Failed to process SQS message %s", message_id)

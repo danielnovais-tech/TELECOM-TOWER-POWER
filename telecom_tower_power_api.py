@@ -2999,6 +2999,229 @@ async def coverage_interference(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Async interference (T18) — SQS worker path
+# ─────────────────────────────────────────────────────────────────────
+#
+# Same FSPL math as the sync endpoint but designed for very large
+# ``search_radius_km`` sweeps where the 200+ candidate per-aggressor
+# loop pushes the sync timeout. Submission flow:
+#
+#   POST /coverage/interference/async
+#     ─► resolves candidate towers from the DB *now*
+#     ─► persists job in batch_jobs (sentinel tower_id="__interference__")
+#     ─► enqueues SQS message {job_id, job_type:"interference", tier}
+#     ─► returns {job_id, status:"queued"}
+#
+#   Worker (sqs_lambda_worker._process_interference_job)
+#     ─► loads request + candidates from DB
+#     ─► runs interference_engine.compute_interference_fspl()
+#     ─► uploads result.json to S3
+#     ─► marks completed with result_path=s3://.../result.json
+#
+#   GET /coverage/interference/jobs/{job_id}
+#     ─► polls status; when completed, fetches JSON from S3 and returns inline.
+
+# Sentinel marker: `tower_id` in `batch_jobs` is repurposed as a discriminator
+# so the worker dispatches to the right handler; the field is non-null in the
+# legacy schema. Real interference jobs never reference a tower in the field.
+INTERFERENCE_JOB_SENTINEL = "__interference__"
+
+
+class _InterferenceJobAccepted(BaseModel):
+    job_id: str
+    status: str
+    n_candidates: int
+    poll_url: str
+    result_url: str
+
+
+def _build_candidates_for_request(
+    body: "InterferenceRequest", towers: list,
+) -> list:
+    """Pre-resolve aggressor records so the worker doesn't need DB access.
+
+    Returns a list of plain dicts (CandidateAggressor.to_dict shape) ready
+    for JSON serialisation into the job payload. We capture every tower
+    the platform returned — the worker re-applies the radius filter so the
+    DB query and the math agree if the data races.
+    """
+    from interference_engine import CandidateAggressor  # local import: keeps cold-start cheap
+
+    victim_bw_hz = body.victim.bw_mhz * 1e6
+    out = []
+    for t in towers:
+        out.append(CandidateAggressor(
+            aggressor_id=str(t.id),
+            operator=str(t.operator or "unknown"),
+            lat=float(t.lat),
+            lon=float(t.lon),
+            height_m=float(getattr(t, "height_m", 0.0) or 0.0),
+            f_hz=float(t.primary_freq_hz()),
+            bw_hz=victim_bw_hz,
+            eirp_dbm=float(t.power_dbm) + body.aggressor_tx_gain_dbi,
+        ).to_dict())
+    return out
+
+
+@app.post("/coverage/interference/async", response_model=_InterferenceJobAccepted)
+async def coverage_interference_async(
+    body: InterferenceRequest,
+    request: Request,
+    key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
+) -> _InterferenceJobAccepted:
+    """Submit an interference study to the SQS worker queue.
+
+    Returns immediately with a ``job_id``; poll
+    ``GET /coverage/interference/jobs/{job_id}`` for the result. Use
+    this when ``search_radius_km`` is large (50+ km, 200+ aggressors)
+    or when the caller doesn't want to hold an HTTP connection open
+    for the full compute. The worker is FSPL-only — Sionna RT async
+    path requires the GPU Batch worker (T19+ roadmap).
+    """
+    # Reject sionna-rt and the unwired engines up-front: the SQS Lambda
+    # worker is CPU-only. ``auto`` and ``fspl`` are accepted; everything
+    # else returns the same 501 the sync endpoint does.
+    engine_name = _interference_select_engine(body.engine)
+    if engine_name != "fspl":
+        raise HTTPException(
+            status_code=501,
+            detail=f"async interference path supports only engine='fspl' / 'auto'; "
+                   f"got resolved engine={engine_name!r}. GPU-backed engines "
+                   "(sionna-rt) ship with the T19 Batch worker.",
+        )
+
+    owner = _caller_owner(request, key_data)
+    towers = platform.find_nearest_towers(
+        body.victim.lat, body.victim.lon,
+        operator=None, limit=body.max_aggressors, owner=owner,
+    )
+    candidates = _build_candidates_for_request(body, towers)
+
+    job_id = str(uuid.uuid4())
+    payload = {
+        "job_type": "interference",
+        "schema_version": 1,
+        "request": body.model_dump(),
+        "candidates": candidates,
+    }
+    api_key = request.headers.get("x-api-key", "")
+    job_store.create_job(
+        job_id=job_id,
+        tower_id=INTERFERENCE_JOB_SENTINEL,
+        receivers_json=json.dumps(payload),
+        total=len(candidates),
+        api_key=api_key,
+    )
+
+    tier_value = key_data["tier"].value
+    queue_url = _queue_for_tier(tier_value)
+    if queue_url:
+        _get_sqs().send_message(
+            QueueUrl=queue_url,
+            MessageBody=json.dumps({
+                "job_id": job_id,
+                "job_type": "interference",
+                "tier": tier_value,
+            }),
+        )
+
+    await _audit.log(
+        api_key,
+        "interference.async.create",
+        actor_email=key_data.get("email") or key_data.get("owner"),
+        tier=tier_value,
+        target=f"job:{job_id}",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "n_candidates": len(candidates),
+            "search_radius_km": body.search_radius_km,
+            "queue": "priority" if queue_url == SQS_QUEUE_URL_PRIORITY and queue_url else (
+                "default" if queue_url else "db-only"
+            ),
+        },
+    )
+
+    return _InterferenceJobAccepted(
+        job_id=job_id,
+        status="queued",
+        n_candidates=len(candidates),
+        poll_url=f"/coverage/interference/jobs/{job_id}",
+        result_url=f"/coverage/interference/jobs/{job_id}/result",
+    )
+
+
+def _load_interference_result_from_s3(job: Dict) -> Optional[Dict]:
+    """Download the result.json blob the worker uploaded for this job."""
+    result_path = job.get("result_path") or ""
+    if not result_path.startswith("s3://"):
+        return None
+    # Parse s3://bucket/key
+    rest = result_path[len("s3://"):]
+    bucket, _, key = rest.partition("/")
+    if not bucket or not key:
+        return None
+    try:
+        import boto3 as _boto3
+        s3 = _boto3.client("s3")
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        return json.loads(obj["Body"].read())
+    except Exception:
+        logger.exception("Failed to fetch interference result from %s", result_path)
+        return None
+
+
+@app.get("/coverage/interference/jobs/{job_id}")
+async def coverage_interference_job_status(
+    job_id: str,
+    _key: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
+) -> Dict:
+    """Poll an async interference job. Inlines the result on completion."""
+    job = job_store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("tower_id") != INTERFERENCE_JOB_SENTINEL:
+        # Caller fed a PDF batch job_id into the interference endpoint.
+        # Steer them to /jobs/{id} rather than leak the raw record.
+        raise HTTPException(
+            status_code=404,
+            detail="Job is not an interference job; use GET /jobs/{id}",
+        )
+    out: Dict[str, object] = {
+        "job_id": job_id,
+        "status": job["status"],
+        "n_candidates": job["total"],
+    }
+    if job["status"] == "failed":
+        out["error"] = job.get("error", "unknown")
+    if job["status"] == "completed":
+        out["result_url"] = f"/coverage/interference/jobs/{job_id}/result"
+    return out
+
+
+@app.get("/coverage/interference/jobs/{job_id}/result")
+async def coverage_interference_job_result(
+    job_id: str,
+    _key: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
+) -> Dict:
+    """Fetch the JSON result of a completed async interference job."""
+    job = job_store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("tower_id") != INTERFERENCE_JOB_SENTINEL:
+        raise HTTPException(status_code=404, detail="Not an interference job")
+    if job["status"] != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is {job['status']}; result not available yet",
+        )
+    payload = _load_interference_result_from_s3(job)
+    if payload is None:
+        raise HTTPException(status_code=410, detail="Result expired or unreadable")
+    return payload
+
+
+# ─────────────────────────────────────────────────────────────────────
 # White-label / tenant branding (Enterprise)
 # ─────────────────────────────────────────────────────────────────────
 

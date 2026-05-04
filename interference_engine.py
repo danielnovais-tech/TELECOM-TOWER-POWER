@@ -202,3 +202,176 @@ def top_n_contributions(
     finite = [c for c in contributions if math.isfinite(c.rx_power_dbm)]
     finite.sort(key=lambda c: c.rx_power_dbm, reverse=True)
     return finite[: max(0, int(n))]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Job-payload primitives (T18 SQS async path)
+# ─────────────────────────────────────────────────────────────────────
+#
+# The synchronous endpoint resolves candidate towers from the DB and
+# computes the contributions in-process. The async path (T18) splits
+# that work in two:
+#
+#   1. The API submits the job — same DB lookup happens at submit-time
+#      so the request payload is fully self-contained. The candidates
+#      list is captured inline so the SQS worker doesn't need DB access
+#      (RDS Proxy IAM is only attached to the PDF Lambda; an interference
+#      worker can run on cheaper bare Lambda).
+#   2. The worker dequeues, runs the math, uploads JSON to S3.
+#
+# The serialized job payload schema is intentionally minimal — every
+# field the worker needs to recompute the response, nothing more.
+
+@dataclass(frozen=True)
+class CandidateAggressor:
+    """Tower record reduced to the fields the math needs.
+
+    Built at submit-time from ``models.Tower`` rows so the worker has
+    no SQLAlchemy / DB dependency.
+    """
+
+    aggressor_id: str
+    operator: str
+    lat: float
+    lon: float
+    height_m: float
+    f_hz: float
+    bw_hz: float
+    eirp_dbm: float
+
+    def to_dict(self) -> dict:
+        return {
+            "aggressor_id": self.aggressor_id,
+            "operator": self.operator,
+            "lat": self.lat,
+            "lon": self.lon,
+            "height_m": self.height_m,
+            "f_hz": self.f_hz,
+            "bw_hz": self.bw_hz,
+            "eirp_dbm": self.eirp_dbm,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CandidateAggressor":
+        return cls(
+            aggressor_id=str(d["aggressor_id"]),
+            operator=str(d.get("operator", "unknown")),
+            lat=float(d["lat"]),
+            lon=float(d["lon"]),
+            height_m=float(d.get("height_m", 0.0) or 0.0),
+            f_hz=float(d["f_hz"]),
+            bw_hz=float(d["bw_hz"]),
+            eirp_dbm=float(d["eirp_dbm"]),
+        )
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance (km). Local copy so this module stays
+    importable in worker contexts that don't ship the FastAPI app."""
+    R = 6371.0088
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlam / 2) ** 2
+    return float(2 * R * math.asin(min(1.0, math.sqrt(a))))
+
+
+def _free_space_path_loss_db(d_km: float, f_hz: float) -> float:
+    """FSPL in dB. Mirrors ``LinkEngine.free_space_path_loss``."""
+    d_m = d_km * 1000.0
+    return 20.0 * math.log10(d_m) + 20.0 * math.log10(f_hz) - 147.55
+
+
+@dataclass(frozen=True)
+class InterferenceComputation:
+    """Result bundle returned by :func:`compute_interference_fspl`.
+
+    The endpoint / worker map this onto the public response schema.
+    """
+
+    contributions: List[InterferenceContribution]
+    aggregate_i_dbm: Optional[float]
+    noise_dbm: float
+    i_over_n_db: Optional[float]
+    sinr_db: Optional[float]
+    co_channel_count: int
+    adjacent_channel_count: int
+    n_in_radius: int
+    n_contributing: int
+    operator_by_id: dict
+
+
+def compute_interference_fspl(
+    *,
+    victim_lat: float,
+    victim_lon: float,
+    victim_f_hz: float,
+    victim_bw_hz: float,
+    victim_rx_gain_dbi: float,
+    victim_signal_dbm: Optional[float],
+    noise_figure_db: float,
+    candidates: Iterable[CandidateAggressor],
+    search_radius_km: float,
+    include_aci: bool = True,
+    aci_floor_db: Optional[float] = None,
+) -> InterferenceComputation:
+    """Run the FSPL pipeline for a victim + candidate fleet.
+
+    Pure function — no DB, no I/O. Used by the synchronous
+    ``/coverage/interference`` endpoint and by the SQS worker that
+    handles the async path. Sionna RT path-loss is *not* computed here
+    (the worker for that lives in ``rf_engines.interference_engine``);
+    when the engine is FSPL the math collapses to closed-form which is
+    fast enough that the async path exists mainly for very large
+    ``search_radius_km`` sweeps where 200+ aggressors push the
+    sync timeout budget.
+    """
+    contributions: List[InterferenceContribution] = []
+    operator_by_id: dict = {}
+    co_count = 0
+    adj_count = 0
+    in_radius = 0
+    for c in candidates:
+        d_km = haversine_km(victim_lat, victim_lon, c.lat, c.lon)
+        if d_km > search_radius_km or d_km <= 0.001:
+            continue
+        in_radius += 1
+        pl_db = _free_space_path_loss_db(d_km, c.f_hz)
+        contrib = build_contribution(
+            aggressor_id=c.aggressor_id,
+            distance_km=d_km,
+            aggressor_f_hz=c.f_hz,
+            aggressor_bw_hz=c.bw_hz,
+            aggressor_eirp_dbm=c.eirp_dbm,
+            victim_f_hz=victim_f_hz,
+            victim_bw_hz=victim_bw_hz,
+            rx_gain_dbi=victim_rx_gain_dbi,
+            path_loss_db=pl_db,
+            include_aci=include_aci,
+            aci_floor_db=aci_floor_db,
+        )
+        if contrib.aci_db == 0.0:
+            co_count += 1
+        elif math.isfinite(contrib.rx_power_dbm):
+            adj_count += 1
+        contributions.append(contrib)
+        operator_by_id[contrib.aggressor_id] = c.operator
+
+    i_dbm = aggregate_interference_dbm(contributions)
+    n_dbm = thermal_noise_dbm(victim_bw_hz, noise_figure_db)
+    i_n = i_over_n_db(i_dbm, n_dbm)
+    sinr = sinr_db(victim_signal_dbm, i_dbm, n_dbm)
+    n_contrib = sum(1 for c in contributions if math.isfinite(c.rx_power_dbm))
+
+    return InterferenceComputation(
+        contributions=contributions,
+        aggregate_i_dbm=i_dbm,
+        noise_dbm=n_dbm,
+        i_over_n_db=i_n,
+        sinr_db=sinr,
+        co_channel_count=co_count,
+        adjacent_channel_count=adj_count,
+        n_in_radius=in_radius,
+        n_contributing=n_contrib,
+        operator_by_id=operator_by_id,
+    )
