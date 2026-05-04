@@ -181,7 +181,14 @@ def _row_to_obs(
                 f"(have {sorted(cable_map.keys())}). Re-run calibration."
             )
         band_key = closest
-    cable_loss = float(cable_map[band_key])
+    cable_loss_raw = cable_map[band_key]
+    if cable_loss_raw is None:
+        raise ValueError(
+            f"cable_loss_db['{band_key}'] is null — measure it before "
+            "uploading. The placeholder template ships with nulls on "
+            "purpose so uncalibrated runs fail loud."
+        )
+    cable_loss = float(cable_loss_raw)
 
     rx_gain = rx_cal.get("rx_gain_dbi")
     rx_height = rx_cal.get("rx_height_m")

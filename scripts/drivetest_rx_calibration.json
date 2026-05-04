@@ -1,0 +1,31 @@
+{
+  "_comment": "Per-vehicle rx-side calibration sidecar for scripts/drivetest_to_observations.py. Phase 1 (issue #30). All cable_loss_db values are null on purpose — the uploader REFUSES to run until each band of acquisition has a measured number. See docs/operations/drivetest-phase1.md § 'Calibração de cable_loss_db' for the CW-injection procedure.",
+  "_calibration_metadata": {
+    "operator": null,
+    "vehicle_plate": null,
+    "antenna_model": null,
+    "antenna_serial": null,
+    "scanner_model": null,
+    "scanner_serial": null,
+    "signal_generator_model": null,
+    "signal_generator_serial": null,
+    "calibration_date_iso": null,
+    "calibration_temperature_c": null
+  },
+
+  "rx_gain_dbi": null,
+  "rx_height_m": null,
+
+  "cable_loss_db": {
+    "700":  null,
+    "800":  null,
+    "900":  null,
+    "1800": null,
+    "1900": null,
+    "2100": null,
+    "2300": null,
+    "2500": null,
+    "2600": null,
+    "3500": null
+  }
+}
