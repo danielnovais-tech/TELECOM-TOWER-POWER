@@ -21,7 +21,7 @@ on:
       aws_region:
         description: 'AWS region'
         required: false
-        default: 'us-east-1'
+        default: 'sa-east-1'
 
 concurrency:
   group: deploy-lambda-${{ inputs.stage }}
@@ -40,7 +40,7 @@ jobs:
 
     env:
       STAGE: ${{ github.event.inputs.stage }}
-      AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+      AWS_REGION: ${{ github.event.inputs.aws_region || 'sa-east-1' }}
 
     steps:
       - name: Checkout
