@@ -1,0 +1,10 @@
+{
+  "PIPETEST-SP-CENTRO-001": {
+    "tx_lat": -23.5505,
+    "tx_lon": -46.6333,
+    "tx_height_m": 32.0,
+    "tx_power_dbm": 43.0,
+    "tx_gain_dbi": 16.5,
+    "freq_hz": 1800000000.0
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "_comment": "SYNTHETIC pipeline-test calibration. NOT measured. Values chosen to look physically plausible (LMR-400 5m typical losses) so the validator and trainer accept rows. Use ONLY with source=drivetest_synthetic_pipetest. Real drive-tests must use scripts/drivetest_rx_calibration.json with measured values.",
+  "_calibration_metadata": {
+    "operator": "synthetic-pipeline-test",
+    "calibration_date_iso": "2026-05-03T00:00:00Z",
+    "scanner_model": "synthetic",
+    "signal_generator_model": "synthetic"
+  },
+  "rx_gain_dbi": 4.0,
+  "rx_height_m": 1.74,
+  "cable_loss_db": {
+    "700": 2.8,
+    "800": 3.0,
+    "900": 3.2,
+    "1800": 3.5,
+    "1900": 3.6,
+    "2100": 3.8,
+    "2300": 4.0,
+    "2500": 4.2,
+    "2600": 4.3,
+    "3500": 4.9
+  }
+}
