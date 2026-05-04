@@ -299,10 +299,27 @@ Why ship the scaffold now (May 2026)?
   via deadsnakes PPA, used only by the worker pool. Build-time
   `python -c 'import torch, mitsuba, drjit, sionna'` smoke-test
   fails the build if the CUDA wheel selection is wrong.
-- [ ] **Worker pool** — AWS Batch with a GPU job queue (or a single
+- [~] **Worker pool** — AWS Batch with a GPU job queue (or a single
   EC2 G5 instance behind SQS) consuming `coverage:rt` jobs. Single
   predictions stay an HTTP "kick + poll" — no inline GPU calls from
   the API container.
+  **Tijolo 5 — SQS poll + S3 raster upload (landed 2026-05-04):**
+  `scripts/sionna_rt_worker.py --poll` long-polls
+  `$SIONNA_RT_QUEUE_URL`, validates the job message schema
+  (`job_id`, `scene_s3_uri`, `tx`, `frequency_hz`, `raster_grid`,
+  `result_s3_uri`), downloads the scene bundle to a fresh
+  tempdir, re-validates `manifest.json`
+  (`implementation_status='complete'`), computes the per-pixel
+  loss raster, writes `.npz` (loss_db + bbox + frequency + tx
+  metadata) and uploads it to `result_s3_uri`. Poison-pill messages
+  (schema-invalid JSON) are deleted with an error log; transient
+  failures (S3 missing, manifest stale) leave the message on the
+  queue for the redrive policy. `--once` and `--idle-exit` are
+  test-friendly knobs. The trace itself is still a stub returning
+  an FSPL-shaped raster centred on the TX — tijolos 6+ swap
+  `compute_raster_loss()` for the real Mitsuba `load_file` +
+  Sionna `PathSolver` call without changing the surrounding
+  plumbing.
 - [x] **Scene builder** — `scripts/build_mitsuba_scene.py` CLI
   scaffold landed 2026-05-03 (manifest-only, refuses to write
   `scene.xml` without `--allow-stub`). Manifest schema fixed
