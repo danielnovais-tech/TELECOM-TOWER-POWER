@@ -107,11 +107,18 @@ class _SQLiteJobStore:
         return dict(r) if r else None
 
     def claim_next_job(self) -> Optional[Dict[str, Any]]:
-        """Atomically claim the oldest queued job (set status='running')."""
+        """Atomically claim the oldest queued PDF batch job.
+
+        Skips rows whose ``tower_id`` is the interference sentinel
+        (``__interference__``) — those are dispatched out-of-band via
+        SQS Lambda (FSPL) or AWS Batch GPU (sionna-rt) and must not be
+        picked up by the in-process PDF poller.
+        """
         now = time.time()
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT * FROM batch_jobs WHERE status = 'queued' "
+                "AND tower_id != '__interference__' "
                 "ORDER BY created_at ASC LIMIT 1"
             ).fetchone()
             if row is None:
@@ -279,13 +286,18 @@ class _PgJobStore:
         return dict(r) if r else None
 
     def claim_next_job(self) -> Optional[Dict[str, Any]]:
-        """Atomically claim the oldest queued job using FOR UPDATE SKIP LOCKED."""
+        """Atomically claim the oldest queued PDF batch job using FOR UPDATE SKIP LOCKED.
+
+        Skips interference sentinel rows (T18 SQS / T19 GPU Batch paths
+        own those — see _JsonBackend.claim_next_job docstring).
+        """
         assert psycopg2 is not None
         now = time.time()
         with self._conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     "SELECT * FROM batch_jobs WHERE status = 'queued' "
+                    "AND tower_id != '__interference__' "
                     "ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                 )
                 row = cur.fetchone()
