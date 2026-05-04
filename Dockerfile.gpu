@@ -75,14 +75,18 @@ COPY requirements-gpu.txt /opt/rt/requirements-gpu.txt
 
 # torch+cu121 needs the explicit CUDA index URL. Sionna+Mitsuba+Dr.Jit
 # pull from PyPI normally.
-RUN pip install --extra-index-url https://download.pytorch.org/whl/cu124 \
+# Use pytorch's whl index as the PRIMARY source so pip always picks
+# the +cu124 wheel for torch. PyPI is the fallback for everything else.
+RUN pip install \
+        --index-url https://download.pytorch.org/whl/cu124 \
+        --extra-index-url https://pypi.org/simple \
         -r requirements-gpu.txt \
-    # Smoke-test the imports so a broken wheel selection fails the
-    # build instead of the first SQS message.
+    # Smoke-test: verify CUDA wheel was selected (torch.version.cuda
+    # is a string like '12.4' for CUDA builds, None for CPU-only).
     && python -c "import torch, mitsuba, drjit, sionna; \
-                  assert torch.cuda.is_available() or 'CUDA' in str(torch.version.cuda), \
-                  'torch built without CUDA — check --extra-index-url'; \
-                  print('torch=', torch.__version__, \
+                  assert torch.version.cuda is not None, \
+                  'torch built without CUDA — wrong wheel index?'; \
+                  print('torch=', torch.__version__, '+cuda', torch.version.cuda, \
                         'mitsuba=', mitsuba.__version__, \
                         'drjit=', drjit.__version__, \
                         'sionna=', sionna.__version__)"
