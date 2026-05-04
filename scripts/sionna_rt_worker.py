@@ -237,35 +237,124 @@ def upload_raster(local_path: str, result_s3_uri: str, *, s3) -> None:
     s3.upload_file(local_path, bucket, key)
 
 
+# ── Tracer backends ──────────────────────────────────────────────
+#
+# Tijolo 7 (2026-05-03): pluggable tracer registry. The contract is
+# ``RFTracer.trace(scene_dir, job) -> np.ndarray of shape (rows, cols)
+# dtype float32`` (basic loss in dB).
+#
+# Two backends ship today:
+#   - ``fspl_stub`` (default): closed-form Friis FSPL, no GPU. The
+#     same numbers Tijolo 5 produced. Used by all tests/CI and by
+#     prod until GPU instances roll out.
+#   - ``sionna_rt``: real Mitsuba 3 / Sionna RT trace. Requires
+#     ``mitsuba``+``sionna_rt`` and a CUDA-capable host. Construction
+#     raises ``RuntimeError`` when those imports fail so ops can't
+#     accidentally enable an unusable backend. The actual trace is
+#     deferred to Tijolo 8.
+#
+# Selection: ``$SIONNA_RT_BACKEND`` (default ``fspl_stub``).
+
+class _FsplStubTracer:
+    """Closed-form Friis FSPL — deterministic, no GPU."""
+
+    name = "fspl_stub"
+
+    def trace(self, scene_dir: str, job: "Job") -> "Any":  # noqa: ARG002
+        import math
+        import numpy as np  # type: ignore[import-not-found]
+
+        rows, cols = job.rows, job.cols
+        lats = np.linspace(job.bbox_north, job.bbox_south, rows)
+        lons = np.linspace(job.bbox_west, job.bbox_east, cols)
+        LAT, LON = np.meshgrid(lats, lons, indexing="ij")
+        R = 6_371_008.8
+        lat0 = math.radians(job.tx_lat)
+        dlat = np.radians(LAT - job.tx_lat)
+        dlon = np.radians(LON - job.tx_lon) * math.cos(lat0)
+        d_m = np.hypot(dlat, dlon) * R
+        d_m = np.maximum(d_m, 1.0)  # avoid log(0) at TX pixel
+        # FSPL: 32.45 + 20·log10(f_MHz) + 20·log10(d_km)
+        f_mhz = job.frequency_hz / 1e6
+        fspl_db = 32.45 + 20.0 * np.log10(f_mhz) + 20.0 * np.log10(d_m / 1000.0)
+        return fspl_db.astype("float32")
+
+
+class _SionnaRtTracer:
+    """Real Mitsuba 3 / Sionna RT trace.
+
+    Construction validates that the GPU stack is importable and fails
+    loud otherwise — so a misconfigured ``$SIONNA_RT_BACKEND=sionna_rt``
+    is caught at boot, not mid-trace. The actual ``.trace()`` body is
+    deferred to Tijolo 8: today it raises ``NotImplementedError`` so
+    a half-wired prod can never silently ship FSPL numbers under the
+    Sionna label.
+    """
+
+    name = "sionna_rt"
+
+    def __init__(self) -> None:
+        missing = []
+        try:
+            import mitsuba  # type: ignore[import-not-found]  # noqa: F401
+        except ImportError:
+            missing.append("mitsuba")
+        try:
+            import sionna_rt  # type: ignore[import-not-found]  # noqa: F401
+        except ImportError:
+            missing.append("sionna_rt")
+        if missing:
+            raise RuntimeError(
+                "sionna_rt tracer selected but required modules are not "
+                f"installed: {missing}. Install mitsuba>=3.5 and "
+                "sionna-rt>=1.0 on a CUDA-capable host, or set "
+                "SIONNA_RT_BACKEND=fspl_stub."
+            )
+
+    def trace(self, scene_dir: str, job: "Job") -> "Any":  # noqa: ARG002
+        raise NotImplementedError(
+            "sionna_rt tracer not yet implemented — Tijolo 8 wires "
+            "Mitsuba load_file + Sionna PathSolver. Use "
+            "SIONNA_RT_BACKEND=fspl_stub until then."
+        )
+
+
+_TRACERS = {
+    _FsplStubTracer.name: _FsplStubTracer,
+    _SionnaRtTracer.name: _SionnaRtTracer,
+}
+
+
+def select_tracer(name: Optional[str] = None):
+    """Return an ``RFTracer`` instance for ``name`` (or ``$SIONNA_RT_BACKEND``).
+
+    Raises ``ValueError`` on an unknown backend so a typo in env
+    config fails at boot rather than after a job has already been
+    dequeued.
+    """
+    if name is None:
+        name = os.getenv("SIONNA_RT_BACKEND", "fspl_stub")
+    cls = _TRACERS.get(name)
+    if cls is None:
+        raise ValueError(
+            f"unknown tracer backend: {name!r}. "
+            f"Known: {sorted(_TRACERS)}"
+        )
+    return cls()
+
+
 # ── Raster computation ───────────────────────────────────────────
 
 def compute_raster_loss(scene_dir: str, job: Job) -> "Any":
-    """Run the GPU trace and return a ``(rows, cols)`` ndarray of dB loss.
+    """Run the per-tile RF trace and return a ``(rows, cols)`` ndarray of dB loss.
 
-    **Stub** — until tijolos 6+ wire Mitsuba/Sionna in. Returns a
-    deterministic FSPL-shaped array centred on the AOI so downstream
-    plumbing can be exercised end-to-end. Real GPU work replaces
-    this function body without changing its signature.
+    Backend is selected by :func:`select_tracer` (env
+    ``$SIONNA_RT_BACKEND``, default ``fspl_stub``). The signature is
+    stable across backends: T8 swaps ``sionna_rt``'s body in without
+    touching this call site or its callers.
     """
-    import math
-    import numpy as np  # type: ignore[import-not-found]
-
-    rows, cols = job.rows, job.cols
-    # Pixel centre lat/lon grid
-    lats = np.linspace(job.bbox_north, job.bbox_south, rows)
-    lons = np.linspace(job.bbox_west, job.bbox_east, cols)
-    LAT, LON = np.meshgrid(lats, lons, indexing="ij")
-    # Equirectangular distance to TX (m)
-    R = 6_371_008.8
-    lat0 = math.radians(job.tx_lat)
-    dlat = np.radians(LAT - job.tx_lat)
-    dlon = np.radians(LON - job.tx_lon) * math.cos(lat0)
-    d_m = np.hypot(dlat, dlon) * R
-    d_m = np.maximum(d_m, 1.0)  # avoid log(0) at TX pixel
-    # FSPL: 32.45 + 20·log10(f_MHz) + 20·log10(d_km)
-    f_mhz = job.frequency_hz / 1e6
-    fspl_db = 32.45 + 20.0 * np.log10(f_mhz) + 20.0 * np.log10(d_m / 1000.0)
-    return fspl_db.astype("float32")
+    tracer = select_tracer()
+    return tracer.trace(scene_dir, job)
 
 
 def write_raster_npz(arr, job: Job, path: str) -> None:

@@ -198,6 +198,86 @@ def test_compute_raster_loss_shape_and_finite(tmp_path):
     assert np.isfinite(arr).all()
 
 
+# ── Tracer-backend registry (T7) ─────────────────────────────────
+
+def test_select_tracer_default_is_fspl_stub(monkeypatch):
+    monkeypatch.delenv("SIONNA_RT_BACKEND", raising=False)
+    t = worker.select_tracer()
+    assert t.name == "fspl_stub"
+    assert isinstance(t, worker._FsplStubTracer)
+
+
+def test_select_tracer_env_var(monkeypatch):
+    monkeypatch.setenv("SIONNA_RT_BACKEND", "fspl_stub")
+    assert worker.select_tracer().name == "fspl_stub"
+
+
+def test_select_tracer_unknown_raises(monkeypatch):
+    monkeypatch.setenv("SIONNA_RT_BACKEND", "ray-with-pixie-dust")
+    with pytest.raises(ValueError, match="unknown tracer backend"):
+        worker.select_tracer()
+
+
+def test_select_tracer_explicit_arg_overrides_env(monkeypatch):
+    monkeypatch.setenv("SIONNA_RT_BACKEND", "totally-bogus")
+    # Explicit name wins; env is ignored.
+    assert worker.select_tracer("fspl_stub").name == "fspl_stub"
+
+
+def test_compute_raster_loss_routes_through_registry(monkeypatch, tmp_path):
+    """compute_raster_loss must delegate to the selected backend."""
+    np = pytest.importorskip("numpy")
+    job = worker.parse_job_message(json.dumps(_good_job_dict()))
+
+    sentinel = np.full((job.rows, job.cols), -7.0, dtype="float32")
+
+    class _FakeTracer:
+        name = "fake"
+
+        def trace(self, scene_dir, job):
+            return sentinel
+
+    monkeypatch.setattr(worker, "select_tracer", lambda: _FakeTracer())
+    arr = worker.compute_raster_loss(str(tmp_path), job)
+    assert arr is sentinel
+
+
+def test_fspl_parity_via_class(tmp_path):
+    """Class API must match the function's output bit-for-bit (no regression)."""
+    np = pytest.importorskip("numpy")
+    job = worker.parse_job_message(json.dumps(_good_job_dict()))
+    arr_func = worker.compute_raster_loss(str(tmp_path), job)
+    arr_class = worker._FsplStubTracer().trace(str(tmp_path), job)
+    assert np.array_equal(arr_func, arr_class)
+
+
+def test_sionna_rt_tracer_raises_when_deps_missing():
+    """When mitsuba / sionna_rt aren't installed, construction fails loud."""
+    # CI doesn't have the GPU stack; this is the expected path.
+    try:
+        import mitsuba  # type: ignore[import-not-found]  # noqa: F401
+        import sionna_rt  # type: ignore[import-not-found]  # noqa: F401
+    except ImportError:
+        with pytest.raises(RuntimeError, match="not installed"):
+            worker._SionnaRtTracer()
+        return
+    pytest.skip("mitsuba+sionna_rt installed; cannot test missing-deps path")
+
+
+def test_sionna_rt_select_via_env_propagates_runtime_error(monkeypatch):
+    """select_tracer('sionna_rt') must surface the missing-deps RuntimeError
+    rather than swallowing it — ops needs to see the failure at boot."""
+    try:
+        import mitsuba  # type: ignore[import-not-found]  # noqa: F401
+        import sionna_rt  # type: ignore[import-not-found]  # noqa: F401
+    except ImportError:
+        monkeypatch.setenv("SIONNA_RT_BACKEND", "sionna_rt")
+        with pytest.raises(RuntimeError, match="not installed"):
+            worker.select_tracer()
+        return
+    pytest.skip("mitsuba+sionna_rt installed; cannot test missing-deps path")
+
+
 def test_write_raster_npz_roundtrip(tmp_path):
     np = pytest.importorskip("numpy")
     job = worker.parse_job_message(json.dumps(_good_job_dict()))
