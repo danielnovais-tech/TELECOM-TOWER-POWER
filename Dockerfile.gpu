@@ -104,6 +104,15 @@ COPY itu_p1812.py                 /opt/rt/itu_p1812.py
 COPY srtm_elevation.py            /opt/rt/srtm_elevation.py
 COPY mapbiomas_clutter.py         /opt/rt/mapbiomas_clutter.py
 COPY models.py                    /opt/rt/models.py
+# T19 — single-shot async interference worker (engine='sionna-rt').
+# Dispatched by the API via AWS Batch submit_job containerOverrides:
+#   python -m batch_gpu_interference_worker <job_id> <tier>
+COPY batch_gpu_interference_worker.py /opt/rt/batch_gpu_interference_worker.py
+COPY interference_engine.py           /opt/rt/interference_engine.py
+COPY sqs_lambda_worker.py             /opt/rt/sqs_lambda_worker.py
+COPY job_store.py                     /opt/rt/job_store.py
+COPY audit_log.py                     /opt/rt/audit_log.py
+COPY s3_storage.py                    /opt/rt/s3_storage.py
 
 RUN chmod +x /opt/rt/entrypoint.sh
 
