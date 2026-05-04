@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "source": "ITU-R P.2040-3 (2023-09), Annex 1, Table 3",
+  "table_version": "P.2040-3 (2023-09)",
+  "permittivity_model": {
+    "epsilon_r_real": "epsilon_prime = a * (f_GHz ** b)",
+    "conductivity": "sigma = c * (f_GHz ** d)  (S/m)",
+    "epsilon_r_imag": "epsilon_double_prime = sigma / (2 * pi * f_Hz * epsilon_0)",
+    "epsilon_0": 8.8541878128e-12
+  },
+  "frequencies_hz_default": [28000000000.0, 39000000000.0, 60000000000.0],
+  "materials": {
+    "concrete": {
+      "label": "Concrete",
+      "p2040_row": "Concrete",
+      "a": 5.31,
+      "b": 0.0,
+      "c": 0.0326,
+      "d": 0.8095,
+      "valid_range_ghz": [1.0, 100.0],
+      "source_notes": "P.2040-3 Annex 1 Table 3 row 'Concrete'. Used for building shells (load-bearing walls, slabs)."
+    },
+    "glass": {
+      "label": "Glass",
+      "p2040_row": "Glass",
+      "a": 6.27,
+      "b": 0.0,
+      "c": 0.0043,
+      "d": 1.1925,
+      "valid_range_ghz": [0.1, 100.0],
+      "source_notes": "P.2040-3 Annex 1 Table 3 row 'Glass'. Used for window panes (single-pane). Modern IRR / low-emissivity glass has 10-30 dB extra penetration loss not captured by this row \u2014 tag separately when MapBiomas/OSM identifies modern facades."
+    },
+    "metal": {
+      "label": "Metal",
+      "p2040_row": "Metal",
+      "a": 1.0,
+      "b": 0.0,
+      "c": 1.0e7,
+      "d": 0.0,
+      "valid_range_ghz": [1.0, 100.0],
+      "source_notes": "P.2040-3 Annex 1 Table 3 row 'Metal' \u2014 modelled as a near-PEC (sigma=1e7 S/m, epsilon_r=1). At 28-60 GHz the skin depth is < 1 micron so reflection is effectively total; we keep finite sigma to avoid singularities in the Fresnel equations inside Mitsuba."
+    },
+    "vegetation": {
+      "label": "Vegetation (foliage)",
+      "p2040_row": null,
+      "a": 1.5,
+      "b": 0.0,
+      "c": 0.05,
+      "d": 1.0,
+      "valid_range_ghz": [1.0, 100.0],
+      "source_notes": "NOT in P.2040-3 Annex 1 Table 3. P.2040-3 defers to P.833 for vegetation attenuation (RET model). The values here are an engineering approximation tuned so Mitsuba scenes with tagged tree canopies produce ~ 0.4-0.6 dB/m specific attenuation at 28 GHz, matching P.833 RET in-leaf for typical urban deciduous canopies. Replace with a per-canopy fit when MapBiomas land-cover classes are wired up (Tijolo 5)."
+    }
+  }
+}

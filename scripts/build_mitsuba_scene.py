@@ -207,6 +207,8 @@ def _emit_manifest(
         manifest["buildings_summary"] = extras["buildings_summary"]
     if extras.get("terrain_summary") is not None:
         manifest["terrain_summary"] = extras["terrain_summary"]
+    if extras.get("materials_p2040") is not None:
+        manifest["materials_p2040"] = extras["materials_p2040"]
     if out_dir.startswith("s3://"):
         # Defensive: don't silently no-op an S3 push from the scaffold.
         # The intended uploader is the AWS Batch container, not a dev
@@ -310,7 +312,11 @@ def _run_data_phase(args, frequencies_hz: Tuple[float, ...]) -> int:
         return 2
 
     # Lazy imports — keep the manifest-only path free of numpy/rasterio.
-    from scripts.sources import overpass_buildings, srtm_terrain
+    from scripts.sources import (
+        overpass_buildings,
+        p2040_materials,
+        srtm_terrain,
+    )
 
     bbox = args.bbox
     bbox_tuple = (bbox.south, bbox.west, bbox.north, bbox.east)
@@ -359,6 +365,20 @@ def _run_data_phase(args, frequencies_hz: Tuple[float, ...]) -> int:
     )
     terrain_summary = srtm_terrain.summarise(grid)
 
+    # 3) ITU-R P.2040-3 material library — hash + per-material evaluations
+    # at the requested frequencies. Recording the SHA-256 lets the GPU
+    # worker refuse to trace a scene built against a stale material set.
+    materials_lib = p2040_materials.load_library()
+    materials_eval = p2040_materials.evaluate_all(
+        materials_lib, frequencies_hz,
+    )
+    materials_block = {
+        "library_path": "data/materials_p2040.json",
+        "library_sha256": p2040_materials.library_sha256(),
+        "table_version": materials_lib["table_version"],
+        "materials": materials_eval,
+    }
+
     extras: Dict[str, Any] = {
         "buildings_count": buildings_summary["count"],
         "buildings_geojson_sha256": _sha256_file(buildings_path),
@@ -367,6 +387,7 @@ def _run_data_phase(args, frequencies_hz: Tuple[float, ...]) -> int:
         "terrain_tif_sha256": _sha256_file(terrain_path),
         "terrain_summary": terrain_summary,
         "clutter_source": None,
+        "materials_p2040": materials_block,
     }
     _emit_manifest(
         aoi_name=args.aoi_name,

@@ -269,6 +269,15 @@ def test_main_fetch_data_writes_full_bundle(tmp_path):
     assert manifest["scene_xml_sha256"] is None
     assert "buildings_summary" in manifest
     assert "terrain_summary" in manifest
+    # Tijolo 3: P.2040 material library hash + per-frequency evaluations.
+    mp = manifest.get("materials_p2040")
+    assert mp is not None
+    assert len(mp["library_sha256"]) == 64
+    assert "P.2040-3" in mp["table_version"]
+    assert set(mp["materials"]) >= {"concrete", "glass", "metal", "vegetation"}
+    # One evaluation per requested frequency (defaults to 28/39/60 GHz \u2014 3).
+    for entry in mp["materials"].values():
+        assert len(entry["evaluations"]) == 3
 
 
 # ---------------- BoundingBox (regression) ----------------

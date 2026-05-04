@@ -321,8 +321,19 @@ Why ship the scaffold now (May 2026)?
   Remaining work: MapBiomas/clutter classes → ITU-R P.2040 material
   tags; building footprints → triangulated meshes; Mitsuba `.xml`
   emission with `implementation_status='complete'`.
-- [ ] **mmWave material library** — concrete/glass/metal/vegetation
-  permittivity at 28 / 39 / 60 GHz from ITU-R P.2040-3 Annex 1.
+- [x] **mmWave material library** — `data/materials_p2040.json`
+  landed 2026-05-04 (Tijolo 3). Four materials parameterised by the
+  P.2040-3 Annex 1 four-coefficient model (`a, b, c, d`):
+  concrete (a=5.31, b=0, c=0.0326, d=0.8095), glass (a=6.27, b=0,
+  c=0.0043, d=1.1925), metal (near-PEC: σ=10⁷ S/m, ε_r=1) and
+  vegetation (engineering extension — P.2040 defers to P.833 for
+  foliage; values tuned so tagged canopies produce ~0.4–0.6 dB/m at
+  28 GHz). Loader/evaluator at `scripts/sources/p2040_materials.py`
+  exposes `evaluate(material, f_hz)` → `{epsilon_r, sigma, epsilon_r_imag,
+  loss_tangent, in_valid_range}`. The `--fetch-data` build now
+  embeds `materials_p2040.library_sha256` plus per-material
+  evaluations at the requested frequencies into the manifest, so
+  the GPU worker can refuse a scene built against a stale table.
 - [~] **Per-pixel loss raster API** — `POST /coverage/engines/sionna-rt/raster`
   → SQS job → S3 output → presigned-URL response. Single-link
   `predict_basic_loss` is implemented as a 1×1 raster crop. Worker
