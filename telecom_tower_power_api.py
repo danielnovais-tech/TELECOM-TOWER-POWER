@@ -1305,6 +1305,59 @@ def _queue_for_tier(tier_value: str) -> str:
         return SQS_QUEUE_URL_PRIORITY
     return SQS_QUEUE_URL
 
+
+# ── AWS Batch (T19) ─────────────────────────────────────────────
+# GPU-backed interference jobs (engine=sionna-rt) go to AWS Batch
+# instead of the SQS Lambda — the ray-tracing scene + mitsuba GPU
+# stack don't fit the Lambda runtime envelope.
+_batch_client = None
+BATCH_JOB_QUEUE_GPU = os.getenv("BATCH_JOB_QUEUE_GPU", "")
+BATCH_JOB_DEFINITION_GPU = os.getenv("BATCH_JOB_DEFINITION_GPU", "")
+
+
+def _get_batch():
+    global _batch_client
+    if _batch_client is None:
+        import boto3
+        _batch_client = boto3.client("batch")
+    return _batch_client
+
+
+def _submit_gpu_batch_job(job_id: str, tier: str) -> str:
+    """Submit one async interference job to the GPU AWS Batch queue.
+
+    Returns the AWS Batch ``jobId``. Raises HTTPException(503) if the
+    deployment hasn't provisioned the queue + job definition yet —
+    we fail closed rather than silently downgrading to FSPL because
+    the caller explicitly asked for sionna-rt.
+    """
+    if not BATCH_JOB_QUEUE_GPU or not BATCH_JOB_DEFINITION_GPU:
+        raise HTTPException(
+            status_code=503,
+            detail="GPU Batch backend not provisioned: set "
+                   "BATCH_JOB_QUEUE_GPU and BATCH_JOB_DEFINITION_GPU "
+                   "env vars on the API task. engine='sionna-rt' "
+                   "cannot run without it.",
+        )
+    # Batch job names: alphanumerics + hyphens, max 128 chars.
+    safe_name = f"interference-rt-{job_id}".replace("_", "-")[:128]
+    resp = _get_batch().submit_job(
+        jobName=safe_name,
+        jobQueue=BATCH_JOB_QUEUE_GPU,
+        jobDefinition=BATCH_JOB_DEFINITION_GPU,
+        containerOverrides={
+            "command": [
+                "python", "-m", "batch_gpu_interference_worker",
+                job_id, tier or "",
+            ],
+            "environment": [
+                {"name": "JOB_ID", "value": job_id},
+                {"name": "JOB_TIER", "value": tier or ""},
+            ],
+        },
+    )
+    return str(resp.get("jobId", ""))
+
 # Pydantic models for API
 class TowerInput(BaseModel):
     id: str
@@ -3069,25 +3122,31 @@ async def coverage_interference_async(
     request: Request,
     key_data: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ) -> _InterferenceJobAccepted:
-    """Submit an interference study to the SQS worker queue.
+    """Submit an interference study to the async worker pool.
 
     Returns immediately with a ``job_id``; poll
     ``GET /coverage/interference/jobs/{job_id}`` for the result. Use
     this when ``search_radius_km`` is large (50+ km, 200+ aggressors)
     or when the caller doesn't want to hold an HTTP connection open
-    for the full compute. The worker is FSPL-only — Sionna RT async
-    path requires the GPU Batch worker (T19+ roadmap).
+    for the full compute.
+
+    Engine routing:
+      * ``fspl`` / ``auto`` → SQS Lambda worker (CPU, sub-second
+        per aggressor).
+      * ``sionna-rt`` → AWS Batch GPU job (deterministic ray tracing
+        against the deployed scene). Requires
+        ``BATCH_JOB_QUEUE_GPU`` + ``BATCH_JOB_DEFINITION_GPU`` env
+        vars on the API task; 503 if absent.
     """
-    # Reject sionna-rt and the unwired engines up-front: the SQS Lambda
-    # worker is CPU-only. ``auto`` and ``fspl`` are accepted; everything
-    # else returns the same 501 the sync endpoint does.
+    # Resolve engine first; reject unwired engines (ITM, P.1812)
+    # the same way the sync endpoint does.
     engine_name = _interference_select_engine(body.engine)
-    if engine_name != "fspl":
+    if engine_name not in ("fspl", "sionna-rt"):
         raise HTTPException(
             status_code=501,
-            detail=f"async interference path supports only engine='fspl' / 'auto'; "
-                   f"got resolved engine={engine_name!r}. GPU-backed engines "
-                   "(sionna-rt) ship with the T19 Batch worker.",
+            detail=f"async interference path supports only "
+                   f"engine='fspl' / 'auto' / 'sionna-rt'; "
+                   f"got resolved engine={engine_name!r}.",
         )
 
     owner = _caller_owner(request, key_data)
@@ -3114,16 +3173,26 @@ async def coverage_interference_async(
     )
 
     tier_value = key_data["tier"].value
-    queue_url = _queue_for_tier(tier_value)
-    if queue_url:
-        _get_sqs().send_message(
-            QueueUrl=queue_url,
-            MessageBody=json.dumps({
-                "job_id": job_id,
-                "job_type": "interference",
-                "tier": tier_value,
-            }),
-        )
+    backend = "sqs"
+    batch_job_id = ""
+    queue_url = ""
+    if engine_name == "sionna-rt":
+        # GPU AWS Batch job (T19). The container reads the row from
+        # the same DB and uploads to the same S3 prefix the SQS
+        # Lambda would, so the result-fetch endpoint is engine-agnostic.
+        batch_job_id = _submit_gpu_batch_job(job_id, tier_value)
+        backend = "batch-gpu"
+    else:
+        queue_url = _queue_for_tier(tier_value)
+        if queue_url:
+            _get_sqs().send_message(
+                QueueUrl=queue_url,
+                MessageBody=json.dumps({
+                    "job_id": job_id,
+                    "job_type": "interference",
+                    "tier": tier_value,
+                }),
+            )
 
     await _audit.log(
         api_key,
@@ -3136,6 +3205,9 @@ async def coverage_interference_async(
         metadata={
             "n_candidates": len(candidates),
             "search_radius_km": body.search_radius_km,
+            "engine": engine_name,
+            "backend": backend,
+            "batch_job_id": batch_job_id,
             "queue": "priority" if queue_url == SQS_QUEUE_URL_PRIORITY and queue_url else (
                 "default" if queue_url else "db-only"
             ),
