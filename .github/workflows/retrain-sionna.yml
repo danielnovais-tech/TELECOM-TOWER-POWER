@@ -243,30 +243,21 @@ jobs:
             --region "$AWS_REGION" \
             --query 'services[0].taskDefinition' --output text)
           if [[ "$FV" == "v2" ]]; then
-            # Register a new task-def revision with SIONNA_FEATURES_VERSION=v2
-            # by patching the current revision's environment override.
+            # Register a new task-def revision with SIONNA_FEATURES_VERSION=v2.
             CURR_DEF=$(aws ecs describe-task-definition \
               --task-definition "$TASK_DEF_ARN" \
               --region "$AWS_REGION" --query 'taskDefinition' --output json)
-            NEW_DEF=$(echo "$CURR_DEF" | python3 - <<'PYEOF'
-          import json, sys
-          td = json.load(sys.stdin)
-          for cd in td["containerDefinitions"]:
-              env = cd.get("environment", [])
-              env = [e for e in env if e["name"] != "SIONNA_FEATURES_VERSION"]
-              env.append({"name": "SIONNA_FEATURES_VERSION", "value": "v2"})
-              cd["environment"] = env
-          # Strip read-only fields before re-register
-          for k in ("taskDefinitionArn","revision","status","requiresAttributes",
-                    "compatibilities","registeredAt","registeredBy"):
-              td.pop(k, None)
-          print(json.dumps(td))
-          PYEOF
-            )
-            NEW_ARN=$(echo "$NEW_DEF" | aws ecs register-task-definition \
-              --cli-input-json file:///dev/stdin \
+            _TD_IN=$(mktemp --suffix=.json)
+            _TD_OUT=$(mktemp --suffix=.json)
+            echo "$CURR_DEF" > "$_TD_IN"
+            python3 scripts/patch_ecs_taskdef_env.py \
+              --input "$_TD_IN" --output "$_TD_OUT" \
+              --set SIONNA_FEATURES_VERSION=v2
+            NEW_ARN=$(aws ecs register-task-definition \
+              --cli-input-json "file://$_TD_OUT" \
               --region "$AWS_REGION" \
               --query 'taskDefinition.taskDefinitionArn' --output text)
+            rm -f "$_TD_IN" "$_TD_OUT"
             echo "Registered v2 task def: $NEW_ARN"
             aws ecs update-service \
               --cluster telecom-tower-power \
