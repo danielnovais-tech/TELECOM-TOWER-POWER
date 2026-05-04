@@ -1,0 +1,49 @@
+{
+  "jobDefinitionName": "sionna-rt-validation-gate",
+  "type": "container",
+  "platformCapabilities": ["EC2"],
+  "containerProperties": {
+    "image": "ACCOUNT_ID.dkr.ecr.AWS_REGION.amazonaws.com/telecom-tower-power-rt:IMAGE_TAG",
+    "vcpus": 8,
+    "memory": 30720,
+    "jobRoleArn": "arn:aws:iam::ACCOUNT_ID:role/telecom-tower-power-rt-job-role",
+    "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/telecom-tower-power-rt-exec-role",
+    "resourceRequirements": [
+      { "type": "GPU", "value": "1" }
+    ],
+    "command": ["validate-gate"],
+    "environment": [
+      { "name": "AWS_DEFAULT_REGION", "value": "AWS_REGION" },
+      { "name": "AWS_REGION", "value": "AWS_REGION" },
+      { "name": "SIONNA_RT_DISABLED", "value": "0" },
+      { "name": "SIONNA_RT_BACKEND", "value": "sionna_rt" },
+      { "name": "SIONNA_RT_MAX_DEPTH", "value": "5" },
+      { "name": "SIONNA_RT_SAMPLES", "value": "1000000" },
+      { "name": "SUB6_RMSE_DB_MAX", "value": "6.0" },
+      { "name": "MMWAVE_DELTA_DB_MIN", "value": "10.0" }
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/aws/batch/sionna-rt-worker",
+        "awslogs-region": "AWS_REGION",
+        "awslogs-stream-prefix": "validation"
+      }
+    },
+    "linuxParameters": {
+      "sharedMemorySize": 2048
+    }
+  },
+  "retryStrategy": {
+    "attempts": 1
+  },
+  "timeout": {
+    "attemptDurationSeconds": 3600
+  },
+  "propagateTags": true,
+  "tags": {
+    "project": "telecom-tower-power",
+    "component": "sionna-rt-validation-gate",
+    "managed-by": "submit_validation_gate.sh"
+  }
+}

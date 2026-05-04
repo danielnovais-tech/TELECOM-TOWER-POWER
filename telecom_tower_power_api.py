@@ -1747,9 +1747,22 @@ class CoveragePredictRequest(BaseModel):
     # predictors required.
     model: Literal["auto", "ml", "itu", "hybrid"] = "auto"
 
+    # Engine selector. "auto" (default) runs the synchronous ML/physics
+    # path. "sionna_rt" enqueues an asynchronous GPU ray-tracing job on
+    # AWS Batch and returns 202 + job_id; the client polls the
+    # ``poll_url`` for completion. Requires bbox (grid mode) and
+    # ``scene_s3_uri`` pointing at a pre-built Mitsuba scene bundle.
+    engine: Literal["auto", "sionna_rt"] = "auto"
+    scene_s3_uri: Optional[str] = Field(
+        default=None,
+        description="s3:// URI of the Mitsuba scene bundle. Required "
+                    "when engine='sionna_rt'.",
+    )
+
 
 @app.post("/coverage/predict")
 async def coverage_predict(
+    request: Request,
     body: CoveragePredictRequest,
     _key: Dict = Depends(require_tier(Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
@@ -1794,6 +1807,46 @@ async def coverage_predict(
         tx_h = body.tx_height_m
         tx_power = body.tx_power_dbm
         f_hz = body.band.to_hz()
+
+    # ── Sionna RT (async GPU) ──────────────────────────────────────
+    # Delegates to the existing async raster pipeline. We translate
+    # the simpler ``CoveragePredictRequest`` shape into the canonical
+    # ``SionnaRTRasterRequest`` and call the same handler so tier
+    # gating, cell caps, SQS, S3 polling and audit logging stay in
+    # exactly one place.
+    if body.engine == "sionna_rt":
+        if body.bbox is None:
+            raise HTTPException(
+                status_code=422,
+                detail="engine='sionna_rt' requires bbox (grid mode); "
+                       "single-point RT is not supported",
+            )
+        if not body.scene_s3_uri:
+            raise HTTPException(
+                status_code=422,
+                detail="engine='sionna_rt' requires scene_s3_uri "
+                       "(prebuilt Mitsuba scene bundle on S3)",
+            )
+        # CoveragePredictRequest bbox order is [min_lat, min_lon, max_lat, max_lon].
+        # Sionna router uses [south, west, north, east] — same ordering.
+        from rf_engines_router import (
+            SionnaRTRasterRequest as _RtReq,
+            _RasterGridIn as _RtGrid,
+            _TxIn as _RtTx,
+            sionna_rt_raster_submit as _rt_submit,
+        )
+        rt_req = _RtReq(
+            scene_s3_uri=body.scene_s3_uri,
+            tx=_RtTx(lat=tx_lat, lon=tx_lon, height_m=tx_h, power_dbm=tx_power),
+            frequency_hz=f_hz,
+            raster_grid=_RtGrid(
+                rows=body.grid_size,
+                cols=body.grid_size,
+                bbox=list(body.bbox),
+            ),
+        )
+        accepted = await _rt_submit(rt_req, request)
+        return JSONResponse(status_code=202, content=accepted.model_dump())
 
     # ── Grid mode ──────────────────────────────────────────────────
     if body.bbox is not None:

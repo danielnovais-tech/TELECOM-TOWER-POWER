@@ -95,12 +95,17 @@ RUN pip install \
 # Keep the copy minimal — only what the GPU worker actually needs at
 # runtime. The full repo (frontend, API, etc.) does not belong here.
 COPY rf_engines/                  /opt/rt/rf_engines/
-COPY scripts/build_mitsuba_scene.py /opt/rt/scripts/build_mitsuba_scene.py
-COPY scripts/sionna_rt_worker.py    /opt/rt/scripts/sionna_rt_worker.py
+COPY scripts/build_mitsuba_scene.py        /opt/rt/scripts/build_mitsuba_scene.py
+COPY scripts/sionna_rt_worker.py           /opt/rt/scripts/sionna_rt_worker.py
+COPY scripts/sionna_rt_validation_gate.py  /opt/rt/scripts/sionna_rt_validation_gate.py
+COPY scripts/rt_entrypoint.sh              /opt/rt/entrypoint.sh
+COPY tests/data/sionna_rt_golden_links.json /opt/rt/data/sionna_rt_golden_links.json
 COPY itu_p1812.py                 /opt/rt/itu_p1812.py
 COPY srtm_elevation.py            /opt/rt/srtm_elevation.py
 COPY mapbiomas_clutter.py         /opt/rt/mapbiomas_clutter.py
 COPY models.py                    /opt/rt/models.py
+
+RUN chmod +x /opt/rt/entrypoint.sh
 
 ENV PYTHONPATH=/opt/rt \
     SIONNA_RT_DISABLED=0 \
@@ -108,7 +113,8 @@ ENV PYTHONPATH=/opt/rt \
     # this from the SQS message body or a presigned-URL download.
     SIONNA_RT_SCENE_PATH=/opt/rt/scenes/active.xml
 
-# AWS Batch sets the entrypoint via the Job Definition, but expose a
-# sane default for `docker run --gpus all <image>`.
-ENTRYPOINT ["python", "/opt/rt/scripts/sionna_rt_worker.py"]
+# AWS Batch sets the command via the Job Definition; the entrypoint
+# dispatches to either the SQS worker or the validation gate based on
+# the first positional arg ("poll" / "validate-gate" / "probe").
+ENTRYPOINT ["/opt/rt/entrypoint.sh"]
 CMD ["--poll"]
