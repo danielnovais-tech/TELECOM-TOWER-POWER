@@ -5251,11 +5251,12 @@ async def bedrock_chat(
     _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
     """
-    Send a prompt to an Amazon Bedrock base foundation model and return
-    the generated response.  Supports Titan, Claude, and Llama model families.
+    Send a prompt to the configured LLM backend (Amazon Bedrock or local
+    Ollama/Llama-3, selected via LLM_PROVIDER) and return the generated
+    response.
     Requires PRO or ENTERPRISE tier.
     """
-    from bedrock_service import invoke_model
+    from llm_provider import invoke_model
     try:
         result = invoke_model(
             prompt=body.prompt,
@@ -5274,8 +5275,8 @@ async def bedrock_chat(
 async def bedrock_models(
     _key: Dict = Depends(require_tier(Tier.STARTER, Tier.PRO, Tier.BUSINESS, Tier.ENTERPRISE, Tier.ULTRA)),
 ):
-    """List available Bedrock foundation models for the AI playground."""
-    from bedrock_service import list_available_models
+    """List available foundation models for the AI playground (active backend)."""
+    from llm_provider import list_available_models
     try:
         models = list_available_models()
         return {"models": models}
@@ -5303,7 +5304,7 @@ async def bedrock_compare_scenarios(
     and returns an engineering comparison with recommendations.
     Requires PRO or ENTERPRISE tier.
     """
-    from bedrock_service import compare_scenarios
+    from llm_provider import compare_scenarios
     try:
         result = compare_scenarios(
             scenarios=body.scenarios,
@@ -5338,7 +5339,7 @@ async def bedrock_batch_analyze(
     remediation recommendations.
     Requires PRO or ENTERPRISE tier.
     """
-    from bedrock_service import analyze_batch
+    from llm_provider import analyze_batch
     try:
         result = analyze_batch(
             batch_results=body.batch_results,
@@ -5371,7 +5372,7 @@ async def bedrock_suggest_height(
     Fresnel zone clearance.
     Requires PRO or ENTERPRISE tier.
     """
-    from bedrock_service import suggest_antenna_height
+    from llm_provider import suggest_antenna_height
     try:
         result = suggest_antenna_height(
             analysis=body.analysis,
