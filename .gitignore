@@ -10,6 +10,8 @@ debug_*.png
 test_*.png
 test_*.pdf
 report*.pdf
+# but keep curated legal documents
+!docs/legal/*.pdf
 
 # Temp request/response JSON dumps
 body*.json
