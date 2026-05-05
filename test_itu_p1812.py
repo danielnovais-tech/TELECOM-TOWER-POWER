@@ -39,7 +39,12 @@ def _install_fake_p1812(*, returned_lb: float = 130.5,
     sys.modules["Py1812.P1812"] = sub
 
 
-def test_is_available_false_when_package_absent():
+def test_is_available_false_when_package_absent(monkeypatch):
+    # Force the import to fail even when Py1812 is installed in the env
+    # (CI runners may have it preinstalled). Setting sys.modules[name]=None
+    # makes ``import Py1812`` raise ImportError per PEP 328.
+    monkeypatch.setitem(sys.modules, "Py1812", None)
+    itu_p1812._reset_for_tests()
     assert itu_p1812.is_available() is False
 
 

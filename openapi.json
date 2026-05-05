@@ -424,7 +424,7 @@
     "/coverage/predict": {
       "post": {
         "summary": "Coverage Predict",
-        "description": "ML-based signal coverage prediction.\n\nUses a terrain-aware regression model trained on SRTM elevation\nfeatures. Routes to a SageMaker endpoint when\n``SAGEMAKER_COVERAGE_ENDPOINT`` is configured, otherwise serves the\nlocally-trained model, with a deterministic physics fallback when\nno model artefact is available.\n\nModes:\n- **point** \u2014 provide ``rx_lat``/``rx_lon`` for a single prediction.\n- **grid**  \u2014 provide ``bbox`` and ``grid_size`` for a coverage map.\n\nRestricted to Pro / Business / Enterprise tiers.",
+        "description": "ML-based signal coverage prediction.\n\nUses a terrain-aware regression model trained on SRTM elevation\nfeatures. Routes to a SageMaker endpoint when\n``SAGEMAKER_COVERAGE_ENDPOINT`` is configured, otherwise serves the\nlocally-trained model, with a deterministic physics fallback when\nno model artefact is available.\n\nModes:\n- **point** \u2014 provide ``rx_lat``/``rx_lon`` for a single prediction.\n- **grid**  \u2014 provide ``bbox`` and ``grid_size`` for a coverage map.\n- **ray-tracing** \u2014 set ``engine='sionna_rt'`` (or ``'sionna-rt'``)\n  with ``bbox`` and ``scene_s3_uri``; returns HTTP 202 + job_id.\n  ENTERPRISE / ULTRA tiers are promoted automatically when both\n  ``bbox`` and ``scene_s3_uri`` are supplied with ``engine='auto'``.\n\nRestricted to Pro / Business / Enterprise / Ultra tiers.",
         "operationId": "coverage_predict_coverage_predict_post",
         "requestBody": {
           "content": {
@@ -751,6 +751,188 @@
         }
       }
     },
+    "/coverage/interference": {
+      "post": {
+        "summary": "Coverage Interference",
+        "description": "Aggregate co-channel + adjacent-channel interference at a victim Rx.\n\nReturns the summed interference power, I/N, and (when\n``victim.victim_signal_dbm`` is provided) SINR, plus a top-N list\nof the strongest aggressors so the operator can sequence their\nre-tilt / re-frequency mitigation work.\n\nPro / Business / Enterprise / Ultra. Free / Starter excluded \u2014\nthe DB radius scan is meaningfully more expensive than a single\npoint predict and the answer materially affects operator capex\ndecisions.",
+        "operationId": "coverage_interference_coverage_interference_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InterferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterferenceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/interference/async": {
+      "post": {
+        "summary": "Coverage Interference Async",
+        "description": "Submit an interference study to the async worker pool.\n\nReturns immediately with a ``job_id``; poll\n``GET /coverage/interference/jobs/{job_id}`` for the result. Use\nthis when ``search_radius_km`` is large (50+ km, 200+ aggressors)\nor when the caller doesn't want to hold an HTTP connection open\nfor the full compute.\n\nEngine routing:\n  * ``fspl`` / ``auto`` \u2192 SQS Lambda worker (CPU, sub-second\n    per aggressor).\n  * ``sionna-rt`` \u2192 AWS Batch GPU job (deterministic ray tracing\n    against the deployed scene). Requires\n    ``BATCH_JOB_QUEUE_GPU`` + ``BATCH_JOB_DEFINITION_GPU`` env\n    vars on the API task; 503 if absent.",
+        "operationId": "coverage_interference_async_coverage_interference_async_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InterferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/_InterferenceJobAccepted"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/interference/jobs/{job_id}": {
+      "get": {
+        "summary": "Coverage Interference Job Status",
+        "description": "Poll an async interference job. Inlines the result on completion.",
+        "operationId": "coverage_interference_job_status_coverage_interference_jobs__job_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Coverage Interference Job Status Coverage Interference Jobs  Job Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/coverage/interference/jobs/{job_id}/result": {
+      "get": {
+        "summary": "Coverage Interference Job Result",
+        "description": "Fetch the JSON result of a completed async interference job.",
+        "operationId": "coverage_interference_job_result_coverage_interference_jobs__job_id__result_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Coverage Interference Job Result Coverage Interference Jobs  Job Id  Result Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tenant/branding": {
       "get": {
         "summary": "Get Tenant Branding",
@@ -1039,6 +1221,144 @@
             }
           }
         }
+      }
+    },
+    "/admin/cache/invalidate-towers": {
+      "post": {
+        "summary": "Admin Cache Invalidate Towers",
+        "description": "Mark a list of tower IDs as stale in the shared hop_cache.\n\nThe next ``plan_repeater`` call that touches any of those towers\nwill bypass cache, recompute the hop costs from fresh terrain +\nmodel state, and clear the stale flags. Designed to close the\nloop with the satellite-change robot: when fresh imagery flags a\nsite, that site's RF predictions can no longer be trusted.\n\nIdempotent. Returns the number of markers actually written\n(always 0 when the API runs without a Redis backend, since the\nin-memory LRU is process-local and cannot coordinate workers).",
+        "operationId": "admin_cache_invalidate_towers_admin_cache_invalidate_towers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_CacheInvalidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Admin Cache Invalidate Towers Admin Cache Invalidate Towers Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/internal/upload": {
+      "post": {
+        "summary": "Internal Upload",
+        "description": "Stage a caller-supplied blob in object storage. Tier-1 (admin) only.\n\nStreams the upload while computing SHA-256, enforces size + content-type\nallowlists, and writes the object under ``INTERNAL_UPLOAD_PREFIX`` with\na date-partitioned, UUID-prefixed key. Filename is sanitised to a\nconservative allowlist after basename stripping to defeat path\ntraversal. Records an audit row whether the upload succeeds or fails.\nReturns a short-lived presigned download URL when S3 is configured.",
+        "operationId": "internal_upload_api_internal_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_internal_upload_api_internal_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Internal Upload Api Internal Upload Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/api/internal/anatel/validate-filing": {
+      "post": {
+        "summary": "Anatel Validate Filing",
+        "description": "Validate a batch of ANATEL ERB filings and return a signed certificate.\n\nTier-1 (admin) only. Same IP allowlist as the internal upload endpoint.\nThe response embeds an HMAC-SHA256 certificate over the canonical JSON\nof ``{validated_at, summary, results}`` so the operator can attach it\nto a regulatory submission and prove what was validated.",
+        "operationId": "anatel_validate_filing_api_internal_anatel_validate_filing_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_AnatelValidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Anatel Validate Filing Api Internal Anatel Validate Filing Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
       }
     },
     "/plan_repeater": {
@@ -2022,7 +2342,7 @@
     "/bedrock/chat": {
       "post": {
         "summary": "Bedrock Chat",
-        "description": "Send a prompt to an Amazon Bedrock base foundation model and return\nthe generated response.  Supports Titan, Claude, and Llama model families.\nRequires PRO or ENTERPRISE tier.",
+        "description": "Send a prompt to the configured LLM backend (Amazon Bedrock or local\nOllama/Llama-3, selected via LLM_PROVIDER) and return the generated\nresponse.\nRequires PRO or ENTERPRISE tier.",
         "operationId": "bedrock_chat_bedrock_chat_post",
         "requestBody": {
           "content": {
@@ -2064,7 +2384,7 @@
     "/bedrock/models": {
       "get": {
         "summary": "Bedrock Models",
-        "description": "List available Bedrock foundation models for the AI playground.",
+        "description": "List available foundation models for the AI playground (active backend).",
         "operationId": "bedrock_models_bedrock_models_get",
         "responses": {
           "200": {
@@ -2207,6 +2527,225 @@
             "APIKeyHeader": []
           }
         ]
+      }
+    },
+    "/coverage/engines": {
+      "get": {
+        "tags": [
+          "coverage-engines"
+        ],
+        "summary": "List Registered Engines",
+        "operationId": "list_registered_engines_coverage_engines_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EngineInfo"
+                  },
+                  "type": "array",
+                  "title": "Response List Registered Engines Coverage Engines Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/engines/predict": {
+      "post": {
+        "tags": [
+          "coverage-engines"
+        ],
+        "summary": "Predict One",
+        "operationId": "predict_one_coverage_engines_predict_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PredictRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/engines/compare": {
+      "post": {
+        "tags": [
+          "coverage-engines"
+        ],
+        "summary": "Compare Engines",
+        "operationId": "compare_engines_coverage_engines_compare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Compare Engines Coverage Engines Compare Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/engines/sionna-rt/raster": {
+      "post": {
+        "tags": [
+          "coverage-engines"
+        ],
+        "summary": "Sionna Rt Raster Submit",
+        "description": "Enqueue a per-pixel loss-raster job for the Sionna RT GPU worker.\n\nReturns ``202 Accepted`` with a ``job_id`` and ``poll_url``. The\nraster lands at ``result_s3_uri`` once the worker is done; poll the\nstatus endpoint for a presigned URL.\n\nRestricted to Business / Enterprise / Ultra (RT is the GPU-priced\nengine). Cell-count caps are per-tier. Status code is intentionally\n``503`` (not ``500``) when ops haven't set ``$SIONNA_RT_QUEUE_URL``\n/ ``$SIONNA_RT_RESULTS_BUCKET`` \u2014 the feature is correctly\n*configured* off by default until the worker pool is provisioned.",
+        "operationId": "sionna_rt_raster_submit_coverage_engines_sionna_rt_raster_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SionnaRTRasterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SionnaRTRasterAccepted"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/coverage/engines/sionna-rt/raster/{job_id}": {
+      "get": {
+        "tags": [
+          "coverage-engines"
+        ],
+        "summary": "Sionna Rt Raster Status",
+        "description": "Return the current status of a Sionna RT raster job.\n\nAuthoritative state for ``done`` is the existence of the\n``result_s3_uri`` object on S3 \u2014 the API container never sees the\nworker directly. While the object is missing the job stays\n``queued``; once it appears we return a presigned download URL\nvalid for ``$SIONNA_RT_PRESIGN_TTL_S`` seconds (default 1 h).\n\nCross-tenant polls return ``404`` (OWASP A01 \u2014 never disclose\njob_id existence to non-owners).",
+        "operationId": "sionna_rt_raster_status_coverage_engines_sionna_rt_raster__job_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SionnaRTRasterStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -2588,6 +3127,21 @@
         ],
         "title": "Body_import_drive_test_csv_coverage_observations_drivetest_post"
       },
+      "Body_internal_upload_api_internal_upload_post": {
+        "properties": {
+          "upload": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Upload",
+            "description": "Arbitrary artefact to stage in object storage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "upload"
+        ],
+        "title": "Body_internal_upload_api_internal_upload_post"
+      },
       "CheckoutRequest": {
         "properties": {
           "email": {
@@ -2628,6 +3182,165 @@
           "tier"
         ],
         "title": "CheckoutRequest"
+      },
+      "CompareRequest": {
+        "properties": {
+          "f_hz": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "F Hz",
+            "description": "Carrier frequency (Hz)"
+          },
+          "d_km": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "D Km"
+          },
+          "h_m": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "H M"
+          },
+          "htg": {
+            "type": "number",
+            "title": "Htg",
+            "description": "Tx antenna height AGL (m)"
+          },
+          "hrg": {
+            "type": "number",
+            "title": "Hrg",
+            "description": "Rx antenna height AGL (m)"
+          },
+          "phi_t": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Phi T"
+          },
+          "lam_t": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lam T"
+          },
+          "phi_r": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Phi R"
+          },
+          "lam_r": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lam R"
+          },
+          "clutter_heights_m": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clutter Heights M"
+          },
+          "pol": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pol"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Zone"
+          },
+          "time_pct": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMaximum": 100.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Pct"
+          },
+          "loc_pct": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMaximum": 100.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loc Pct"
+          },
+          "engines": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engines",
+            "description": "Restrict comparison to these engines. Default: all available."
+          },
+          "reference": {
+            "type": "string",
+            "title": "Reference",
+            "default": "itu-p1812"
+          }
+        },
+        "type": "object",
+        "required": [
+          "f_hz",
+          "d_km",
+          "h_m",
+          "htg",
+          "hrg",
+          "phi_t",
+          "lam_t",
+          "phi_r",
+          "lam_r"
+        ],
+        "title": "CompareRequest"
       },
       "CoverageExportRequest": {
         "properties": {
@@ -2783,6 +3496,49 @@
             "type": "boolean",
             "title": "Explain",
             "default": false
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "ml",
+              "itu",
+              "hybrid"
+            ],
+            "title": "Model",
+            "default": "auto"
+          },
+          "engine": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "sionna_rt",
+              "sionna-rt"
+            ],
+            "title": "Engine",
+            "default": "auto"
+          },
+          "scene_s3_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scene S3 Uri",
+            "description": "s3:// URI of the Mitsuba scene bundle. Required when engine='sionna_rt' / 'sionna-rt'."
+          },
+          "report_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "pdf"
+            ],
+            "title": "Report Format",
+            "description": "Response format. 'pdf' returns an engineering report rendered with WeasyPrint.",
+            "default": "json"
           }
         },
         "type": "object",
@@ -2853,6 +3609,13 @@
           "rx_gain_dbi": {
             "type": "number",
             "title": "Rx Gain Dbi",
+            "default": 0.0
+          },
+          "cable_loss_db": {
+            "type": "number",
+            "maximum": 20.0,
+            "minimum": 0.0,
+            "title": "Cable Loss Db",
             "default": 0.0
           },
           "freq_hz": {
@@ -3071,11 +3834,72 @@
             "type": "boolean",
             "title": "Explain",
             "default": false
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "ml",
+              "itu",
+              "hybrid"
+            ],
+            "title": "Model",
+            "default": "auto"
+          },
+          "engine": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "sionna_rt",
+              "sionna-rt"
+            ],
+            "title": "Engine",
+            "default": "auto"
+          },
+          "scene_s3_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scene S3 Uri",
+            "description": "s3:// URI of the Mitsuba scene bundle. Required when engine='sionna_rt' / 'sionna-rt'."
+          },
+          "report_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "pdf"
+            ],
+            "title": "Report Format",
+            "description": "Response format. 'pdf' returns an engineering report rendered with WeasyPrint.",
+            "default": "json"
           }
         },
         "type": "object",
         "title": "CoveragePredictRequest",
         "description": "Request body for /coverage/predict.\n\nProvide either ``tower_id`` (existing tower) **or** the explicit\n``tx_lat`` / ``tx_lon`` / ``tx_height_m`` / ``band`` quartet.\nProvide either a single receiver (``rx_lat``/``rx_lon``) **or** a\nbounding box (``bbox``) to compute a coverage grid."
+      },
+      "EngineInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "available"
+        ],
+        "title": "EngineInfo"
       },
       "HTTPValidationError": {
         "properties": {
@@ -3089,6 +3913,210 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "InterferenceRequest": {
+        "properties": {
+          "victim": {
+            "$ref": "#/components/schemas/_InterferenceVictim"
+          },
+          "search_radius_km": {
+            "type": "number",
+            "maximum": 200.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Search Radius Km",
+            "default": 30.0
+          },
+          "top_n": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Top N",
+            "default": 10
+          },
+          "include_aci": {
+            "type": "boolean",
+            "title": "Include Aci",
+            "description": "Include adjacent-channel aggressors with mask attenuation. Set false for co-channel-only studies.",
+            "default": true
+          },
+          "engine": {
+            "type": "string",
+            "title": "Engine",
+            "description": "Path-loss engine: auto | fspl | itu-p1812 | itmlogic | sionna-rt",
+            "default": "auto"
+          },
+          "aggressor_tx_gain_dbi": {
+            "type": "number",
+            "maximum": 40.0,
+            "minimum": -10.0,
+            "title": "Aggressor Tx Gain Dbi",
+            "description": "Assumed Tx antenna gain when the tower record has none",
+            "default": 17.0
+          },
+          "aci_floor_db": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 120.0,
+                "minimum": 10.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aci Floor Db",
+            "description": "Override the far-out ACI mask floor (default 60 dB)"
+          },
+          "max_aggressors": {
+            "type": "integer",
+            "maximum": 2000.0,
+            "minimum": 10.0,
+            "title": "Max Aggressors",
+            "description": "Hard cap on candidate towers fetched from DB before in-radius filtering (latency vs completeness)",
+            "default": 200
+          },
+          "aggressor_plmn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aggressor Plmn",
+            "description": "PLMN glob filter for aggressors (e.g. '72411' or '724*')"
+          },
+          "report_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "pdf"
+            ],
+            "title": "Report Format",
+            "description": "Response format. 'pdf' returns an engineering report rendered with WeasyPrint.",
+            "default": "json"
+          }
+        },
+        "type": "object",
+        "required": [
+          "victim"
+        ],
+        "title": "InterferenceRequest",
+        "description": "Body for ``POST /coverage/interference``."
+      },
+      "InterferenceResponse": {
+        "properties": {
+          "victim": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Victim"
+          },
+          "engine": {
+            "type": "string",
+            "title": "Engine"
+          },
+          "n_candidates": {
+            "type": "integer",
+            "title": "N Candidates"
+          },
+          "n_in_radius": {
+            "type": "integer",
+            "title": "N In Radius"
+          },
+          "n_contributing": {
+            "type": "integer",
+            "title": "N Contributing"
+          },
+          "co_channel_count": {
+            "type": "integer",
+            "title": "Co Channel Count"
+          },
+          "adjacent_channel_count": {
+            "type": "integer",
+            "title": "Adjacent Channel Count"
+          },
+          "aggregate_i_dbm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aggregate I Dbm"
+          },
+          "noise_dbm": {
+            "type": "number",
+            "title": "Noise Dbm"
+          },
+          "i_over_n_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "I Over N Db"
+          },
+          "sinr_db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sinr Db"
+          },
+          "top_n_aggressors": {
+            "items": {
+              "$ref": "#/components/schemas/_AggressorOut"
+            },
+            "type": "array",
+            "title": "Top N Aggressors"
+          },
+          "n_filtered_by_plmn": {
+            "type": "integer",
+            "title": "N Filtered By Plmn",
+            "default": 0
+          },
+          "aggregate_by_operator_dbm": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Aggregate By Operator Dbm"
+          },
+          "aggregate_by_plmn_dbm": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Aggregate By Plmn Dbm"
+          }
+        },
+        "type": "object",
+        "required": [
+          "victim",
+          "engine",
+          "n_candidates",
+          "n_in_radius",
+          "n_contributing",
+          "co_channel_count",
+          "adjacent_channel_count",
+          "aggregate_i_dbm",
+          "noise_dbm",
+          "i_over_n_db",
+          "sinr_db",
+          "top_n_aggressors"
+        ],
+        "title": "InterferenceResponse"
       },
       "KeyLookupRequest": {
         "properties": {
@@ -3179,6 +4207,180 @@
         ],
         "title": "LinkAnalysisResponse"
       },
+      "PredictRequest": {
+        "properties": {
+          "f_hz": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "F Hz",
+            "description": "Carrier frequency (Hz)"
+          },
+          "d_km": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "D Km"
+          },
+          "h_m": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "minItems": 2,
+            "title": "H M"
+          },
+          "htg": {
+            "type": "number",
+            "title": "Htg",
+            "description": "Tx antenna height AGL (m)"
+          },
+          "hrg": {
+            "type": "number",
+            "title": "Hrg",
+            "description": "Rx antenna height AGL (m)"
+          },
+          "phi_t": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Phi T"
+          },
+          "lam_t": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lam T"
+          },
+          "phi_r": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Phi R"
+          },
+          "lam_r": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lam R"
+          },
+          "clutter_heights_m": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clutter Heights M"
+          },
+          "pol": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pol"
+          },
+          "zone": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Zone"
+          },
+          "time_pct": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMaximum": 100.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Pct"
+          },
+          "loc_pct": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMaximum": 100.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loc Pct"
+          },
+          "engine": {
+            "type": "string",
+            "title": "Engine",
+            "description": "Engine name (see GET /coverage/engines)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "f_hz",
+          "d_km",
+          "h_m",
+          "htg",
+          "hrg",
+          "phi_t",
+          "lam_t",
+          "phi_r",
+          "lam_r",
+          "engine"
+        ],
+        "title": "PredictRequest"
+      },
+      "PredictResponse": {
+        "properties": {
+          "engine": {
+            "type": "string",
+            "title": "Engine"
+          },
+          "basic_loss_db": {
+            "type": "number",
+            "title": "Basic Loss Db"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "extra": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extra"
+          }
+        },
+        "type": "object",
+        "required": [
+          "engine",
+          "basic_loss_db",
+          "confidence",
+          "extra"
+        ],
+        "title": "PredictResponse"
+      },
       "PrefetchRequest": {
         "properties": {
           "country": {
@@ -3254,6 +4456,144 @@
           "email"
         ],
         "title": "SignupRequest"
+      },
+      "SionnaRTRasterAccepted": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "poll_url": {
+            "type": "string",
+            "title": "Poll Url"
+          },
+          "result_s3_uri": {
+            "type": "string",
+            "title": "Result S3 Uri"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "poll_url",
+          "result_s3_uri"
+        ],
+        "title": "SionnaRTRasterAccepted"
+      },
+      "SionnaRTRasterRequest": {
+        "properties": {
+          "scene_s3_uri": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 8,
+            "title": "Scene S3 Uri",
+            "description": "s3:// URI of the scene-bundle directory"
+          },
+          "tx": {
+            "$ref": "#/components/schemas/_TxIn"
+          },
+          "frequency_hz": {
+            "type": "number",
+            "maximum": 300000000000.0,
+            "exclusiveMinimum": 1000000.0,
+            "title": "Frequency Hz"
+          },
+          "raster_grid": {
+            "$ref": "#/components/schemas/_RasterGridIn"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scene_s3_uri",
+          "tx",
+          "frequency_hz",
+          "raster_grid"
+        ],
+        "title": "SionnaRTRasterRequest",
+        "description": "Submission body for ``POST /coverage/engines/sionna-rt/raster``.\n\n``scene_s3_uri`` points at the directory produced by\n``scripts/build_mitsuba_scene.py --emit-scene`` (must contain a\n``manifest.json`` with ``implementation_status='complete'``)."
+      },
+      "SionnaRTRasterStatus": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "submitted_at": {
+            "type": "number",
+            "title": "Submitted At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "result_s3_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result S3 Uri"
+          },
+          "raster_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raster Url"
+          },
+          "raster_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raster Bytes"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "submitted_at"
+        ],
+        "title": "SionnaRTRasterStatus"
       },
       "SsoCallbackRequest": {
         "properties": {
@@ -3522,6 +4862,152 @@
         ],
         "title": "ValidationError"
       },
+      "_AggressorOut": {
+        "properties": {
+          "aggressor_id": {
+            "type": "string",
+            "title": "Aggressor Id"
+          },
+          "operator": {
+            "type": "string",
+            "title": "Operator"
+          },
+          "distance_km": {
+            "type": "number",
+            "title": "Distance Km"
+          },
+          "aggressor_freq_mhz": {
+            "type": "number",
+            "title": "Aggressor Freq Mhz"
+          },
+          "aggressor_bw_mhz": {
+            "type": "number",
+            "title": "Aggressor Bw Mhz"
+          },
+          "delta_f_mhz": {
+            "type": "number",
+            "title": "Delta F Mhz"
+          },
+          "eirp_dbm": {
+            "type": "number",
+            "title": "Eirp Dbm"
+          },
+          "path_loss_db": {
+            "type": "number",
+            "title": "Path Loss Db"
+          },
+          "aci_db": {
+            "type": "number",
+            "title": "Aci Db"
+          },
+          "rx_power_dbm": {
+            "type": "number",
+            "title": "Rx Power Dbm"
+          },
+          "plmn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plmn"
+          },
+          "mimo_gain_db": {
+            "type": "number",
+            "title": "Mimo Gain Db",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "aggressor_id",
+          "operator",
+          "distance_km",
+          "aggressor_freq_mhz",
+          "aggressor_bw_mhz",
+          "delta_f_mhz",
+          "eirp_dbm",
+          "path_loss_db",
+          "aci_db",
+          "rx_power_dbm"
+        ],
+        "title": "_AggressorOut"
+      },
+      "_AnatelValidateRequest": {
+        "properties": {
+          "filings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Filings",
+            "description": "List of ANATEL filing rows. Required fields per row: station_id, cnpj, operator, uf, municipio, lat, lon, height_m, power_dbm, freq_mhz."
+          },
+          "issuer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issuer",
+            "description": "Override the issuer string embedded in the certificate."
+          }
+        },
+        "type": "object",
+        "required": [
+          "filings"
+        ],
+        "title": "_AnatelValidateRequest"
+      },
+      "_CacheInvalidateRequest": {
+        "properties": {
+          "tower_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10000,
+            "minItems": 1,
+            "title": "Tower Ids",
+            "description": "Tower IDs whose hop_cache entries should be invalidated"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Reason",
+            "description": "Human-readable reason recorded in the audit log",
+            "default": "satellite-change"
+          },
+          "ttl_s": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 7776000.0,
+                "minimum": 60.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttl S",
+            "description": "Optional override for the stale-marker TTL (seconds)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tower_ids"
+        ],
+        "title": "_CacheInvalidateRequest",
+        "description": "Payload for POST /admin/cache/invalidate-towers."
+      },
       "_ImpersonateRequest": {
         "properties": {
           "totp": {
@@ -3546,6 +5032,199 @@
         ],
         "title": "_ImpersonateRequest",
         "description": "Step-up payload for POST /admin/impersonate/{api_key_prefix}."
+      },
+      "_InterferenceJobAccepted": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "n_candidates": {
+            "type": "integer",
+            "title": "N Candidates"
+          },
+          "poll_url": {
+            "type": "string",
+            "title": "Poll Url"
+          },
+          "result_url": {
+            "type": "string",
+            "title": "Result Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status",
+          "n_candidates",
+          "poll_url",
+          "result_url"
+        ],
+        "title": "_InterferenceJobAccepted"
+      },
+      "_InterferenceVictim": {
+        "properties": {
+          "lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon"
+          },
+          "freq_mhz": {
+            "type": "number",
+            "maximum": 300000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Freq Mhz"
+          },
+          "bw_mhz": {
+            "type": "number",
+            "maximum": 2000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Bw Mhz",
+            "default": 20.0
+          },
+          "rx_height_m": {
+            "type": "number",
+            "maximum": 500.0,
+            "minimum": 0.0,
+            "title": "Rx Height M",
+            "default": 10.0
+          },
+          "rx_gain_dbi": {
+            "type": "number",
+            "maximum": 40.0,
+            "minimum": -10.0,
+            "title": "Rx Gain Dbi",
+            "default": 12.0
+          },
+          "noise_figure_db": {
+            "type": "number",
+            "maximum": 20.0,
+            "minimum": 0.0,
+            "title": "Noise Figure Db",
+            "default": 5.0
+          },
+          "victim_signal_dbm": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 30.0,
+                "minimum": -160.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Victim Signal Dbm"
+          },
+          "plmn": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 6
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plmn",
+            "description": "Victim home PLMN, e.g. '72411' (Vivo)"
+          },
+          "rx_mimo": {
+            "type": "integer",
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Rx Mimo",
+            "description": "Receive-side antenna count (MIMO array size); 1=SISO",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "lat",
+          "lon",
+          "freq_mhz"
+        ],
+        "title": "_InterferenceVictim"
+      },
+      "_RasterGridIn": {
+        "properties": {
+          "rows": {
+            "type": "integer",
+            "maximum": 2000.0,
+            "minimum": 2.0,
+            "title": "Rows"
+          },
+          "cols": {
+            "type": "integer",
+            "maximum": 2000.0,
+            "minimum": 2.0,
+            "title": "Cols"
+          },
+          "bbox": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Bbox",
+            "description": "[south, west, north, east]"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "cols",
+          "bbox"
+        ],
+        "title": "_RasterGridIn"
+      },
+      "_TxIn": {
+        "properties": {
+          "lat": {
+            "type": "number",
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat"
+          },
+          "lon": {
+            "type": "number",
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon"
+          },
+          "height_m": {
+            "type": "number",
+            "maximum": 500.0,
+            "minimum": 0.0,
+            "title": "Height M"
+          },
+          "power_dbm": {
+            "type": "number",
+            "maximum": 80.0,
+            "minimum": 0.0,
+            "title": "Power Dbm",
+            "default": 43.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "lat",
+          "lon",
+          "height_m"
+        ],
+        "title": "_TxIn"
       }
     },
     "securitySchemes": {
