@@ -80,22 +80,21 @@ jobs:
           SUBNET_IDS: ${{ secrets.LAMBDA_SUBNET_IDS }}
         run: |
           : "${DATABASE_URL:?LAMBDA_DATABASE_URL secret must be set}"
-          PARAM_OVERRIDES="Stage=${STAGE}"
-          PARAM_OVERRIDES="${PARAM_OVERRIDES} DatabaseUrl=${DATABASE_URL}"
+          PARAMS=("Stage=${STAGE}" "DatabaseUrl=${DATABASE_URL}")
           if [ -n "${REDIS_URL:-}" ]; then
-            PARAM_OVERRIDES="${PARAM_OVERRIDES} RedisUrl=${REDIS_URL}"
+            PARAMS+=("RedisUrl=${REDIS_URL}")
           fi
           if [ -n "${VALID_API_KEYS:-}" ]; then
-            PARAM_OVERRIDES="${PARAM_OVERRIDES} ValidApiKeys=${VALID_API_KEYS}"
+            PARAMS+=("ValidApiKeys=${VALID_API_KEYS}")
           fi
           if [ -n "${RDS_PROXY_HOST:-}" ]; then
-            PARAM_OVERRIDES="${PARAM_OVERRIDES} RdsProxyHost=${RDS_PROXY_HOST}"
+            PARAMS+=("RdsProxyHost=${RDS_PROXY_HOST}")
           fi
           if [ -n "${LAMBDA_SG_ID:-}" ]; then
-            PARAM_OVERRIDES="${PARAM_OVERRIDES} LambdaSecurityGroupId=${LAMBDA_SG_ID}"
+            PARAMS+=("LambdaSecurityGroupId=${LAMBDA_SG_ID}")
           fi
           if [ -n "${SUBNET_IDS:-}" ]; then
-            PARAM_OVERRIDES="${PARAM_OVERRIDES} VpcSubnetIds=${SUBNET_IDS}"
+            PARAMS+=("VpcSubnetIds=${SUBNET_IDS}")
           fi
 
           sam deploy \
@@ -103,7 +102,7 @@ jobs:
             --region "${AWS_REGION}" \
             --resolve-s3 \
             --capabilities CAPABILITY_IAM \
-            --parameter-overrides ${PARAM_OVERRIDES} \
+            --parameter-overrides "${PARAMS[@]}" \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset
 
