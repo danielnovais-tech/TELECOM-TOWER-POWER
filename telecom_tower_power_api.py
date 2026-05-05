@@ -4154,6 +4154,35 @@ _INTERNAL_UPLOAD_ALLOWED_TYPES = {
 _INTERNAL_UPLOAD_PREFIX = os.getenv("INTERNAL_UPLOAD_PREFIX", "internal/uploads/")
 _SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# Comma-separated CIDR allowlist (IPv4 / IPv6). Empty disables the check
+# (useful for local dev / on-prem behind a private network). In SaaS prod
+# this MUST be set to the office / VPN ranges.
+_INTERNAL_UPLOAD_IP_ALLOWLIST = [
+    c.strip()
+    for c in os.getenv("INTERNAL_UPLOAD_IP_ALLOWLIST", "").split(",")
+    if c.strip()
+]
+_INTERNAL_UPLOAD_PRESIGN_TTL = int(os.getenv("INTERNAL_UPLOAD_PRESIGN_TTL", "900"))
+
+
+def _ip_in_allowlist(ip: Optional[str]) -> bool:
+    if not _INTERNAL_UPLOAD_IP_ALLOWLIST:
+        return True
+    if not ip:
+        return False
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for cidr in _INTERNAL_UPLOAD_IP_ALLOWLIST:
+        try:
+            if addr in ipaddress.ip_network(cidr, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
 
 def _sanitize_upload_filename(raw: str) -> str:
     """Reduce ``raw`` to a basename matching ``_SAFE_FILENAME_RE`` or raise."""
@@ -4183,7 +4212,22 @@ async def internal_upload(
     a date-partitioned, UUID-prefixed key. Filename is sanitised to a
     conservative allowlist after basename stripping to defeat path
     traversal. Records an audit row whether the upload succeeds or fails.
+    Returns a short-lived presigned download URL when S3 is configured.
     """
+    caller_ip = _client_ip(request)
+    if not _ip_in_allowlist(caller_ip):
+        await _audit.log(
+            admin_key,
+            "admin.internal.upload.denied_ip",
+            actor_email=_admin_email_for(admin_key),
+            tier="admin",
+            target="ip_allowlist",
+            ip=caller_ip,
+            user_agent=request.headers.get("user-agent"),
+            metadata={"reason": "ip_not_in_allowlist"},
+        )
+        raise HTTPException(status_code=403, detail="Caller IP not in allowlist")
+
     content_type = (upload.content_type or "application/octet-stream").lower().split(";", 1)[0].strip()
     if content_type not in _INTERNAL_UPLOAD_ALLOWED_TYPES:
         raise HTTPException(
@@ -4219,8 +4263,9 @@ async def internal_upload(
     )
 
     try:
-        from s3_storage import put_bytes as _put_bytes
+        from s3_storage import put_bytes as _put_bytes, get_presigned_url_for_key as _presign
         location = _put_bytes(object_key, b"".join(chunks), content_type=content_type)
+        download_url = _presign(object_key, expires_in=_INTERNAL_UPLOAD_PRESIGN_TTL)
     except Exception as exc:  # noqa: BLE001
         logger.exception("internal upload storage failure")
         await _audit.log(
@@ -4255,6 +4300,7 @@ async def internal_upload(
             "size": size,
             "sha256": digest,
             "location": location,
+            "presigned": bool(download_url),
         },
     )
     return {
@@ -4265,6 +4311,8 @@ async def internal_upload(
         "content_type": content_type,
         "filename": safe_name,
         "uploaded_at": now.isoformat(),
+        "download_url": download_url,
+        "download_url_expires_in": _INTERNAL_UPLOAD_PRESIGN_TTL if download_url else None,
     }
 
 

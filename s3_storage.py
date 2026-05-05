@@ -168,6 +168,25 @@ def get_presigned_url(job_id: str) -> Optional[str]:
         return None
 
 
+def get_presigned_url_for_key(key: str, expires_in: int = PRESIGNED_EXPIRY) -> Optional[str]:
+    """Return a presigned GET URL for an arbitrary object ``key``.
+
+    Returns ``None`` when S3 is not configured (local fallback) so callers
+    can decide whether to expose a direct path or omit the field entirely.
+    """
+    if not S3_BUCKET:
+        return None
+    try:
+        return _get_s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": key},
+            ExpiresIn=int(expires_in),
+        )
+    except Exception:
+        logger.exception("Failed to generate presigned URL for key %s", key)
+        return None
+
+
 def result_exists(job_id: str) -> bool:
     """Check whether a result ZIP exists."""
     if S3_BUCKET:
