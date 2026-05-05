@@ -4303,6 +4303,27 @@ async def internal_upload(
             "presigned": bool(download_url),
         },
     )
+
+    # Fire-and-forget webhook delivery for downstream consumers.
+    try:
+        import asyncio as _asyncio
+        import webhook_store as _ws
+
+        _hook_payload = {
+            "object_key": object_key,
+            "location": location,
+            "size": size,
+            "sha256": digest,
+            "content_type": content_type,
+            "filename": safe_name,
+            "uploaded_at": now.isoformat(),
+            "download_url": download_url,
+            "download_url_expires_in": _INTERNAL_UPLOAD_PRESIGN_TTL if download_url else None,
+        }
+        _asyncio.create_task(_ws.dispatch("internal.upload.completed", _hook_payload))
+    except Exception:  # noqa: BLE001
+        logger.debug("upload webhook dispatch skipped", exc_info=True)
+
     return {
         "object_key": object_key,
         "location": location,
@@ -4405,6 +4426,30 @@ async def anatel_validate_filing(
             "cert_signed": certificate["signed"],
         },
     )
+
+    # Fire-and-forget webhook delivery for downstream consumers.
+    try:
+        import asyncio as _asyncio
+        import webhook_store as _ws
+
+        _hook_payload = {
+            "validated_at": payload["validated_at"],
+            "row_count": payload["row_count"],
+            "summary": payload["summary"],
+            "issuer": body.issuer or "TELECOM-TOWER-POWER",
+            "certificate": {
+                "sha256": certificate["sha256"],
+                "signed": certificate["signed"],
+                "algorithm": certificate.get("algorithm"),
+                "issuer": certificate.get("issuer"),
+                "version": certificate.get("version"),
+            },
+            "format": "json",
+        }
+        _asyncio.create_task(_ws.dispatch("anatel.validation.completed", _hook_payload))
+    except Exception:  # noqa: BLE001
+        logger.debug("anatel json webhook dispatch skipped", exc_info=True)
+
     return {**payload, "certificate": certificate}
 
 
@@ -4477,6 +4522,31 @@ async def anatel_validate_filing_pdf(
     )
 
     filename = f"anatel-validation-{certificate['sha256'][:12]}.pdf"
+
+    # Fire-and-forget webhook delivery for downstream consumers.
+    try:
+        import asyncio as _asyncio
+        import webhook_store as _ws
+
+        _hook_payload = {
+            "validated_at": payload["validated_at"],
+            "row_count": payload["row_count"],
+            "summary": payload["summary"],
+            "issuer": issuer,
+            "certificate": {
+                "sha256": certificate["sha256"],
+                "signed": certificate["signed"],
+                "algorithm": certificate.get("algorithm"),
+                "issuer": certificate.get("issuer"),
+                "version": certificate.get("version"),
+            },
+            "format": "pdf",
+            "pdf_filename": filename,
+        }
+        _asyncio.create_task(_ws.dispatch("anatel.validation.completed.pdf", _hook_payload))
+    except Exception:  # noqa: BLE001
+        logger.debug("anatel pdf webhook dispatch skipped", exc_info=True)
+
     return StreamingResponse(
         pdf_buf,
         media_type="application/pdf",
@@ -4486,6 +4556,132 @@ async def anatel_validate_filing_pdf(
             "X-Certificate-Signed": "true" if certificate["signed"] else "false",
         },
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Enterprise outbound webhooks (Tier-1)
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _WebhookCreateRequest(BaseModel):
+    url: str = Field(..., description="HTTPS URL receiving signed POST events")
+    events: List[str] = Field(..., min_length=1, description="Event names to subscribe to")
+    secret: Optional[str] = Field(
+        default=None, min_length=16, max_length=128,
+        description="HMAC secret. If omitted, a 64-char hex secret is generated.",
+    )
+    description: Optional[str] = Field(default=None, max_length=200)
+    enabled: bool = True
+
+
+class _WebhookEnabledPatch(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/internal/webhooks", status_code=201)
+async def webhook_register(
+    body: _WebhookCreateRequest,
+    request: Request,
+    admin_key: str = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Register an outbound webhook subscription. Admin + IP-allowlist gated.
+
+    The returned ``secret`` is the only place the cleartext value is
+    surfaced; subsequent ``GET`` calls return a redacted form. Store it
+    safely on the consumer side.
+    """
+    caller_ip = _client_ip(request)
+    if not _ip_in_allowlist(caller_ip):
+        await _audit.log(
+            admin_key, "admin.webhook.register.denied_ip",
+            actor_email=_admin_email_for(admin_key), tier="admin",
+            target="ip_allowlist", ip=caller_ip,
+            user_agent=request.headers.get("user-agent"),
+            metadata={"reason": "ip_not_in_allowlist"},
+        )
+        raise HTTPException(status_code=403, detail="Caller IP not in allowlist")
+
+    import webhook_store as _ws
+    try:
+        rec = _ws.register(
+            url=body.url, events=body.events, secret=body.secret,
+            description=body.description, enabled=body.enabled,
+            created_by=_admin_email_for(admin_key) or "admin",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    await _audit.log(
+        admin_key, "admin.webhook.register",
+        actor_email=_admin_email_for(admin_key), tier="admin",
+        target=f"webhook:{rec['id']}", ip=caller_ip,
+        user_agent=request.headers.get("user-agent"),
+        metadata={"url": rec["url"], "events": rec["events"], "enabled": rec["enabled"]},
+    )
+    # Echo the cleartext secret on creation only (never on GET/list).
+    return rec
+
+
+@app.get("/api/internal/webhooks")
+async def webhook_list(
+    request: Request,
+    admin_key: str = Depends(require_admin),
+) -> Dict[str, Any]:
+    caller_ip = _client_ip(request)
+    if not _ip_in_allowlist(caller_ip):
+        raise HTTPException(status_code=403, detail="Caller IP not in allowlist")
+    import webhook_store as _ws
+    return {"webhooks": _ws.list_all(redact_secret=True), "valid_events": _ws.valid_events()}
+
+
+@app.delete("/api/internal/webhooks/{webhook_id}", status_code=204)
+async def webhook_delete(
+    webhook_id: str,
+    request: Request,
+    admin_key: str = Depends(require_admin),
+):
+    caller_ip = _client_ip(request)
+    if not _ip_in_allowlist(caller_ip):
+        raise HTTPException(status_code=403, detail="Caller IP not in allowlist")
+    import webhook_store as _ws
+    if not _ws.delete(webhook_id):
+        raise HTTPException(status_code=404, detail="webhook not found")
+    await _audit.log(
+        admin_key, "admin.webhook.delete",
+        actor_email=_admin_email_for(admin_key), tier="admin",
+        target=f"webhook:{webhook_id}", ip=caller_ip,
+        user_agent=request.headers.get("user-agent"),
+        metadata={},
+    )
+    return Response(status_code=204)
+
+
+@app.patch("/api/internal/webhooks/{webhook_id}")
+async def webhook_set_enabled(
+    webhook_id: str,
+    body: _WebhookEnabledPatch,
+    request: Request,
+    admin_key: str = Depends(require_admin),
+) -> Dict[str, Any]:
+    caller_ip = _client_ip(request)
+    if not _ip_in_allowlist(caller_ip):
+        raise HTTPException(status_code=403, detail="Caller IP not in allowlist")
+    import webhook_store as _ws
+    if not _ws.update_enabled(webhook_id, body.enabled):
+        raise HTTPException(status_code=404, detail="webhook not found")
+    await _audit.log(
+        admin_key, "admin.webhook.update",
+        actor_email=_admin_email_for(admin_key), tier="admin",
+        target=f"webhook:{webhook_id}", ip=caller_ip,
+        user_agent=request.headers.get("user-agent"),
+        metadata={"enabled": body.enabled},
+    )
+    rec = _ws.get(webhook_id) or {}
+    item = dict(rec)
+    sec = item.get("secret") or ""
+    item["secret"] = f"***{sec[-4:]}" if sec else ""
+    return item
+
 
 
 # ─────────────────────────────────────────────────────────────────────

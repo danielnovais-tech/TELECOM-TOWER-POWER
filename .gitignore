@@ -28,6 +28,9 @@ srtm_data/*.hgt
 # SQLite tower database (runtime data)
 towers.db
 
+# Webhook subscription store (runtime data, contains HMAC secrets)
+webhook_store.json
+
 # C extensions
 *.so
 
