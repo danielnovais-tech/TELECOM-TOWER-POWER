@@ -1361,6 +1361,48 @@
         ]
       }
     },
+    "/api/internal/anatel/validate-filing/pdf": {
+      "post": {
+        "summary": "Anatel Validate Filing Pdf",
+        "description": "Same as ``/api/internal/anatel/validate-filing`` but returns a PDF.\n\nThe PDF contains the summary, the HMAC certificate block, and a\nper-row results table (capped at 200 rows; the certificate's SHA-256\nstill covers the full original payload).",
+        "operationId": "anatel_validate_filing_pdf_api_internal_anatel_validate_filing_pdf_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_AnatelValidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
     "/plan_repeater": {
       "post": {
         "summary": "Plan Repeater",

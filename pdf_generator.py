@@ -267,8 +267,161 @@ def build_pdf_report(
 
 
 # ----------------------------------------------------------------------
-# Standalone test
+# ANATEL filing validation report
 # ----------------------------------------------------------------------
+
+def build_anatel_validation_pdf(
+    payload: dict,
+    certificate: dict,
+    *,
+    issuer: Optional[str] = None,
+) -> io.BytesIO:
+    """Render a PDF report for a certified ANATEL filing validation batch.
+
+    ``payload`` is the dict returned by ``anatel_validator.validate_batch``
+    enriched with ``validated_at``/``row_count`` (i.e. the body of the
+    /api/internal/anatel/validate-filing response, minus ``certificate``).
+    ``certificate`` is the ``certify(...)`` output (with ``sha256``,
+    ``signed``, ``issuer``, ``algorithm``).
+    """
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        rightMargin=18 * mm, leftMargin=18 * mm,
+        topMargin=18 * mm, bottomMargin=18 * mm,
+        title="ANATEL Filing Validation Report",
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('Title', parent=styles['Title'], alignment=TA_CENTER, fontSize=16)
+    h2 = ParagraphStyle('H2', parent=styles['Heading2'], fontSize=12, spaceAfter=4)
+    normal = styles['Normal']
+    mono = ParagraphStyle('Mono', parent=normal, fontName='Courier', fontSize=8, leading=10)
+
+    story: list = []
+
+    story.append(Paragraph("ANATEL — Relatório de Validação de ERB", title_style))
+    story.append(Spacer(1, 3 * mm))
+    story.append(Paragraph(
+        f"Emitido em {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} "
+        f"por <b>{issuer or certificate.get('issuer', 'TELECOM-TOWER-POWER')}</b>",
+        normal,
+    ))
+    story.append(Spacer(1, 6 * mm))
+
+    summary = payload.get("summary") or {}
+    total = int(summary.get("total", 0))
+    passed = int(summary.get("passed", 0))
+    failed = int(summary.get("failed", 0))
+    warnings = int(summary.get("warnings", 0))
+
+    summary_data = [
+        ['Métrica', 'Valor'],
+        ['Total de registros', str(total)],
+        ['Aprovados', str(passed)],
+        ['Reprovados', str(failed)],
+        ['Avisos', str(warnings)],
+        ['Validado em (UTC)', str(payload.get('validated_at', '—'))],
+    ]
+    t = Table(summary_data, colWidths=[70 * mm, 100 * mm])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 0.4, colors.black),
+    ]))
+    story.append(Paragraph("Resumo", h2))
+    story.append(t)
+    story.append(Spacer(1, 6 * mm))
+
+    # Certificate block
+    cert_data = [
+        ['Campo', 'Valor'],
+        ['Algoritmo', str(certificate.get('algorithm', '—'))],
+        ['Assinado', 'Sim' if certificate.get('signed') else 'Não'],
+        ['Emissor', str(certificate.get('issuer', '—'))],
+        ['Versão', str(certificate.get('version', '—'))],
+        ['SHA-256 (canonical)', Paragraph(str(certificate.get('sha256', '—')), mono)],
+        ['HMAC', Paragraph(str(certificate.get('hmac', '—')), mono)],
+    ]
+    ct = Table(cert_data, colWidths=[40 * mm, 130 * mm])
+    ct.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),
+        ('GRID', (0, 0), (-1, -1), 0.4, colors.black),
+    ]))
+    story.append(Paragraph("Certificado HMAC", h2))
+    story.append(ct)
+    story.append(Spacer(1, 6 * mm))
+
+    # Per-row results — keep first 200 rows to bound PDF size
+    results = payload.get("results") or []
+    max_rows = 200
+    truncated = len(results) > max_rows
+    rows_for_table = results[:max_rows]
+
+    story.append(Paragraph("Resultados por registro", h2))
+    if not rows_for_table:
+        story.append(Paragraph("Nenhum registro processado.", normal))
+    else:
+        rt_data = [['#', 'station_id', 'OK', 'Issues']]
+        for idx, row in enumerate(rows_for_table, start=1):
+            issues = row.get('issues') or []
+            issues_txt = '<br/>'.join(
+                f"[{(i.get('severity') or '').upper()}] {i.get('code')} "
+                f"({i.get('field') or '-'}): {i.get('message') or ''}"
+                for i in issues
+            ) or '—'
+            rt_data.append([
+                str(idx),
+                Paragraph(str(row.get('station_id') or '—'), mono),
+                'YES' if row.get('ok') else 'NO',
+                Paragraph(issues_txt, mono),
+            ])
+        rt = Table(rt_data, colWidths=[10 * mm, 35 * mm, 12 * mm, 113 * mm], repeatRows=1)
+        style_cmds = [
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('GRID', (0, 0), (-1, -1), 0.3, colors.black),
+        ]
+        for i, row in enumerate(rows_for_table, start=1):
+            if not row.get('ok'):
+                style_cmds.append(('BACKGROUND', (0, i), (-1, i), colors.mistyrose))
+            elif (row.get('issues') or []):
+                style_cmds.append(('BACKGROUND', (0, i), (-1, i), colors.lightyellow))
+            else:
+                style_cmds.append(('BACKGROUND', (0, i), (-1, i), colors.honeydew))
+        rt.setStyle(TableStyle(style_cmds))
+        story.append(rt)
+
+    if truncated:
+        story.append(Spacer(1, 3 * mm))
+        story.append(Paragraph(
+            f"<i>Tabela truncada nas primeiras {max_rows} linhas de {len(results)}. "
+            f"O certificado HMAC cobre todas as linhas do payload original.</i>",
+            normal,
+        ))
+
+    story.append(Spacer(1, 6 * mm))
+    story.append(Paragraph(
+        "Este documento é uma representação humana do certificado anexo. "
+        "Em caso de divergência entre a tabela e o JSON original assinado, "
+        "prevalece o JSON cuja SHA-256 consta no bloco \"Certificado HMAC\" acima.",
+        normal,
+    ))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
 
 if __name__ == "__main__":
     # Mock data

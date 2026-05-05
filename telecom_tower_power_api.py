@@ -4408,6 +4408,86 @@ async def anatel_validate_filing(
     return {**payload, "certificate": certificate}
 
 
+@app.post("/api/internal/anatel/validate-filing/pdf")
+async def anatel_validate_filing_pdf(
+    body: _AnatelValidateRequest,
+    request: Request,
+    admin_key: str = Depends(require_admin),
+):
+    """Same as ``/api/internal/anatel/validate-filing`` but returns a PDF.
+
+    The PDF contains the summary, the HMAC certificate block, and a
+    per-row results table (capped at 200 rows; the certificate's SHA-256
+    still covers the full original payload).
+    """
+    caller_ip = _client_ip(request)
+    if not _ip_in_allowlist(caller_ip):
+        await _audit.log(
+            admin_key,
+            "admin.anatel.validate_pdf.denied_ip",
+            actor_email=_admin_email_for(admin_key),
+            tier="admin",
+            target="ip_allowlist",
+            ip=caller_ip,
+            user_agent=request.headers.get("user-agent"),
+            metadata={"reason": "ip_not_in_allowlist"},
+        )
+        raise HTTPException(status_code=403, detail="Caller IP not in allowlist")
+
+    if len(body.filings) == 0:
+        raise HTTPException(status_code=422, detail="filings list must not be empty")
+    if len(body.filings) > _ANATEL_VALIDATE_MAX_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"filings list exceeds maximum of {_ANATEL_VALIDATE_MAX_ROWS} rows",
+        )
+
+    import anatel_validator as _av
+    from pdf_generator import build_anatel_validation_pdf
+
+    batch = _av.validate_batch(body.filings)
+    payload = {
+        "validated_at": datetime.now(timezone.utc).isoformat(),
+        "row_count": batch["summary"]["total"],
+        "summary": batch["summary"],
+        "results": batch["results"],
+    }
+    issuer = body.issuer or "TELECOM-TOWER-POWER"
+    certificate = _av.certify(payload, issuer=issuer)
+
+    pdf_buf = build_anatel_validation_pdf(payload, certificate, issuer=issuer)
+
+    await _audit.log(
+        admin_key,
+        "admin.anatel.validate_pdf",
+        actor_email=_admin_email_for(admin_key),
+        tier="admin",
+        target=f"anatel.filing:{batch['summary']['total']}",
+        ip=caller_ip,
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "total": batch["summary"]["total"],
+            "passed": batch["summary"]["passed"],
+            "failed": batch["summary"]["failed"],
+            "warnings": batch["summary"]["warnings"],
+            "cert_sha256": certificate["sha256"],
+            "cert_signed": certificate["signed"],
+            "format": "pdf",
+        },
+    )
+
+    filename = f"anatel-validation-{certificate['sha256'][:12]}.pdf"
+    return StreamingResponse(
+        pdf_buf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Certificate-SHA256": certificate["sha256"],
+            "X-Certificate-Signed": "true" if certificate["signed"] else "false",
+        },
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Dynamic CORS reflection for tenant ``frontend_url``
 # ─────────────────────────────────────────────────────────────────────
