@@ -2782,6 +2782,15 @@ class _InterferenceVictim(BaseModel):
     noise_figure_db: float = Field(default=5.0, ge=0, le=20)
     # If supplied, the response includes SINR. Otherwise only I/N.
     victim_signal_dbm: Optional[float] = Field(default=None, ge=-160, le=30)
+    # T20 — victim PLMN tag (purely informational; echoed back in the
+    # response for downstream MOCN reporting). Not used as a filter.
+    plmn: Optional[str] = Field(default=None, max_length=6,
+        description="Victim home PLMN, e.g. '72411' (Vivo)")
+    # T20 — receive-side MIMO array size. For Sionna RT this configures
+    # the RX PlanarArray; for FSPL/P.1812 it folds into a fixed diversity
+    # offset (3 dB per doubling, capped at 9 dB ≡ 8x8).
+    rx_mimo: int = Field(default=1, ge=1, le=64,
+        description="Receive-side antenna count (MIMO array size); 1=SISO")
 
 
 class InterferenceRequest(BaseModel):
@@ -2802,6 +2811,14 @@ class InterferenceRequest(BaseModel):
     max_aggressors: int = Field(default=200, ge=10, le=2000,
         description="Hard cap on candidate towers fetched from DB before "
                     "in-radius filtering (latency vs completeness)")
+    # T20 — MOCN attribution filter. Glob (fnmatch) applied to each
+    # aggressor's ``plmn`` column before the path-loss math runs:
+    #   * "72411" → Vivo only
+    #   * "724*"  → all Brazil PLMNs
+    #   * None    → no filter (default; backward compatible)
+    # Aggressors with a NULL ``plmn`` only match when the filter is None.
+    aggressor_plmn: Optional[str] = Field(default=None, max_length=10,
+        description="PLMN glob filter for aggressors (e.g. '72411' or '724*')")
 
 
 class _AggressorOut(BaseModel):
@@ -2815,6 +2832,12 @@ class _AggressorOut(BaseModel):
     path_loss_db: float
     aci_db: float
     rx_power_dbm: float
+    # T20 fields. ``plmn`` is None for legacy rows imported before
+    # T20 (no MCC/MNC mapping was persisted). ``mimo_gain_db`` is
+    # the diversity offset applied at this aggressor (FSPL/P.1812
+    # only; Sionna RT bakes MIMO into ``path_loss_db`` and reports 0.0).
+    plmn: Optional[str] = None
+    mimo_gain_db: float = 0.0
 
 
 class InterferenceResponse(BaseModel):
@@ -2830,6 +2853,16 @@ class InterferenceResponse(BaseModel):
     i_over_n_db: Optional[float]
     sinr_db: Optional[float]
     top_n_aggressors: List[_AggressorOut]
+    # T20 — MOCN/MIMO diagnostics. ``n_filtered_by_plmn`` counts
+    # aggressors skipped because their ``plmn`` failed the request
+    # filter (NULL plmn vs explicit pattern, or pattern mismatch).
+    # The two aggregate maps sum interference power in the linear
+    # domain (mW) per operator string and per PLMN, then convert
+    # back to dBm for the response. Both default to empty dicts so
+    # pre-T20 clients that ignore them are unaffected.
+    n_filtered_by_plmn: int = 0
+    aggregate_by_operator_dbm: Dict[str, float] = Field(default_factory=dict)
+    aggregate_by_plmn_dbm: Dict[str, float] = Field(default_factory=dict)
 
 
 _INTERFERENCE_SUPPORTED_ENGINES = {"auto", "fspl", "itu-p1812", "itmlogic", "sionna-rt"}
@@ -2882,8 +2915,11 @@ async def coverage_interference(
     """
     from interference_engine import (
         aggregate_interference_dbm,
+        aggregate_by_key,
         build_contribution,
         i_over_n_db as _i_over_n,
+        mimo_diversity_gain_db,
+        plmn_matches,
         sinr_db as _sinr,
         thermal_noise_dbm,
         top_n_contributions,
@@ -2929,7 +2965,19 @@ async def coverage_interference(
                        "manifest.json, and ensure mitsuba + sionna_rt imports succeed",
             )
 
+    n_filtered_plmn = 0  # T20
+    rx_mimo = int(body.victim.rx_mimo or 1)
+
     for t in candidates:
+        # T20 — MOCN attribution: glob filter against tower's PLMN.
+        # Done before the distance check so the response
+        # ``n_filtered_by_plmn`` counts every tower the platform
+        # returned, regardless of radius.
+        tower_plmn = getattr(t, "plmn", None) or None
+        if not plmn_matches(tower_plmn, body.aggressor_plmn):
+            n_filtered_plmn += 1
+            continue
+
         d_km = LinkEngine.haversine_km(
             body.victim.lat, body.victim.lon, t.lat, t.lon,
         )
@@ -2951,10 +2999,16 @@ async def coverage_interference(
         # per-band Gt from the request.
         eirp_dbm = float(t.power_dbm) + body.aggressor_tx_gain_dbi
 
+        # T20 — per-aggressor MIMO state.
+        n_tx_ant = int(getattr(t, "n_tx_antennas", 1) or 1)
+
         if sionna_rt_handler is not None:
             # Sionna RT path-loss per aggressor (deterministic 3D ray
             # tracing). Falls back to skipping the aggressor when the
             # ray solver returns None (e.g. RX outside scene bbox).
+            # MIMO geometry is configured directly on the planar arrays;
+            # the H-matrix Frobenius norm folds diversity gain into the
+            # returned ``basic_loss_db``, so no offset is applied below.
             try:
                 est = sionna_rt_handler._engine.predict_basic_loss(
                     f_hz=agg_f_hz,
@@ -2964,6 +3018,8 @@ async def coverage_interference(
                     hrg=body.victim.rx_height_m,
                     phi_t=t.lat, lam_t=t.lon,
                     phi_r=body.victim.lat, lam_r=body.victim.lon,
+                    num_tx_ant=n_tx_ant,
+                    num_rx_ant=rx_mimo,
                 )
             except Exception:
                 logger.exception("sionna-rt predict_basic_loss raised for tower=%s", t.id)
@@ -2972,10 +3028,12 @@ async def coverage_interference(
                 n_engine_failures += 1
                 continue
             pl_db = float(est.basic_loss_db)
+            mimo_db = 0.0  # baked into pl_db
         else:
             # FSPL only for v1. Engine plug-points (ITM, etc.) reuse the
             # contribution builder verbatim with a different ``path_loss_db``.
             pl_db = LinkEngine.free_space_path_loss(d_km, agg_f_hz)
+            mimo_db = mimo_diversity_gain_db(n_tx_ant, rx_mimo)
 
         c = build_contribution(
             aggressor_id=t.id,
@@ -2989,6 +3047,8 @@ async def coverage_interference(
             path_loss_db=pl_db,
             include_aci=body.include_aci,
             aci_floor_db=body.aci_floor_db,
+            plmn=tower_plmn,
+            mimo_gain_db=mimo_db,
         )
         if c.aci_db == 0.0:
             co_count += 1
@@ -3023,9 +3083,19 @@ async def coverage_interference(
             path_loss_db=round(c.path_loss_db, 2),
             aci_db=round(c.aci_db, 2),
             rx_power_dbm=round(c.rx_power_dbm, 2),
+            plmn=c.plmn,
+            mimo_gain_db=round(c.mimo_gain_db, 2),
         ))
 
     n_contrib = sum(1 for c in raw_contribs if math.isfinite(c.rx_power_dbm))
+
+    # T20 — MOCN aggregations. Operator label comes from the matching
+    # tower row ("unknown" when the aggregator couldn't be looked up).
+    op_by_id: Dict[str, str] = {t.id: (t.operator or "unknown") for t, _ in contributions}
+    agg_by_op = aggregate_by_key(raw_contribs, lambda c: op_by_id.get(c.aggressor_id, "unknown"))
+    agg_by_plmn = aggregate_by_key(raw_contribs, lambda c: c.plmn or "unknown")
+    agg_by_op = {k: round(v, 2) for k, v in agg_by_op.items()}
+    agg_by_plmn = {k: round(v, 2) for k, v in agg_by_plmn.items()}
 
     return InterferenceResponse(
         victim={
@@ -3036,6 +3106,8 @@ async def coverage_interference(
             "rx_height_m": body.victim.rx_height_m,
             "rx_gain_dbi": body.victim.rx_gain_dbi,
             "noise_figure_db": body.victim.noise_figure_db,
+            "plmn": body.victim.plmn,
+            "rx_mimo": rx_mimo,
         },
         engine=engine_name,
         n_candidates=len(candidates),
@@ -3048,6 +3120,9 @@ async def coverage_interference(
         i_over_n_db=(round(i_n, 2) if i_n is not None else None),
         sinr_db=(round(sinr, 2) if sinr is not None else None),
         top_n_aggressors=top_out,
+        n_filtered_by_plmn=n_filtered_plmn,
+        aggregate_by_operator_dbm=agg_by_op,
+        aggregate_by_plmn_dbm=agg_by_plmn,
     )
 
 
@@ -3112,6 +3187,8 @@ def _build_candidates_for_request(
             f_hz=float(t.primary_freq_hz()),
             bw_hz=victim_bw_hz,
             eirp_dbm=float(t.power_dbm) + body.aggressor_tx_gain_dbi,
+            plmn=getattr(t, "plmn", None) or None,
+            n_tx_antennas=int(getattr(t, "n_tx_antennas", 1) or 1),
         ).to_dict())
     return out
 

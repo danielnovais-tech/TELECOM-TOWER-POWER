@@ -80,14 +80,16 @@ class _SQLiteStore:
         with self._conn() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS towers (
-                    id         TEXT PRIMARY KEY,
-                    lat        REAL NOT NULL,
-                    lon        REAL NOT NULL,
-                    height_m   REAL NOT NULL,
-                    operator   TEXT NOT NULL,
-                    bands      TEXT NOT NULL,
-                    power_dbm  REAL NOT NULL DEFAULT 43.0,
-                    owner      TEXT NOT NULL DEFAULT 'system'
+                    id            TEXT PRIMARY KEY,
+                    lat           REAL NOT NULL,
+                    lon           REAL NOT NULL,
+                    height_m      REAL NOT NULL,
+                    operator      TEXT NOT NULL,
+                    bands         TEXT NOT NULL,
+                    power_dbm     REAL NOT NULL DEFAULT 43.0,
+                    owner         TEXT NOT NULL DEFAULT 'system',
+                    plmn          TEXT,
+                    n_tx_antennas INTEGER NOT NULL DEFAULT 1
                 )
             """)
             conn.execute("""
@@ -98,9 +100,18 @@ class _SQLiteStore:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(towers)").fetchall()}
             if "owner" not in cols:
                 conn.execute("ALTER TABLE towers ADD COLUMN owner TEXT NOT NULL DEFAULT 'system'")
+            # T20 — idempotent ALTER for pre-T20 databases.
+            if "plmn" not in cols:
+                conn.execute("ALTER TABLE towers ADD COLUMN plmn TEXT")
+            if "n_tx_antennas" not in cols:
+                conn.execute("ALTER TABLE towers ADD COLUMN n_tx_antennas INTEGER NOT NULL DEFAULT 1")
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_towers_owner
                 ON towers(owner)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_towers_plmn
+                ON towers(plmn)
             """)
 
     # ---- write --------------------------------------------------
@@ -112,8 +123,8 @@ class _SQLiteStore:
         with self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO towers
-                   (id, lat, lon, height_m, operator, bands, power_dbm, owner)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (id, lat, lon, height_m, operator, bands, power_dbm, owner, plmn, n_tx_antennas)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tower_dict["id"],
                     tower_dict["lat"],
@@ -123,6 +134,8 @@ class _SQLiteStore:
                     bands,
                     tower_dict.get("power_dbm", 43.0),
                     tower_dict.get("owner", "system"),
+                    tower_dict.get("plmn"),
+                    int(tower_dict.get("n_tx_antennas", 1) or 1),
                 ),
             )
 
@@ -198,11 +211,13 @@ class _SQLiteStore:
                     bands = json.dumps(bands)
                 conn.execute(
                     """INSERT OR REPLACE INTO towers
-                       (id, lat, lon, height_m, operator, bands, power_dbm, owner)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (id, lat, lon, height_m, operator, bands, power_dbm, owner, plmn, n_tx_antennas)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (td["id"], td["lat"], td["lon"], td["height_m"],
                      td["operator"], bands, td.get("power_dbm", 43.0),
-                     td.get("owner", "system")),
+                     td.get("owner", "system"),
+                     td.get("plmn"),
+                     int(td.get("n_tx_antennas", 1) or 1)),
                 )
         return len(tower_dicts)
 

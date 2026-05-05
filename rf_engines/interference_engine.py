@@ -71,6 +71,8 @@ class _Aggressor:
     f_hz: float
     bw_hz: float
     eirp_dbm: float
+    plmn: Optional[str] = None
+    n_tx_antennas: int = 1
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,8 @@ class _Victim:
     f_hz: float
     bw_hz: float
     rx_gain_dbi: float
+    plmn: Optional[str] = None
+    n_rx_antennas: int = 1
 
 
 @dataclass(frozen=True)
@@ -94,6 +98,7 @@ class HandlerResult:
     Surfaced in the endpoint response as a diagnostic field."""
 
     runtime_ms: float
+    n_filtered_by_plmn: int = 0
 
 
 class SionnaRTInterferenceHandler:
@@ -124,6 +129,12 @@ class SionnaRTInterferenceHandler:
         ignores those and derives geometry from the scene file, so we
         pass two-element placeholders solely to satisfy the contract.
 
+        ``num_tx_ant`` / ``num_rx_ant`` propagate the MIMO array size
+        into the Sionna ``PlanarArray`` config (T20). The H-matrix
+        Frobenius norm naturally bakes the MIMO array gain into the
+        returned ``basic_loss_db``, so the FSPL-style diversity offset
+        must NOT also be applied at the handler level.
+
         Returns ``None`` if the engine refused (RX outside scene bbox,
         ray solver crash). Logged at WARNING and bubbled up so the
         caller can decrement ``n_contributing``.
@@ -139,6 +150,8 @@ class SionnaRTInterferenceHandler:
                 lam_t=agg.lon,
                 phi_r=victim.lat,
                 lam_r=victim.lon,
+                num_tx_ant=agg.n_tx_antennas,
+                num_rx_ant=victim.n_rx_antennas,
             )
         except EngineUnavailable:
             raise
@@ -159,6 +172,7 @@ class SionnaRTInterferenceHandler:
         aggressors: Sequence[_Aggressor],
         include_aci: bool = True,
         aci_floor_db: Optional[float] = None,
+        aggressor_plmn: Optional[str] = None,
     ) -> HandlerResult:
         """Run Sionna RT for every aggressor and build the contributions.
 
@@ -166,6 +180,10 @@ class SionnaRTInterferenceHandler:
         ready (``$SIONNA_RT_DISABLED=1``, scene missing, GPU stack absent).
         The endpoint surfaces this as HTTP 503 — the request was
         understood but the back-end isn't online.
+
+        T20 — ``aggressor_plmn`` is a glob applied before tracing each
+        aggressor (e.g. ``"724*"`` skips non-Brazilian PLMNs). Skipped
+        aggressors do **not** count as path-loss failures.
         """
         if not self.is_available():
             raise EngineUnavailable(
@@ -173,10 +191,16 @@ class SionnaRTInterferenceHandler:
                 "SIONNA_RT_SCENE_PATH, mitsuba/sionna_rt imports"
             )
 
+        from interference_engine import plmn_matches  # local import: avoid cycle
+
         t0 = time.perf_counter()
         contribs: List[InterferenceContribution] = []
         n_fail = 0
+        n_filtered_plmn = 0
         for agg in aggressors:
+            if not plmn_matches(agg.plmn, aggressor_plmn):
+                n_filtered_plmn += 1
+                continue
             pl = self._path_loss_db(victim=victim, agg=agg)
             if pl is None:
                 n_fail += 1
@@ -195,12 +219,16 @@ class SionnaRTInterferenceHandler:
                 path_loss_db=pl,
                 include_aci=include_aci,
                 aci_floor_db=aci_floor_db,
+                plmn=agg.plmn,
+                # Sionna RT bakes MIMO gain into pl directly; no offset.
+                mimo_gain_db=0.0,
             ))
         runtime_ms = (time.perf_counter() - t0) * 1000.0
         return HandlerResult(
             contributions=contribs,
             n_path_loss_failures=n_fail,
             runtime_ms=runtime_ms,
+            n_filtered_by_plmn=n_filtered_plmn,
         )
 
 
@@ -229,6 +257,8 @@ def _aggressor_from_tower(tower, *, default_bw_hz: float, tx_gain_dbi: float) ->
         f_hz=float(tower.primary_freq_hz()),
         bw_hz=default_bw_hz,
         eirp_dbm=float(tower.power_dbm) + tx_gain_dbi,
+        plmn=getattr(tower, "plmn", None) or None,
+        n_tx_antennas=int(getattr(tower, "n_tx_antennas", 1) or 1),
     )
 
 

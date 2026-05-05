@@ -116,6 +116,25 @@ _DEFAULT_HEIGHT = 35.0
 _DEFAULT_POWER = 43.0
 _DEFAULT_BANDS = ["700MHz", "1800MHz"]
 
+# T20 — operator → primary PLMN map (Brazil, MCC=724).
+# ANATEL data does not carry MCC/MNC, so we attribute via normalised
+# operator name. Each operator may hold multiple MNCs (e.g. TIM has 02,
+# 03, 04); we pick the most heavily deployed primary PLMN for filtering
+# purposes. See ITU operational bulletins 1162 / 1219 for full list.
+_OPERATOR_PLMN = {
+    "Vivo": "72411",
+    "TIM": "72402",
+    "Claro": "72405",
+    "Oi": "72431",
+    "Algar": "72432",
+    "Sercomtel": "72415",
+    "Nextel": "72439",
+    "Brisanet": "72418",
+    "Unifique": "72454",
+    "Iez!": "72416",
+    "Giga Mais": "72417",
+}
+
 # Small random offset (degrees) to spread towers within a city
 _CITY_JITTER = 0.008  # ~800m
 
@@ -212,6 +231,7 @@ def transform_anatel_records(
         lon += random.uniform(-_CITY_JITTER, _CITY_JITTER)
 
         operator = _normalise_operator(operator_raw)
+        plmn = _OPERATOR_PLMN.get(operator)
 
         stations[station_id] = {
             "id": f"ANATEL_{station_id}",
@@ -221,6 +241,7 @@ def transform_anatel_records(
             "operator": operator,
             "bands": _DEFAULT_BANDS,
             "power_dbm": _DEFAULT_POWER,
+            "plmn": plmn,
         }
 
     print(f"  {len(stations)} unique stations after deduplication")

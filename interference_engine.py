@@ -32,9 +32,10 @@ override via the ``aci_floor_db`` argument.
 """
 from __future__ import annotations
 
+import fnmatch
 import math
-from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Optional
 
 
 # kT in dBm/Hz at T = 290 K (standard reference temperature).
@@ -87,6 +88,46 @@ def aci_attenuation_db(
     return 60.0 if aci_floor_db is None else float(aci_floor_db)
 
 
+# ---------------------------------------------------------------------
+# T20 — MOCN + MIMO helpers
+# ---------------------------------------------------------------------
+def mimo_diversity_gain_db(n_tx: int, n_rx: int) -> float:
+    """Fixed-offset MIMO diversity gain applied to C/I (not path-loss).
+
+    Used by the FSPL and ITU-R P.1812 paths where the engine cannot
+    capture the H-matrix structure. The Sionna RT path computes the
+    real Frobenius-norm channel gain via ``compute_paths()`` and skips
+    this offset entirely.
+
+    Convention (3 dB per doubling of the smaller end of the array):
+      * 1×1 → 0 dB (SISO)
+      * 2×2 → +3 dB
+      * 4×4 → +6 dB
+      * 8×8 → +9 dB
+    Asymmetric arrays use ``min(n_tx, n_rx)``; capped at +9 dB to keep
+    the bound conservative for unrealistic high-order configs.
+    """
+    n = max(1, int(min(n_tx, n_rx)))
+    if n <= 1:
+        return 0.0
+    return min(9.0, 3.0 * math.log2(n))
+
+
+def plmn_matches(plmn: Optional[str], pattern: Optional[str]) -> bool:
+    """Glob match for PLMN filtering ("724*" matches every Brazilian PLMN).
+
+    ``pattern`` is None / empty → always True (no filter).
+    ``plmn`` is None when the tower record has no PLMN → only matches
+    when the pattern is also None / empty (do not silently include
+    unknowns when the caller asked for a specific operator).
+    """
+    if not pattern:
+        return True
+    if not plmn:
+        return False
+    return fnmatch.fnmatchcase(str(plmn), str(pattern))
+
+
 @dataclass(frozen=True)
 class InterferenceContribution:
     """One aggressor's per-pair contribution at the victim receiver."""
@@ -99,6 +140,8 @@ class InterferenceContribution:
     path_loss_db: float
     aci_db: float
     rx_power_dbm: float
+    plmn: Optional[str] = None
+    mimo_gain_db: float = 0.0
 
 
 def aggregate_interference_dbm(
@@ -164,14 +207,21 @@ def build_contribution(
     path_loss_db: float,
     include_aci: bool = True,
     aci_floor_db: Optional[float] = None,
+    plmn: Optional[str] = None,
+    mimo_gain_db: float = 0.0,
 ) -> InterferenceContribution:
     """Compose a single aggressor contribution at the victim receiver.
 
-    ``Pr = EIRP - PL + Gr - ACI``  (all dB[m]).
+    ``Pr = EIRP - PL + Gr - ACI + Gmimo``  (all dB[m]).
 
     When ``include_aci=False`` the helper still drops adjacent-channel
     aggressors entirely (returns ``-inf`` rx_power for ``|Δf| ≥ BW/2``);
     set the flag if the caller already pre-filtered to co-channel only.
+
+    ``mimo_gain_db`` is the diversity gain applied at the receiver
+    (T20). For FSPL/P.1812 it comes from :func:`mimo_diversity_gain_db`;
+    for Sionna RT it is left at 0 because the engine bakes the
+    H-matrix into ``path_loss_db`` directly.
     """
     aci = aci_attenuation_db(
         victim_f_hz, victim_bw_hz, aggressor_f_hz, aggressor_bw_hz,
@@ -181,7 +231,7 @@ def build_contribution(
         # Caller wants co-channel only: hard-mute adjacent aggressors.
         rx_dbm = float("-inf")
     else:
-        rx_dbm = aggressor_eirp_dbm - path_loss_db + rx_gain_dbi - aci
+        rx_dbm = aggressor_eirp_dbm - path_loss_db + rx_gain_dbi - aci + mimo_gain_db
     return InterferenceContribution(
         aggressor_id=aggressor_id,
         distance_km=distance_km,
@@ -191,6 +241,8 @@ def build_contribution(
         path_loss_db=path_loss_db,
         aci_db=aci,
         rx_power_dbm=rx_dbm,
+        plmn=plmn,
+        mimo_gain_db=mimo_gain_db,
     )
 
 
@@ -228,6 +280,14 @@ class CandidateAggressor:
 
     Built at submit-time from ``models.Tower`` rows so the worker has
     no SQLAlchemy / DB dependency.
+
+    T20 fields:
+      * ``plmn`` — 5-or-6 digit MCC+MNC string (None when the importer
+        did not populate it). Used by MOCN filtering only; never
+        feeds the math.
+      * ``n_tx_antennas`` — transmit-array element count for MIMO
+        gain accounting (defaults to 1 = SISO so legacy job payloads
+        keep producing identical math).
     """
 
     aggressor_id: str
@@ -238,6 +298,8 @@ class CandidateAggressor:
     f_hz: float
     bw_hz: float
     eirp_dbm: float
+    plmn: Optional[str] = None
+    n_tx_antennas: int = 1
 
     def to_dict(self) -> dict:
         return {
@@ -249,10 +311,13 @@ class CandidateAggressor:
             "f_hz": self.f_hz,
             "bw_hz": self.bw_hz,
             "eirp_dbm": self.eirp_dbm,
+            "plmn": self.plmn,
+            "n_tx_antennas": self.n_tx_antennas,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "CandidateAggressor":
+        plmn = d.get("plmn")
         return cls(
             aggressor_id=str(d["aggressor_id"]),
             operator=str(d.get("operator", "unknown")),
@@ -262,6 +327,8 @@ class CandidateAggressor:
             f_hz=float(d["f_hz"]),
             bw_hz=float(d["bw_hz"]),
             eirp_dbm=float(d["eirp_dbm"]),
+            plmn=str(plmn) if plmn else None,
+            n_tx_antennas=int(d.get("n_tx_antennas", 1) or 1),
         )
 
 
@@ -299,6 +366,11 @@ class InterferenceComputation:
     n_in_radius: int
     n_contributing: int
     operator_by_id: dict
+    # T20 — MOCN/MIMO surface fields
+    plmn_by_id: Dict[str, Optional[str]] = field(default_factory=dict)
+    n_filtered_by_plmn: int = 0
+    aggregate_by_operator_dbm: Dict[str, float] = field(default_factory=dict)
+    aggregate_by_plmn_dbm: Dict[str, float] = field(default_factory=dict)
 
 
 def compute_interference_fspl(
@@ -314,6 +386,8 @@ def compute_interference_fspl(
     search_radius_km: float,
     include_aci: bool = True,
     aci_floor_db: Optional[float] = None,
+    aggressor_plmn: Optional[str] = None,
+    victim_n_rx_antennas: int = 1,
 ) -> InterferenceComputation:
     """Run the FSPL pipeline for a victim + candidate fleet.
 
@@ -325,18 +399,32 @@ def compute_interference_fspl(
     fast enough that the async path exists mainly for very large
     ``search_radius_km`` sweeps where 200+ aggressors push the
     sync timeout budget.
+
+    T20 parameters:
+      * ``aggressor_plmn`` — glob (e.g. ``"72411"`` or ``"724*"``)
+        applied to each candidate's PLMN before any math runs.
+        ``None`` keeps every aggressor (legacy behaviour).
+      * ``victim_n_rx_antennas`` — receiver array size used together
+        with each aggressor's ``n_tx_antennas`` to derive the MIMO
+        diversity-gain offset on the per-link Rx power.
     """
     contributions: List[InterferenceContribution] = []
     operator_by_id: dict = {}
+    plmn_by_id: Dict[str, Optional[str]] = {}
     co_count = 0
     adj_count = 0
     in_radius = 0
+    n_filtered = 0
     for c in candidates:
+        if not plmn_matches(c.plmn, aggressor_plmn):
+            n_filtered += 1
+            continue
         d_km = haversine_km(victim_lat, victim_lon, c.lat, c.lon)
         if d_km > search_radius_km or d_km <= 0.001:
             continue
         in_radius += 1
         pl_db = _free_space_path_loss_db(d_km, c.f_hz)
+        mimo_db = mimo_diversity_gain_db(c.n_tx_antennas, victim_n_rx_antennas)
         contrib = build_contribution(
             aggressor_id=c.aggressor_id,
             distance_km=d_km,
@@ -349,6 +437,8 @@ def compute_interference_fspl(
             path_loss_db=pl_db,
             include_aci=include_aci,
             aci_floor_db=aci_floor_db,
+            plmn=c.plmn,
+            mimo_gain_db=mimo_db,
         )
         if contrib.aci_db == 0.0:
             co_count += 1
@@ -356,12 +446,19 @@ def compute_interference_fspl(
             adj_count += 1
         contributions.append(contrib)
         operator_by_id[contrib.aggressor_id] = c.operator
+        plmn_by_id[contrib.aggressor_id] = c.plmn
 
     i_dbm = aggregate_interference_dbm(contributions)
     n_dbm = thermal_noise_dbm(victim_bw_hz, noise_figure_db)
     i_n = i_over_n_db(i_dbm, n_dbm)
     sinr = sinr_db(victim_signal_dbm, i_dbm, n_dbm)
     n_contrib = sum(1 for c in contributions if math.isfinite(c.rx_power_dbm))
+    by_operator = aggregate_by_key(
+        contributions, lambda c: operator_by_id.get(c.aggressor_id) or "unknown"
+    )
+    by_plmn = aggregate_by_key(
+        contributions, lambda c: plmn_by_id.get(c.aggressor_id) or "unknown"
+    )
 
     return InterferenceComputation(
         contributions=contributions,
@@ -374,4 +471,30 @@ def compute_interference_fspl(
         n_in_radius=in_radius,
         n_contributing=n_contrib,
         operator_by_id=operator_by_id,
+        plmn_by_id=plmn_by_id,
+        n_filtered_by_plmn=n_filtered,
+        aggregate_by_operator_dbm=by_operator,
+        aggregate_by_plmn_dbm=by_plmn,
     )
+
+
+def aggregate_by_key(
+    contributions: Iterable[InterferenceContribution],
+    key_fn,
+) -> Dict[str, float]:
+    """Linear-domain sum of Rx power grouped by an arbitrary string key.
+
+    Returns a ``{key: aggregate_dbm}`` map skipping any group whose
+    finite contributions sum to zero (entirely floored). Used by the
+    MOCN response shape to surface ``aggregate_by_operator_dbm`` and
+    ``aggregate_by_plmn_dbm``.
+    """
+    groups: Dict[str, float] = {}
+    for c in contributions:
+        if not math.isfinite(c.rx_power_dbm):
+            continue
+        k = key_fn(c)
+        groups[k] = groups.get(k, 0.0) + 10.0 ** (c.rx_power_dbm / 10.0)
+    return {
+        k: 10.0 * math.log10(v) for k, v in groups.items() if v > 0
+    }

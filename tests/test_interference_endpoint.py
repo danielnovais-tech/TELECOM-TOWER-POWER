@@ -159,7 +159,8 @@ def test_interference_sionna_rt_available_uses_engine(app_client, monkeypatch):
             return True
 
         def predict_basic_loss(self, *, f_hz, d_km, h_m, htg, hrg,
-                               phi_t, lam_t, phi_r, lam_r):
+                               phi_t, lam_t, phi_r, lam_r,
+                               num_tx_ant=1, num_rx_ant=1):
             # Constant 110 dB, ignoring geometry — deterministic for assertion.
             return LossEstimate(basic_loss_db=110.0, engine="sionna-rt")
 
@@ -194,7 +195,8 @@ def test_interference_sionna_rt_skips_failed_links(app_client, monkeypatch):
             return True
 
         def predict_basic_loss(self, *, f_hz, d_km, h_m, htg, hrg,
-                               phi_t, lam_t, phi_r, lam_r):
+                               phi_t, lam_t, phi_r, lam_r,
+                               num_tx_ant=1, num_rx_ant=1):
             self._n += 1
             # Second call → None (simulate RX outside scene bbox).
             if self._n == 2:

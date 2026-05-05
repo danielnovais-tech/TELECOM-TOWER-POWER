@@ -108,6 +108,7 @@ def _build_response(
     n_candidates: int,
     n_in_radius: int,
     n_path_loss_failures: int,
+    n_filtered_by_plmn: int = 0,
     runtime_ms: float,
 ) -> Dict[str, Any]:
     """Format the same response shape as the FSPL worker.
@@ -118,6 +119,7 @@ def _build_response(
     raw contributions + an extra failure counter.
     """
     from interference_engine import (
+        aggregate_by_key,
         aggregate_interference_dbm,
         i_over_n_db as _i_over_n,
         sinr_db as _sinr,
@@ -156,9 +158,19 @@ def _build_response(
             "path_loss_db": round(c.path_loss_db, 2),
             "aci_db": round(c.aci_db, 2),
             "rx_power_dbm": round(c.rx_power_dbm, 2),
+            "plmn": c.plmn,
+            "mimo_gain_db": round(c.mimo_gain_db, 2),
         })
 
     n_contrib = sum(1 for c in contributions if math.isfinite(c.rx_power_dbm))
+
+    # T20 — MOCN aggregation maps.
+    agg_by_op = aggregate_by_key(
+        contributions, lambda c: operator_by_id.get(c.aggressor_id, "unknown")
+    )
+    agg_by_plmn = aggregate_by_key(
+        contributions, lambda c: c.plmn or "unknown"
+    )
 
     return {
         "victim": victim,
@@ -175,6 +187,10 @@ def _build_response(
         "sinr_db": (round(sinr, 2) if sinr is not None else None),
         "top_n_aggressors": top_out,
         "runtime_ms": round(runtime_ms, 1),
+        # T20 MOCN fields
+        "n_filtered_by_plmn": n_filtered_by_plmn,
+        "aggregate_by_operator_dbm": {k: round(v, 2) for k, v in agg_by_op.items()},
+        "aggregate_by_plmn_dbm": {k: round(v, 2) for k, v in agg_by_plmn.items()},
     }
 
 
@@ -228,6 +244,8 @@ def run(job_id: str, tier: str = "") -> Dict[str, Any]:
         f_hz=float(victim_dict["freq_mhz"]) * 1e6,
         bw_hz=float(victim_dict["bw_mhz"]) * 1e6,
         rx_gain_dbi=float(victim_dict.get("rx_gain_dbi", 12.0)),
+        plmn=victim_dict.get("plmn"),
+        n_rx_antennas=int((victim_dict.get("rx_mimo") or 1) or 1),
     )
 
     search_radius_km = float(request_body.get("search_radius_km", 30.0))
@@ -251,6 +269,8 @@ def run(job_id: str, tier: str = "") -> Dict[str, Any]:
             f_hz=float(c["f_hz"]),
             bw_hz=float(c["bw_hz"]),
             eirp_dbm=float(c["eirp_dbm"]),
+            plmn=c.get("plmn") or None,
+            n_tx_antennas=int(c.get("n_tx_antennas", 1) or 1),
         ))
 
     n_in_radius = len(aggressors)
@@ -265,6 +285,7 @@ def run(job_id: str, tier: str = "") -> Dict[str, Any]:
             aggressors=aggressors,
             include_aci=bool(request_body.get("include_aci", True)),
             aci_floor_db=request_body.get("aci_floor_db"),
+            aggressor_plmn=request_body.get("aggressor_plmn"),
         )
     except EngineUnavailable as exc:
         _fail(job_id, f"sionna-rt unavailable mid-run: {exc}")
@@ -279,6 +300,7 @@ def run(job_id: str, tier: str = "") -> Dict[str, Any]:
         n_candidates=len(candidates_raw),
         n_in_radius=n_in_radius,
         n_path_loss_failures=result.n_path_loss_failures,
+        n_filtered_by_plmn=result.n_filtered_by_plmn,
         runtime_ms=result.runtime_ms,
     )
 

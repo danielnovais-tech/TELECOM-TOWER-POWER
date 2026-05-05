@@ -431,6 +431,7 @@ def _process_interference_job(job_id: str, tier: str = ""):
     """
     from interference_engine import (
         CandidateAggressor,
+        aggregate_by_key,
         compute_interference_fspl,
         top_n_contributions,
     )
@@ -464,6 +465,9 @@ def _process_interference_job(job_id: str, tier: str = ""):
 
     victim_f_hz = float(victim["freq_mhz"]) * 1e6
     victim_bw_hz = float(victim["bw_mhz"]) * 1e6
+    # T20 — MOCN/MIMO params from request body.
+    aggressor_plmn = request_body.get("aggressor_plmn")
+    victim_rx_mimo = int((victim.get("rx_mimo") or 1) or 1)
     comp = compute_interference_fspl(
         victim_lat=float(victim["lat"]),
         victim_lon=float(victim["lon"]),
@@ -476,6 +480,8 @@ def _process_interference_job(job_id: str, tier: str = ""):
         search_radius_km=float(request_body.get("search_radius_km", 30.0)),
         include_aci=bool(request_body.get("include_aci", True)),
         aci_floor_db=request_body.get("aci_floor_db"),
+        aggressor_plmn=aggressor_plmn,
+        victim_n_rx_antennas=victim_rx_mimo,
     )
 
     top_n = int(request_body.get("top_n", 10))
@@ -494,7 +500,17 @@ def _process_interference_job(job_id: str, tier: str = ""):
             "path_loss_db": round(c.path_loss_db, 2),
             "aci_db": round(c.aci_db, 2),
             "rx_power_dbm": round(c.rx_power_dbm, 2),
+            "plmn": c.plmn,
+            "mimo_gain_db": round(c.mimo_gain_db, 2),
         })
+
+    # T20 — aggregate maps keyed by operator name and PLMN.
+    agg_by_op = aggregate_by_key(
+        comp.contributions, lambda c: comp.operator_by_id.get(c.aggressor_id, "unknown")
+    )
+    agg_by_plmn = aggregate_by_key(
+        comp.contributions, lambda c: comp.plmn_by_id.get(c.aggressor_id) or "unknown"
+    )
 
     response = {
         "victim": victim,
@@ -512,6 +528,10 @@ def _process_interference_job(job_id: str, tier: str = ""):
         "sinr_db": (round(comp.sinr_db, 2)
                     if comp.sinr_db is not None else None),
         "top_n_aggressors": top_out,
+        # T20 MOCN fields
+        "n_filtered_by_plmn": comp.n_filtered_by_plmn,
+        "aggregate_by_operator_dbm": {k: round(v, 2) for k, v in agg_by_op.items()},
+        "aggregate_by_plmn_dbm": {k: round(v, 2) for k, v in agg_by_plmn.items()},
     }
 
     tier_segment = f"{tier}/" if tier else ""

@@ -79,6 +79,7 @@ milestone entry for the delivery checklist.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 from typing import Optional, Sequence
@@ -124,6 +125,24 @@ def _has_gpu_stack() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _planar_array_shape(n: int) -> tuple:
+    """Factor a MIMO antenna count into ``(num_rows, num_cols)`` for
+    a Sionna ``PlanarArray``.
+
+    Returns a layout with ``rows <= cols`` and ``rows * cols == n``
+    when possible. Falls back to a 1xn line array if ``n`` is prime
+    (e.g. 5 -> (1, 5)). Non-positive inputs collapse to (1, 1).
+    Common cellular configs: 1->(1,1), 2->(1,2), 4->(2,2), 8->(2,4),
+    16->(4,4), 32->(4,8), 64->(8,8).
+    """
+    n_int = max(1, int(n))
+    rows = int(math.isqrt(n_int))
+    while rows > 1 and n_int % rows != 0:
+        rows -= 1
+    cols = n_int // rows
+    return rows, cols
 
 
 def _import_sionna_rt():
@@ -189,6 +208,8 @@ class SionnaRTEngine(RFEngine):
         zone: Optional[int] = None,
         time_pct: Optional[float] = None,
         loc_pct: Optional[float] = None,
+        num_tx_ant: int = 1,
+        num_rx_ant: int = 1,
     ) -> Optional[LossEstimate]:
         """Single-link prediction: 1×1 raster at the receiver location.
 
@@ -197,12 +218,21 @@ class SionnaRTEngine(RFEngine):
         ``loc_pct``) are accepted for interface compatibility but
         discarded — the ray tracer derives all geometry from the
         scene file and the Tx/Rx lat/lon pair.
+
+        T20 — ``num_tx_ant`` / ``num_rx_ant`` configure the planar
+        arrays at both ends so :func:`PathSolver` returns the full
+        H matrix (shape ``[..., num_rx_ant, num_tx_ant, max_paths]``).
+        ``Σ|a|²`` then naturally captures Frobenius-norm channel gain
+        and the resulting ``loss_db`` already reflects MIMO array gain
+        — no separate diversity offset must be applied at the caller.
         """
         try:
             return self._run_trace(
                 f_hz=f_hz, htg=htg, hrg=hrg,
                 phi_t=phi_t, lam_t=lam_t,
                 phi_r=phi_r, lam_r=lam_r,
+                num_tx_ant=int(num_tx_ant),
+                num_rx_ant=int(num_rx_ant),
             )
         except Exception:
             logger.exception("sionna-rt predict_basic_loss failed; returning None")
@@ -218,6 +248,8 @@ class SionnaRTEngine(RFEngine):
         lam_t: float,
         phi_r: float,
         lam_r: float,
+        num_tx_ant: int = 1,
+        num_rx_ant: int = 1,
     ) -> Optional[LossEstimate]:
         """Single-link prediction via Sionna RT paths mode.
 
@@ -289,12 +321,19 @@ class SionnaRTEngine(RFEngine):
         scene = srt.load_scene(scene_xml)
         scene.frequency = float(f_hz)
 
-        # Isotropic single-element arrays — path gain is antenna-independent.
+        # T20 — MIMO planar arrays. Path gain is antenna-power-pattern
+        # independent for ``pattern=iso``, but the array layout still
+        # changes the effective number of paths in ``paths.a``
+        # (shape last-dim = max_paths, with rx_ant/tx_ant being separate
+        # axes), so Σ|a|² grows by ~10·log10(N_tx · N_rx) for coherent
+        # combining — the desired MIMO array gain.
+        tx_rows, tx_cols = _planar_array_shape(num_tx_ant)
+        rx_rows, rx_cols = _planar_array_shape(num_rx_ant)
         scene.tx_array = srt.PlanarArray(
-            num_rows=1, num_cols=1, pattern="iso", polarization="V",
+            num_rows=tx_rows, num_cols=tx_cols, pattern="iso", polarization="V",
         )
         scene.rx_array = srt.PlanarArray(
-            num_rows=1, num_cols=1, pattern="iso", polarization="V",
+            num_rows=rx_rows, num_cols=rx_cols, pattern="iso", polarization="V",
         )
         scene.add(srt.Transmitter(name="tx", position=_proj(phi_t, lam_t, float(htg))))
         scene.add(srt.Receiver(name="rx",    position=_proj(phi_r, lam_r, float(hrg))))
@@ -320,6 +359,8 @@ class SionnaRTEngine(RFEngine):
                 "scene_path": scene_dir,
                 "mitsuba_variant": variant,
                 "frequency_hz": float(f_hz),
+                "num_tx_ant": int(num_tx_ant),
+                "num_rx_ant": int(num_rx_ant),
             },
         )
 

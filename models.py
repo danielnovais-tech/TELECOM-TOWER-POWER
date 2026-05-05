@@ -28,6 +28,17 @@ class Tower(Base):
     # OWASP A01: per-row tenant scope. Pre-existing imports (Anatel,
     # OpenCellID, …) are owned by "system" and are read-only for tenants.
     owner = Column(Text, nullable=False, server_default="system", index=True)
+    # T20 — MOCN attribution + MIMO array geometry.
+    # ``plmn`` is the 5-or-6-digit MCC+MNC string (Brazil 724xx). NULL
+    # for legacy rows from importers that pre-date T20; the interference
+    # endpoint treats NULL as "unknown operator" and excludes such rows
+    # from any explicit ``aggressor_plmn`` filter.
+    plmn = Column(String(6), index=True)
+    # ``n_tx_antennas`` is the transmit-array element count for MIMO
+    # diversity-gain accounting (FSPL/P.1812) and Sionna RT planar-array
+    # configuration. Defaults to 1 (SISO) so legacy rows produce the
+    # same math as before T20.
+    n_tx_antennas = Column(Integer, nullable=False, server_default="1")
 
 
 class BatchJob(Base):

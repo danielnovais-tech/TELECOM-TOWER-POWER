@@ -249,6 +249,10 @@ def parse_opencellid_csv(
             bands = _RADIO_BANDS.get(radio, ["Unknown"])
             power = _RADIO_POWER.get(radio, 43.0)
 
+            # T20 — MOCN attribution. Build PLMN as MCC + zero-padded MNC
+            # (Brazilian MCC is "724"; MNCs are 2-digit per ITU/ANATEL).
+            plmn = f"{BRAZIL_MCC}{mnc.zfill(2)}" if mnc else None
+
             towers.append({
                 "id": tower_id,
                 "lat": lat,
@@ -257,6 +261,7 @@ def parse_opencellid_csv(
                 "operator": operator,
                 "bands": bands,
                 "power_dbm": power,
+                "plmn": plmn,
             })
 
             if limit and len(towers) >= limit:

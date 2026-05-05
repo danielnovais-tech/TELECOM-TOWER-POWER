@@ -203,3 +203,210 @@ def test_top_n_orders_descending_drops_minus_inf():
 
 def test_top_n_zero_returns_empty():
     assert top_n_contributions([_contrib(-90)], n=0) == []
+
+
+# ── T20: MIMO diversity gain ────────────────────────────────────
+
+from interference_engine import mimo_diversity_gain_db  # noqa: E402
+
+
+def test_mimo_siso_is_zero():
+    assert mimo_diversity_gain_db(1, 1) == pytest.approx(0.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("n_tx,n_rx,expected", [
+    (2, 2, 3.0),    # min(2,2)=2  → 3 * log2(2) = 3.0
+    (4, 4, 6.0),    # min=4 → 3 * 2 = 6.0
+    (8, 8, 9.0),    # min=8 → 3 * 3 = 9.0 (cap)
+    (16, 16, 9.0),  # capped at 9.0
+    (4, 2, 3.0),    # min(4,2)=2
+    (2, 4, 3.0),    # min(2,4)=2
+])
+def test_mimo_diversity_gain_values(n_tx, n_rx, expected):
+    assert mimo_diversity_gain_db(n_tx, n_rx) == pytest.approx(expected, abs=0.01)
+
+
+# ── T20: PLMN glob filter ───────────────────────────────────────
+
+from interference_engine import plmn_matches  # noqa: E402
+
+
+def test_plmn_matches_none_pattern_always_true():
+    assert plmn_matches("72411", None) is True
+    assert plmn_matches(None, None) is True
+
+
+def test_plmn_matches_exact():
+    assert plmn_matches("72411", "72411") is True
+    assert plmn_matches("72405", "72411") is False
+
+
+def test_plmn_matches_glob():
+    assert plmn_matches("72411", "724*") is True
+    assert plmn_matches("72499", "724*") is True
+    assert plmn_matches("40499", "724*") is False
+
+
+def test_plmn_matches_null_plmn_with_set_pattern():
+    """NULL plmn vs explicit filter → False (don't leak unknown PLMNs)."""
+    assert plmn_matches(None, "72411") is False
+    assert plmn_matches(None, "724*") is False
+
+
+# ── T20: build_contribution carries plmn + mimo_gain_db ────────
+
+def test_build_contribution_t20_fields():
+    c = build_contribution(
+        aggressor_id="x",
+        distance_km=5.0,
+        aggressor_f_hz=2600e6, aggressor_bw_hz=20e6,
+        aggressor_eirp_dbm=46.0,
+        victim_f_hz=2600e6, victim_bw_hz=20e6,
+        rx_gain_dbi=12.0, path_loss_db=100.0,
+        plmn="72411", mimo_gain_db=3.0,
+    )
+    assert c.plmn == "72411"
+    assert c.mimo_gain_db == pytest.approx(3.0)
+    # mimo_gain_db lifts rx_power_dbm by 3 vs no MIMO
+    c0 = build_contribution(
+        aggressor_id="x",
+        distance_km=5.0,
+        aggressor_f_hz=2600e6, aggressor_bw_hz=20e6,
+        aggressor_eirp_dbm=46.0,
+        victim_f_hz=2600e6, victim_bw_hz=20e6,
+        rx_gain_dbi=12.0, path_loss_db=100.0,
+    )
+    assert c.rx_power_dbm == pytest.approx(c0.rx_power_dbm + 3.0, abs=0.01)
+
+
+# ── T20: aggregate_by_key ───────────────────────────────────────
+
+from interference_engine import aggregate_by_key  # noqa: E402
+
+
+def _c_with_plmn(rx_dbm: float, plmn: str | None) -> InterferenceContribution:
+    """Helper: InterferenceContribution with arbitrary plmn and rx_power_dbm."""
+    return InterferenceContribution(
+        aggressor_id="x",
+        distance_km=1.0,
+        aggressor_f_hz=2600e6, aggressor_bw_hz=20e6,
+        eirp_dbm=46.0,
+        path_loss_db=100.0,
+        aci_db=0.0,
+        rx_power_dbm=rx_dbm,
+        plmn=plmn,
+        mimo_gain_db=0.0,
+    )
+
+
+def test_aggregate_by_key_groups_by_plmn():
+    cs = [
+        _c_with_plmn(-90.0, "72411"),
+        _c_with_plmn(-90.0, "72411"),   # same PLMN → sum in mW
+        _c_with_plmn(-80.0, "72405"),
+    ]
+    result = aggregate_by_key(cs, lambda c: c.plmn or "unknown")
+    # two -90 dBm → 2×10^(-9) mW → -86.99 dBm
+    assert result["72411"] == pytest.approx(-90.0 + 10 * math.log10(2), abs=0.01)
+    assert result["72405"] == pytest.approx(-80.0, abs=0.01)
+
+
+def test_aggregate_by_key_skips_minus_inf():
+    cs = [
+        _c_with_plmn(float("-inf"), "72411"),
+        _c_with_plmn(-80.0, "72411"),
+    ]
+    result = aggregate_by_key(cs, lambda c: c.plmn or "unknown")
+    assert result["72411"] == pytest.approx(-80.0, abs=0.01)
+
+
+# ── T20: compute_interference_fspl PLMN filter + MIMO ──────────
+
+from interference_engine import CandidateAggressor, compute_interference_fspl  # noqa: E402
+
+
+def _cand(agg_id: str, plmn: str | None = None, n_tx: int = 1):
+    return CandidateAggressor(
+        aggressor_id=agg_id,
+        operator="TestOp",
+        lat=-23.55, lon=-46.63,
+        height_m=40.0,
+        f_hz=2600e6,
+        bw_hz=20e6,
+        eirp_dbm=60.0,
+        plmn=plmn,
+        n_tx_antennas=n_tx,
+    )
+
+
+def test_fspl_plmn_filter_excludes_mismatches():
+    """Aggressors whose PLMN fails the glob must be counted in n_filtered."""
+    victim_lat, victim_lon = -23.56, -46.64
+    cands = [
+        _cand("a1", plmn="72411"),   # matches "724*"
+        _cand("a2", plmn="72405"),   # matches "724*"
+        _cand("a3", plmn="40499"),   # does NOT match
+        _cand("a4", plmn=None),      # NULL plmn → does NOT match explicit glob
+    ]
+    comp = compute_interference_fspl(
+        victim_lat=victim_lat, victim_lon=victim_lon,
+        victim_f_hz=2600e6, victim_bw_hz=20e6,
+        victim_rx_gain_dbi=12.0,
+        victim_signal_dbm=None,
+        noise_figure_db=5.0,
+        candidates=cands,
+        search_radius_km=200.0,
+        aggressor_plmn="724*",
+    )
+    # a3 + a4 filtered; a1 + a2 in radius → contribute
+    assert comp.n_filtered_by_plmn == 2
+    contrib_ids = {c.aggressor_id for c in comp.contributions}
+    assert "a1" in contrib_ids
+    assert "a2" in contrib_ids
+    assert "a3" not in contrib_ids
+    assert "a4" not in contrib_ids
+
+
+def test_fspl_plmn_none_filter_passes_all():
+    """aggressor_plmn=None (default) must not filter anything."""
+    cands = [
+        _cand("a1", plmn="72411"),
+        _cand("a2", plmn=None),
+    ]
+    comp = compute_interference_fspl(
+        victim_lat=-23.56, victim_lon=-46.64,
+        victim_f_hz=2600e6, victim_bw_hz=20e6,
+        victim_rx_gain_dbi=12.0,
+        victim_signal_dbm=None,
+        noise_figure_db=5.0,
+        candidates=cands,
+        search_radius_km=200.0,
+    )
+    assert comp.n_filtered_by_plmn == 0
+
+
+def test_fspl_mimo_diversity_gain_applied():
+    """2x2 MIMO should raise rx_power_dbm by ~3 dB vs SISO."""
+    cand_siso = [_cand("x", plmn="72411", n_tx=1)]
+    cand_mimo = [_cand("x", plmn="72411", n_tx=2)]
+    siso = compute_interference_fspl(
+        victim_lat=-23.56, victim_lon=-46.64,
+        victim_f_hz=2600e6, victim_bw_hz=20e6,
+        victim_rx_gain_dbi=12.0,
+        victim_signal_dbm=None,
+        noise_figure_db=5.0,
+        candidates=cand_siso, search_radius_km=200.0,
+        victim_n_rx_antennas=1,
+    )
+    mimo = compute_interference_fspl(
+        victim_lat=-23.56, victim_lon=-46.64,
+        victim_f_hz=2600e6, victim_bw_hz=20e6,
+        victim_rx_gain_dbi=12.0,
+        victim_signal_dbm=None,
+        noise_figure_db=5.0,
+        candidates=cand_mimo, search_radius_km=200.0,
+        victim_n_rx_antennas=2,
+    )
+    diff = mimo.contributions[0].rx_power_dbm - siso.contributions[0].rx_power_dbm
+    assert diff == pytest.approx(3.0, abs=0.01)
+
