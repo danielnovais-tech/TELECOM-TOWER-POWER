@@ -8,6 +8,7 @@ fleet so the test runs offline (no DB).
 """
 from __future__ import annotations
 
+import io
 import os
 import sys
 
@@ -254,3 +255,22 @@ def test_interference_co_channel_only_drops_adjacent(app_client, monkeypatch):
     assert body["co_channel_count"] == 1
     aggressor_ids = {a["aggressor_id"] for a in body["top_n_aggressors"]}
     assert aggressor_ids == {"cc-1"}
+
+
+def test_interference_pdf_returns_application_pdf(app_client, monkeypatch):
+    import telecom_tower_power_api as ttpa
+
+    monkeypatch.setattr(
+        ttpa,
+        "render_interference_pdf",
+        lambda request_body, response_body: io.BytesIO(b"%PDF-1.7 fake interference report"),
+    )
+
+    r = app_client.post(
+        "/coverage/interference",
+        json=_body(report_format="pdf"),
+        headers={"X-API-Key": "x"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/pdf")
+    assert r.content.startswith(b"%PDF-1.7")

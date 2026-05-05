@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field, model_validator
 # uvicorn is imported lazily inside ``__main__`` so the module loads cleanly
 # under AWS Lambda (Mangum), which does not bundle uvicorn.
 from pdf_generator import build_pdf_report
+from tier1_pdf_reports import render_coverage_predict_pdf, render_interference_pdf
 from srtm_elevation import SRTMReader
 import stripe_billing
 from tower_db import TowerStore
@@ -1816,6 +1817,10 @@ class CoveragePredictRequest(BaseModel):
         description="s3:// URI of the Mitsuba scene bundle. Required "
                     "when engine='sionna_rt' / 'sionna-rt'.",
     )
+    report_format: Literal["json", "pdf"] = Field(
+        default="json",
+        description="Response format. 'pdf' returns an engineering report rendered with WeasyPrint.",
+    )
 
 
 @app.post("/coverage/predict")
@@ -1844,6 +1849,10 @@ async def coverage_predict(
     """
     # Lazy import to keep cold-start cost off endpoints that don't use ML.
     import coverage_predict as _cp
+
+    if body.report_format == "pdf":
+        raw_key = request.headers.get("x-api-key", "") or ""
+        _enforce_pdf_quota(raw_key, _key["tier"])
 
     # ── Tier + effective engine ────────────────────────────────────
     caller_tier: Tier = _key["tier"]
@@ -1921,7 +1930,19 @@ async def coverage_predict(
             ),
         )
         accepted = await _rt_submit(rt_req, request)
-        return JSONResponse(status_code=202, content=accepted.model_dump())
+        accepted_payload = accepted.model_dump()
+        if body.report_format == "pdf":
+            request_payload = body.model_dump(mode="json")
+            request_payload["tier"] = _key["tier"].value
+            pdf_buffer = render_coverage_predict_pdf(request_payload, accepted_payload)
+            filename = f"coverage_predict_{accepted_payload.get('job_id', 'queued')}.pdf"
+            return StreamingResponse(
+                pdf_buffer,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f"attachment; filename={filename}"},
+                status_code=200,
+            )
+        return JSONResponse(status_code=202, content=accepted_payload)
 
     # ── Grid mode ──────────────────────────────────────────────────
     if body.bbox is not None:
@@ -1945,7 +1966,7 @@ async def coverage_predict(
         signals = [p.signal_dbm for p in grid]
         feasible_pct = round(100.0 * sum(1 for p in grid if p.feasible) / len(grid), 1)
         model = _cp.get_model()
-        return {
+        payload = {
             "mode": "grid",
             "engine_used": effective_engine,
             "tx": {"lat": tx_lat, "lon": tx_lon, "height_m": tx_h, "power_dbm": tx_power, "freq_hz": f_hz},
@@ -1968,6 +1989,14 @@ async def coverage_predict(
                 for p in grid
             ],
         }
+        if body.report_format == "pdf":
+            pdf_buffer = render_coverage_predict_pdf(body.model_dump(mode="json"), payload)
+            return StreamingResponse(
+                pdf_buffer,
+                media_type="application/pdf",
+                headers={"Content-Disposition": "attachment; filename=coverage_predict_grid.pdf"},
+            )
+        return payload
 
     # ── Point mode ─────────────────────────────────────────────────
     if body.rx_lat is None or body.rx_lon is None:
@@ -2016,6 +2045,13 @@ async def coverage_predict(
     }
     if body.explain:
         response["explanation"] = _cp.explain(response)
+    if body.report_format == "pdf":
+        pdf_buffer = render_coverage_predict_pdf(body.model_dump(mode="json"), response)
+        return StreamingResponse(
+            pdf_buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=coverage_predict_point.pdf"},
+        )
     return response
 
 
@@ -2843,6 +2879,10 @@ class InterferenceRequest(BaseModel):
     # Aggressors with a NULL ``plmn`` only match when the filter is None.
     aggressor_plmn: Optional[str] = Field(default=None, max_length=10,
         description="PLMN glob filter for aggressors (e.g. '72411' or '724*')")
+    report_format: Literal["json", "pdf"] = Field(
+        default="json",
+        description="Response format. 'pdf' returns an engineering report rendered with WeasyPrint.",
+    )
 
 
 class _AggressorOut(BaseModel):
@@ -3121,7 +3161,7 @@ async def coverage_interference(
     agg_by_op = {k: round(v, 2) for k, v in agg_by_op.items()}
     agg_by_plmn = {k: round(v, 2) for k, v in agg_by_plmn.items()}
 
-    return InterferenceResponse(
+    response = InterferenceResponse(
         victim={
             "lat": body.victim.lat,
             "lon": body.victim.lon,
@@ -3148,6 +3188,16 @@ async def coverage_interference(
         aggregate_by_operator_dbm=agg_by_op,
         aggregate_by_plmn_dbm=agg_by_plmn,
     )
+    if body.report_format == "pdf":
+        raw_key = request.headers.get("x-api-key", "") or ""
+        _enforce_pdf_quota(raw_key, key_data["tier"])
+        pdf_buffer = render_interference_pdf(body.model_dump(mode="json"), response.model_dump(mode="json"))
+        return StreamingResponse(
+            pdf_buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=interference_report.pdf"},
+        )
+    return response
 
 
 # ─────────────────────────────────────────────────────────────────────

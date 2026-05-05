@@ -10,6 +10,7 @@ deeper coverage in ``test_sionna_rt_raster_endpoint.py``.
 """
 from __future__ import annotations
 
+import io
 import os
 import sys
 
@@ -202,3 +203,45 @@ def test_hyphen_alias_sionna_rt_enqueues(app_client):
     r = client.post("/coverage/predict", json=body, headers={"X-API-Key": "x"})
     assert r.status_code == 202, r.text
     assert len(sqs.sent) == 1
+
+
+def test_coverage_predict_pdf_returns_application_pdf(app_client, monkeypatch):
+    """report_format='pdf' returns a PDF receipt/body instead of JSON."""
+    client, _ = app_client
+    import telecom_tower_power_api as ttpa
+
+    monkeypatch.setattr(
+        ttpa,
+        "render_coverage_predict_pdf",
+        lambda request_body, response_body: io.BytesIO(b"%PDF-1.7 fake coverage report"),
+    )
+
+    async def _fake_profile(*args, **kwargs):
+        return [760.0, 761.0, 762.0]
+
+    class _Result:
+        signal_dbm = -78.5
+        feasible = True
+        confidence = 0.93
+        source = "local-model"
+        model_version = "test-v1"
+        features = {"terrain_roughness": 12.0}
+        clutter_class = 21
+        clutter_label = "Urban"
+
+    monkeypatch.setattr(ttpa.platform.elevation, "get_profile", _fake_profile)
+    import coverage_predict as _cp
+    monkeypatch.setattr(_cp, "predict_signal", lambda **kwargs: _Result())
+
+    body = _payload(
+        engine="auto",
+        bbox=None,
+        scene_s3_uri=None,
+        rx_lat=-23.55,
+        rx_lon=-46.63,
+        report_format="pdf",
+    )
+    r = client.post("/coverage/predict", json=body, headers={"X-API-Key": "x"})
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/pdf")
+    assert r.content.startswith(b"%PDF-1.7")

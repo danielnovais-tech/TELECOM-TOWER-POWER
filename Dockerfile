@@ -23,7 +23,11 @@ RUN groupadd --gid 1000 appuser && \
     useradd --uid 1000 --gid 1000 --create-home appuser
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget git ca-certificates && \
+    apt-get install -y --no-install-recommends \
+        wget git ca-certificates \
+        libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
+        libgdk-pixbuf-2.0-0 libffi8 shared-mime-info \
+        fonts-dejavu-core && \
     rm -rf /var/lib/apt/lists/*
 
 RUN wget -qO /tmp/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && \
@@ -59,6 +63,7 @@ COPY telecom_tower_power.py .
 COPY worker.py .
 COPY s3_storage.py .
 COPY pdf_generator.py .
+COPY tier1_pdf_reports.py .
 COPY srtm_elevation.py .
 COPY srtm_prefetch.py .
 COPY bedrock_service.py .
