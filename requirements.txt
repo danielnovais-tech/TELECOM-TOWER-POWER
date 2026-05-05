@@ -52,7 +52,7 @@ strawberry-graphql[fastapi]>=0.235.0
 # Only loaded when OTEL_ENABLED=true; see tracing.py.
 opentelemetry-api>=1.27.0
 opentelemetry-sdk>=1.27.0
-opentelemetry-exporter-otlp-proto-grpc>=1.27.0
+opentelemetry-exporter-otlp-proto-grpc>=1.41.1
 opentelemetry-instrumentation-fastapi>=0.48b0
 opentelemetry-instrumentation-requests>=0.48b0
 
