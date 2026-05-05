@@ -44,4 +44,4 @@ osmium>=3.7,<4.0
 
 # ── Observability for the GPU worker ─────────────────────────────────
 prometheus-client>=0.20,<1.0
-boto3>=1.34,<2.0  # SQS consumer + S3 uploader
+boto3>=1.43.2,<2.0  # SQS consumer + S3 uploader
