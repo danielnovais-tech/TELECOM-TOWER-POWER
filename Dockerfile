@@ -6,7 +6,7 @@
 #     AUDIT_KMS_KEY_ID empty. No code changes required; backends are
 #     selected at runtime by llm_provider.py and boto3 endpoint env vars.
 # ── Stage 1: Build React frontend ──────────────────────────
-FROM node:22-alpine AS frontend-build
+FROM node:25-alpine AS frontend-build
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --ignore-scripts 2>/dev/null || npm install
