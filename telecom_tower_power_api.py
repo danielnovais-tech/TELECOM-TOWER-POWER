@@ -4132,6 +4132,143 @@ async def admin_cache_invalidate_towers(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Internal Tier-1 upload (admin-scope blob store)
+# ─────────────────────────────────────────────────────────────────────
+# Restricted to ADMIN_API_KEYS (Tier-1). Used by internal tooling to
+# stage CSV/JSON/PDF/ZIP artefacts in the configured object store
+# (MinIO on-prem, S3 in SaaS) without going through the batch pipeline.
+
+_INTERNAL_UPLOAD_MAX_BYTES = int(
+    os.getenv("INTERNAL_UPLOAD_MAX_BYTES", str(100 * 1024 * 1024))  # 100 MB
+)
+_INTERNAL_UPLOAD_ALLOWED_TYPES = {
+    t.strip().lower()
+    for t in os.getenv(
+        "INTERNAL_UPLOAD_ALLOWED_TYPES",
+        "text/csv,application/json,application/pdf,application/zip,"
+        "application/octet-stream,application/geo+json,"
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ).split(",")
+    if t.strip()
+}
+_INTERNAL_UPLOAD_PREFIX = os.getenv("INTERNAL_UPLOAD_PREFIX", "internal/uploads/")
+_SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _sanitize_upload_filename(raw: str) -> str:
+    """Reduce ``raw`` to a basename matching ``_SAFE_FILENAME_RE`` or raise."""
+    name = os.path.basename((raw or "").strip()) or "file"
+    # Strip any residual path-traversal artefacts.
+    name = name.replace("\x00", "").lstrip(".") or "file"
+    if len(name) > 200:
+        name = name[-200:]
+    if not _SAFE_FILENAME_RE.match(name):
+        raise HTTPException(
+            status_code=422,
+            detail="Filename must match [A-Za-z0-9._-]+ after basename stripping",
+        )
+    return name
+
+
+@app.post("/api/internal/upload", status_code=201)
+async def internal_upload(
+    request: Request,
+    upload: UploadFile = File(..., description="Arbitrary artefact to stage in object storage"),
+    admin_key: str = Depends(require_admin),
+) -> Dict:
+    """Stage a caller-supplied blob in object storage. Tier-1 (admin) only.
+
+    Streams the upload while computing SHA-256, enforces size + content-type
+    allowlists, and writes the object under ``INTERNAL_UPLOAD_PREFIX`` with
+    a date-partitioned, UUID-prefixed key. Filename is sanitised to a
+    conservative allowlist after basename stripping to defeat path
+    traversal. Records an audit row whether the upload succeeds or fails.
+    """
+    content_type = (upload.content_type or "application/octet-stream").lower().split(";", 1)[0].strip()
+    if content_type not in _INTERNAL_UPLOAD_ALLOWED_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Content-Type '{content_type}' not allowed for internal upload",
+        )
+    safe_name = _sanitize_upload_filename(upload.filename or "file")
+
+    sha = hashlib.sha256()
+    size = 0
+    chunks: List[bytes] = []
+    chunk_size = 1024 * 1024  # 1 MB
+    while True:
+        chunk = await upload.read(chunk_size)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > _INTERNAL_UPLOAD_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Upload exceeds maximum size of {_INTERNAL_UPLOAD_MAX_BYTES} bytes",
+            )
+        sha.update(chunk)
+        chunks.append(chunk)
+    if size == 0:
+        raise HTTPException(status_code=422, detail="Empty upload rejected")
+
+    digest = sha.hexdigest()
+    now = datetime.now(timezone.utc)
+    object_key = (
+        f"{_INTERNAL_UPLOAD_PREFIX}{now.strftime('%Y/%m/%d')}/"
+        f"{uuid.uuid4().hex}_{safe_name}"
+    )
+
+    try:
+        from s3_storage import put_bytes as _put_bytes
+        location = _put_bytes(object_key, b"".join(chunks), content_type=content_type)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("internal upload storage failure")
+        await _audit.log(
+            admin_key,
+            "admin.internal.upload.failed",
+            actor_email=_admin_email_for(admin_key),
+            tier="admin",
+            target=object_key,
+            ip=_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            metadata={
+                "filename": safe_name,
+                "content_type": content_type,
+                "size": size,
+                "sha256": digest,
+                "error": type(exc).__name__,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Storage backend unavailable")
+
+    await _audit.log(
+        admin_key,
+        "admin.internal.upload",
+        actor_email=_admin_email_for(admin_key),
+        tier="admin",
+        target=object_key,
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "filename": safe_name,
+            "content_type": content_type,
+            "size": size,
+            "sha256": digest,
+            "location": location,
+        },
+    )
+    return {
+        "object_key": object_key,
+        "location": location,
+        "size": size,
+        "sha256": digest,
+        "content_type": content_type,
+        "filename": safe_name,
+        "uploaded_at": now.isoformat(),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Dynamic CORS reflection for tenant ``frontend_url``
 # ─────────────────────────────────────────────────────────────────────
 # CORSMiddleware uses a static allow list, so per-tenant white-label

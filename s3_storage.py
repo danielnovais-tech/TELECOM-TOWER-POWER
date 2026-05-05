@@ -117,6 +117,42 @@ def download_result(job_id: str) -> Optional[bytes]:
         return f.read()
 
 
+def put_bytes(
+    key: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+) -> str:
+    """Store an arbitrary blob at ``key`` and return its storage location.
+
+    Returns ``s3://bucket/key`` when S3 is configured, else a local
+    filesystem path under ``RESULT_STORAGE_DIR``. Used by internal
+    upload endpoints that need to persist caller-supplied files
+    without the job-id / zip conventions of :func:`upload_result`.
+    """
+    if not key or key.startswith("/") or ".." in key.split("/"):
+        raise ValueError("Invalid object key")
+    if S3_BUCKET:
+        _get_s3_client().put_object(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Body=data,
+            ContentType=content_type,
+        )
+        location = f"s3://{S3_BUCKET}/{key}"
+        logger.info("Uploaded %s (%d bytes)", location, len(data))
+        return location
+
+    path = os.path.join(RESULT_DIR, key)
+    real = os.path.realpath(path)
+    if not real.startswith(os.path.realpath(RESULT_DIR)):
+        raise ValueError("Path traversal detected")
+    os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
+    with open(real, "wb") as f:
+        f.write(data)
+    logger.info("Saved locally %s (%d bytes)", real, len(data))
+    return real
+
+
 def get_presigned_url(job_id: str) -> Optional[str]:
     """Return a presigned download URL (S3 only).  Returns None for local."""
     if not S3_BUCKET:
