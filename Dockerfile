@@ -1,4 +1,10 @@
 # syntax=docker/dockerfile:1.7
+# Image is suitable for BOTH:
+#   * SaaS deployment (default) — uses Amazon Bedrock + S3 + KMS via env vars.
+#   * Self-hosted Enterprise (docker-compose.onprem.yml) — set
+#     LLM_PROVIDER=ollama, S3_ENDPOINT_URL=http://minio:9000, leave
+#     AUDIT_KMS_KEY_ID empty. No code changes required; backends are
+#     selected at runtime by llm_provider.py and boto3 endpoint env vars.
 # ── Stage 1: Build React frontend ──────────────────────────
 FROM node:22-alpine AS frontend-build
 WORKDIR /app
@@ -67,6 +73,7 @@ COPY tier1_pdf_reports.py .
 COPY srtm_elevation.py .
 COPY srtm_prefetch.py .
 COPY bedrock_service.py .
+COPY llm_provider.py .
 COPY coverage_predict.py .
 COPY coverage_model.npz .
 COPY itu_p1812.py .

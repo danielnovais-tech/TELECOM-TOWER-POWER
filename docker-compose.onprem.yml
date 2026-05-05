@@ -1,0 +1,377 @@
+# ─────────────────────────────────────────────────────────────────────
+# docker-compose.onprem.yml — Self-hosted, air-gapped Enterprise stack.
+#
+# Drop-in alternative to docker-compose.yml for customers who cannot
+# (or will not) use AWS services. Brings up:
+#
+#   * postgres + pgbouncer  (DB + connection pool)
+#   * redis                 (RQ jobs, SRTM cache)
+#   * minio                 (S3-compatible object store, replaces AWS S3)
+#   * ollama                (local Llama-3 — replaces AWS Bedrock)
+#   * api / worker / rq-worker / frontend / frontend-react
+#   * prometheus + grafana  (observability, fully local)
+#
+# What is intentionally OMITTED vs the SaaS stack:
+#   * stripe-webhook        (no commercial billing on-prem)
+#   * blackbox-exporter     (no Railway edge to probe)
+#   * jaeger                (optional; enable via --profile tracing)
+#   * SES/AWS SMTP secrets  (use any in-house SMTP relay via env vars)
+#   * KMS audit encryption  (AUDIT_KMS_KEY_ID left empty → cleartext JSON)
+#
+# Usage:
+#   cp .env.onprem.example .env
+#   # edit .env with site-local values
+#   docker compose -f docker-compose.onprem.yml up -d
+#   docker compose -f docker-compose.onprem.yml exec ollama \
+#       ollama pull llama3        # one-shot model download
+#
+# All secrets are read from ./secrets-onprem/* (file-based; never in
+# `docker inspect`). Bootstrap the directory with:
+#   mkdir -p secrets-onprem && \
+#   echo 'postgresql://telecom:CHANGE_ME@pgbouncer:5432/towers' > secrets-onprem/database_url && \
+#   echo 'CHANGE_ME' > secrets-onprem/postgres_password && \
+#   openssl rand -base64 24 > secrets-onprem/grafana_admin_password && \
+#   openssl rand -hex 32 > secrets-onprem/audit_target_hmac_pepper && \
+#   echo 'admin:CHANGE_ME' > secrets-onprem/admin_api_keys && \
+#   echo 'admin:JBSWY3DPEHPK3PXP' > secrets-onprem/admin_totp_secrets && \
+#   echo 'demo:demo-key' > secrets-onprem/valid_api_keys && \
+#   chmod 600 secrets-onprem/*
+# ─────────────────────────────────────────────────────────────────────
+services:
+  # ── Database ────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: telecom
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: towers
+    secrets:
+      - postgres_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telecom"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── PgBouncer (connection pooling) ─────────────────────────
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.1-p0
+    environment:
+      - DATABASE_URL=postgres://telecom:${POSTGRES_PASSWORD:-telecom_secret}@postgres:5432/towers
+      - POOL_MODE=transaction
+      - DEFAULT_POOL_SIZE=20
+      - MAX_CLIENT_CONN=200
+      - AUTH_TYPE=scram-sha-256
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Redis (RQ + SRTM cache) ────────────────────────────────
+  redis:
+    image: redis:8.6.2-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── MinIO (S3-compatible object storage) ──────────────────
+  # Replaces AWS S3 for tile cache, exports, audit log archives.
+  # Console at http://<host>:9001 ; API at http://<host>:9000.
+  minio:
+    image: minio/minio:RELEASE.2026-01-15T00-00-00Z
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-ttp_admin}
+      - MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio_root_password
+    secrets:
+      - minio_root_password
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── MinIO bootstrap (one-shot bucket creation) ────────────
+  minio-init:
+    image: minio/mc:RELEASE.2026-01-15T00-00-00Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        until /usr/bin/mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-ttp_admin} \"$$(cat /run/secrets/minio_root_password)\"; do sleep 2; done;
+        /usr/bin/mc mb -p local/ttp-jobs        || true;
+        /usr/bin/mc mb -p local/ttp-tiles       || true;
+        /usr/bin/mc mb -p local/ttp-audit       || true;
+        /usr/bin/mc anonymous set none local/ttp-jobs;
+        /usr/bin/mc anonymous set none local/ttp-tiles;
+        /usr/bin/mc anonymous set none local/ttp-audit;
+        echo 'MinIO buckets ready.';
+      "
+    secrets:
+      - minio_root_password
+    restart: "no"
+
+  # ── Ollama (local LLM — Llama-3 by default) ───────────────
+  # Replaces Amazon Bedrock. Pull a model once with:
+  #   docker compose -f docker-compose.onprem.yml exec ollama ollama pull llama3
+  # GPU acceleration (optional): uncomment the deploy block below
+  # if you have nvidia-container-toolkit installed on the host.
+  ollama:
+    image: ollama/ollama:0.4.0
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    restart: unless-stopped
+
+  # ── API Server ─────────────────────────────────────────────
+  api:
+    build: .
+    command: sh -c ". /app/load_secrets.sh && alembic upgrade head && exec uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - REDIS_URL=redis://redis:6379
+      - SRTM_REDIS_URL=redis://redis:6379/1
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8000,http://localhost:8501}
+      # ── On-prem: route AI Playground to local Ollama ─────
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3}
+      - OLLAMA_MAX_TOKENS=${OLLAMA_MAX_TOKENS:-1024}
+      - OLLAMA_TEMPERATURE=${OLLAMA_TEMPERATURE:-0.7}
+      # ── On-prem: route S3 SDK to MinIO ───────────────────
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_REGION=us-east-1
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-ttp-jobs}
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER:-ttp_admin}
+      # AWS_SECRET_ACCESS_KEY is loaded via secrets file at runtime
+      # by load_secrets.sh (mapped from minio_root_password).
+      # ── Disable AWS-only features ────────────────────────
+      - AUDIT_KMS_KEY_ID=
+      - SAGEMAKER_COVERAGE_ENDPOINT=
+      - COVERAGE_MODEL_S3_URI=
+      - ENABLE_DEMO_KEYS=${ENABLE_DEMO_KEYS:-false}
+      - OFFLINE_MODE=${OFFLINE_MODE:-false}
+      # ── SMTP (optional, any RFC-compliant relay) ─────────
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_FROM=${SMTP_FROM:-}
+    secrets:
+      - database_url
+      - aws_secret_access_key   # → MinIO root password (S3 SDK bridge)
+      - valid_api_keys
+      - admin_api_keys
+      - admin_totp_secrets
+      - audit_target_hmac_pepper
+    volumes:
+      - ./srtm_data:/app/srtm_data:ro
+      - ./key_store.json:/app/key_store.json
+      - job_results:/app/job_results
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # ── Background Worker (DB-polling) ────────────────────────
+  worker:
+    build: .
+    command: sh -c ". /app/load_secrets.sh && exec python batch_worker.py --poll-interval 2"
+    environment:
+      - SRTM_REDIS_URL=redis://redis:6379/1
+      - PDF_WORKERS=${PDF_WORKERS:-4}
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3}
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-ttp-jobs}
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER:-ttp_admin}
+    secrets:
+      - database_url
+      - aws_secret_access_key
+    volumes:
+      - ./srtm_data:/app/srtm_data:ro
+      - job_results:/app/job_results
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── RQ Worker (Redis-backed) ──────────────────────────────
+  rq-worker:
+    build: .
+    command: sh -c ". /app/load_secrets.sh && exec python worker.py"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-ttp-jobs}
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER:-ttp_admin}
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+    secrets:
+      - database_url
+      - aws_secret_access_key
+    volumes:
+      - ./srtm_data:/app/srtm_data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Streamlit Frontend (hybrid) ───────────────────────────
+  frontend:
+    build: .
+    command: streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── React PWA Frontend ────────────────────────────────────
+  frontend-react:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Prometheus ─────────────────────────────────────────────
+  prometheus:
+    build: ./prometheus
+    ports:
+      - "9090:9090"
+    environment:
+      # Disable the Railway edge probe job for on-prem.
+      - RAILWAY_DNS=disabled.local
+    volumes:
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Grafana (no SES — plug your own SMTP) ─────────────────
+  grafana:
+    build: ./grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      - GF_ALERTING_ENABLED=false
+      - GF_SMTP_ENABLED=${GF_SMTP_ENABLED:-false}
+      - GF_SMTP_HOST=${SMTP_HOST:-}
+      - GF_SMTP_FROM_ADDRESS=${SMTP_FROM:-}
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # ── Jaeger (optional tracing — profile=tracing) ───────────
+  jaeger:
+    image: jaegertracing/all-in-one:1.76.0
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    profiles:
+      - tracing
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redis_data:
+  minio_data:
+  ollama_models:
+  job_results:
+  prometheus_data:
+  grafana_data:
+
+# ── Secrets (file-based, never appear in docker inspect) ──────
+# Note: aws_secret_access_key is intentionally aliased to the MinIO
+# root password file so the existing boto3-based code path works
+# unchanged when S3_ENDPOINT_URL points at MinIO.
+secrets:
+  postgres_password:
+    file: ./secrets-onprem/postgres_password
+  database_url:
+    file: ./secrets-onprem/database_url
+  minio_root_password:
+    file: ./secrets-onprem/minio_root_password
+  aws_secret_access_key:
+    file: ./secrets-onprem/minio_root_password
+  valid_api_keys:
+    file: ./secrets-onprem/valid_api_keys
+  admin_api_keys:
+    file: ./secrets-onprem/admin_api_keys
+  admin_totp_secrets:
+    file: ./secrets-onprem/admin_totp_secrets
+  audit_target_hmac_pepper:
+    file: ./secrets-onprem/audit_target_hmac_pepper
+  grafana_admin_password:
+    file: ./secrets-onprem/grafana_admin_password
