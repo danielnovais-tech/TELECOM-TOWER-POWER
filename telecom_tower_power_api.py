@@ -4317,6 +4317,98 @@ async def internal_upload(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Certified ANATEL filing validation (Tier-1)
+# ─────────────────────────────────────────────────────────────────────
+# Validates a batch of ANATEL ERB filings (CNPJ checksum, UF, BR bbox,
+# licensed bands, EIRP / height bounds) and returns an HMAC-SHA256
+# signed certificate so operators can later prove which rows the
+# platform considered compliant at a given timestamp.
+
+_ANATEL_VALIDATE_MAX_ROWS = int(os.getenv("ANATEL_VALIDATE_MAX_ROWS", "10000"))
+
+
+class _AnatelValidateRequest(BaseModel):
+    filings: List[Dict[str, Any]] = Field(
+        ...,
+        description="List of ANATEL filing rows. Required fields per row: "
+                    "station_id, cnpj, operator, uf, municipio, lat, lon, "
+                    "height_m, power_dbm, freq_mhz.",
+    )
+    issuer: Optional[str] = Field(
+        default=None, max_length=64,
+        description="Override the issuer string embedded in the certificate.",
+    )
+
+
+@app.post("/api/internal/anatel/validate-filing")
+async def anatel_validate_filing(
+    body: _AnatelValidateRequest,
+    request: Request,
+    admin_key: str = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Validate a batch of ANATEL ERB filings and return a signed certificate.
+
+    Tier-1 (admin) only. Same IP allowlist as the internal upload endpoint.
+    The response embeds an HMAC-SHA256 certificate over the canonical JSON
+    of ``{validated_at, summary, results}`` so the operator can attach it
+    to a regulatory submission and prove what was validated.
+    """
+    caller_ip = _client_ip(request)
+    if not _ip_in_allowlist(caller_ip):
+        await _audit.log(
+            admin_key,
+            "admin.anatel.validate.denied_ip",
+            actor_email=_admin_email_for(admin_key),
+            tier="admin",
+            target="ip_allowlist",
+            ip=caller_ip,
+            user_agent=request.headers.get("user-agent"),
+            metadata={"reason": "ip_not_in_allowlist"},
+        )
+        raise HTTPException(status_code=403, detail="Caller IP not in allowlist")
+
+    if len(body.filings) == 0:
+        raise HTTPException(status_code=422, detail="filings list must not be empty")
+    if len(body.filings) > _ANATEL_VALIDATE_MAX_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"filings list exceeds maximum of {_ANATEL_VALIDATE_MAX_ROWS} rows",
+        )
+
+    import anatel_validator as _av
+    batch = _av.validate_batch(body.filings)
+    payload = {
+        "validated_at": datetime.now(timezone.utc).isoformat(),
+        "row_count": batch["summary"]["total"],
+        "summary": batch["summary"],
+        "results": batch["results"],
+    }
+    certificate = _av.certify(
+        payload,
+        issuer=body.issuer or "TELECOM-TOWER-POWER",
+    )
+
+    await _audit.log(
+        admin_key,
+        "admin.anatel.validate",
+        actor_email=_admin_email_for(admin_key),
+        tier="admin",
+        target=f"anatel.filing:{batch['summary']['total']}",
+        ip=caller_ip,
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "total": batch["summary"]["total"],
+            "passed": batch["summary"]["passed"],
+            "failed": batch["summary"]["failed"],
+            "warnings": batch["summary"]["warnings"],
+            "cert_sha256": certificate["sha256"],
+            "cert_signed": certificate["signed"],
+        },
+    )
+    return {**payload, "certificate": certificate}
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Dynamic CORS reflection for tenant ``frontend_url``
 # ─────────────────────────────────────────────────────────────────────
 # CORSMiddleware uses a static allow list, so per-tenant white-label
