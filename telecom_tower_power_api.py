@@ -4199,7 +4199,7 @@ def _sanitize_upload_filename(raw: str) -> str:
     return name
 
 
-@app.post("/api/internal/upload", status_code=201)
+@app.post("/internal/upload", status_code=201)
 async def internal_upload(
     request: Request,
     upload: UploadFile = File(..., description="Arbitrary artefact to stage in object storage"),
@@ -4361,7 +4361,7 @@ class _AnatelValidateRequest(BaseModel):
     )
 
 
-@app.post("/api/internal/anatel/validate-filing")
+@app.post("/internal/anatel/validate-filing")
 async def anatel_validate_filing(
     body: _AnatelValidateRequest,
     request: Request,
@@ -4453,7 +4453,7 @@ async def anatel_validate_filing(
     return {**payload, "certificate": certificate}
 
 
-@app.post("/api/internal/anatel/validate-filing/pdf")
+@app.post("/internal/anatel/validate-filing/pdf")
 async def anatel_validate_filing_pdf(
     body: _AnatelValidateRequest,
     request: Request,
@@ -4578,7 +4578,7 @@ class _WebhookEnabledPatch(BaseModel):
     enabled: bool
 
 
-@app.post("/api/internal/webhooks", status_code=201)
+@app.post("/internal/webhooks", status_code=201)
 async def webhook_register(
     body: _WebhookCreateRequest,
     request: Request,
@@ -4622,7 +4622,7 @@ async def webhook_register(
     return rec
 
 
-@app.get("/api/internal/webhooks")
+@app.get("/internal/webhooks")
 async def webhook_list(
     request: Request,
     admin_key: str = Depends(require_admin),
@@ -4634,7 +4634,7 @@ async def webhook_list(
     return {"webhooks": _ws.list_all(redact_secret=True), "valid_events": _ws.valid_events()}
 
 
-@app.delete("/api/internal/webhooks/{webhook_id}", status_code=204)
+@app.delete("/internal/webhooks/{webhook_id}", status_code=204)
 async def webhook_delete(
     webhook_id: str,
     request: Request,
@@ -4656,7 +4656,7 @@ async def webhook_delete(
     return Response(status_code=204)
 
 
-@app.patch("/api/internal/webhooks/{webhook_id}")
+@app.patch("/internal/webhooks/{webhook_id}")
 async def webhook_set_enabled(
     webhook_id: str,
     body: _WebhookEnabledPatch,
@@ -5997,7 +5997,7 @@ if FRONTEND_DIR.is_dir():
         "/jobs", "/export_report", "/bedrock", "/srtm",
         "/signup", "/stripe", "/health", "/metrics", "/openapi",
         "/docs", "/redoc", "/graphql",
-        "/coverage", "/tenant",
+        "/coverage", "/tenant", "/internal",
     )
 
     @app.middleware("http")

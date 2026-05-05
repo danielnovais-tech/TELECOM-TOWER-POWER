@@ -1269,16 +1269,16 @@
         ]
       }
     },
-    "/api/internal/upload": {
+    "/internal/upload": {
       "post": {
         "summary": "Internal Upload",
         "description": "Stage a caller-supplied blob in object storage. Tier-1 (admin) only.\n\nStreams the upload while computing SHA-256, enforces size + content-type\nallowlists, and writes the object under ``INTERNAL_UPLOAD_PREFIX`` with\na date-partitioned, UUID-prefixed key. Filename is sanitised to a\nconservative allowlist after basename stripping to defeat path\ntraversal. Records an audit row whether the upload succeeds or fails.\nReturns a short-lived presigned download URL when S3 is configured.",
-        "operationId": "internal_upload_api_internal_upload_post",
+        "operationId": "internal_upload_internal_upload_post",
         "requestBody": {
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_internal_upload_api_internal_upload_post"
+                "$ref": "#/components/schemas/Body_internal_upload_internal_upload_post"
               }
             }
           },
@@ -1292,7 +1292,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Internal Upload Api Internal Upload Post"
+                  "title": "Response Internal Upload Internal Upload Post"
                 }
               }
             }
@@ -1315,11 +1315,11 @@
         ]
       }
     },
-    "/api/internal/anatel/validate-filing": {
+    "/internal/anatel/validate-filing": {
       "post": {
         "summary": "Anatel Validate Filing",
         "description": "Validate a batch of ANATEL ERB filings and return a signed certificate.\n\nTier-1 (admin) only. Same IP allowlist as the internal upload endpoint.\nThe response embeds an HMAC-SHA256 certificate over the canonical JSON\nof ``{validated_at, summary, results}`` so the operator can attach it\nto a regulatory submission and prove what was validated.",
-        "operationId": "anatel_validate_filing_api_internal_anatel_validate_filing_post",
+        "operationId": "anatel_validate_filing_internal_anatel_validate_filing_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1338,7 +1338,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Anatel Validate Filing Api Internal Anatel Validate Filing Post"
+                  "title": "Response Anatel Validate Filing Internal Anatel Validate Filing Post"
                 }
               }
             }
@@ -1361,11 +1361,11 @@
         ]
       }
     },
-    "/api/internal/anatel/validate-filing/pdf": {
+    "/internal/anatel/validate-filing/pdf": {
       "post": {
         "summary": "Anatel Validate Filing Pdf",
         "description": "Same as ``/api/internal/anatel/validate-filing`` but returns a PDF.\n\nThe PDF contains the summary, the HMAC certificate block, and a\nper-row results table (capped at 200 rows; the certificate's SHA-256\nstill covers the full original payload).",
-        "operationId": "anatel_validate_filing_pdf_api_internal_anatel_validate_filing_pdf_post",
+        "operationId": "anatel_validate_filing_pdf_internal_anatel_validate_filing_pdf_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1403,10 +1403,10 @@
         ]
       }
     },
-    "/api/internal/webhooks": {
+    "/internal/webhooks": {
       "get": {
         "summary": "Webhook List",
-        "operationId": "webhook_list_api_internal_webhooks_get",
+        "operationId": "webhook_list_internal_webhooks_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1415,7 +1415,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Webhook List Api Internal Webhooks Get"
+                  "title": "Response Webhook List Internal Webhooks Get"
                 }
               }
             }
@@ -1430,7 +1430,7 @@
       "post": {
         "summary": "Webhook Register",
         "description": "Register an outbound webhook subscription. Admin + IP-allowlist gated.\n\nThe returned ``secret`` is the only place the cleartext value is\nsurfaced; subsequent ``GET`` calls return a redacted form. Store it\nsafely on the consumer side.",
-        "operationId": "webhook_register_api_internal_webhooks_post",
+        "operationId": "webhook_register_internal_webhooks_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1449,7 +1449,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Webhook Register Api Internal Webhooks Post"
+                  "title": "Response Webhook Register Internal Webhooks Post"
                 }
               }
             }
@@ -1472,10 +1472,10 @@
         ]
       }
     },
-    "/api/internal/webhooks/{webhook_id}": {
+    "/internal/webhooks/{webhook_id}": {
       "delete": {
         "summary": "Webhook Delete",
-        "operationId": "webhook_delete_api_internal_webhooks__webhook_id__delete",
+        "operationId": "webhook_delete_internal_webhooks__webhook_id__delete",
         "security": [
           {
             "APIKeyHeader": []
@@ -1510,7 +1510,7 @@
       },
       "patch": {
         "summary": "Webhook Set Enabled",
-        "operationId": "webhook_set_enabled_api_internal_webhooks__webhook_id__patch",
+        "operationId": "webhook_set_enabled_internal_webhooks__webhook_id__patch",
         "security": [
           {
             "APIKeyHeader": []
@@ -1545,7 +1545,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Webhook Set Enabled Api Internal Webhooks  Webhook Id  Patch"
+                  "title": "Response Webhook Set Enabled Internal Webhooks  Webhook Id  Patch"
                 }
               }
             }
@@ -3329,7 +3329,7 @@
         ],
         "title": "Body_import_drive_test_csv_coverage_observations_drivetest_post"
       },
-      "Body_internal_upload_api_internal_upload_post": {
+      "Body_internal_upload_internal_upload_post": {
         "properties": {
           "upload": {
             "type": "string",
@@ -3342,7 +3342,7 @@
         "required": [
           "upload"
         ],
-        "title": "Body_internal_upload_api_internal_upload_post"
+        "title": "Body_internal_upload_internal_upload_post"
       },
       "CheckoutRequest": {
         "properties": {
