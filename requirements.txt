@@ -30,6 +30,8 @@ openpyxl
 geopy
 # ── SSO / OIDC: Cognito ID-token verification (PyJWT with cryptography backend)
 PyJWT[crypto]>=2.12.1
+# Pinned floor for the cryptography backend to keep CVE-fixed wheels.
+cryptography>=48.0
 # ── Geo-format exports (KML for QGIS/Google Earth, Shapefile for AutoCAD/QGIS)
 simplekml>=1.3.6
 pyshp>=2.3.1
