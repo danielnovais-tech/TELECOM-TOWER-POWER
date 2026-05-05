@@ -51,12 +51,32 @@ import math
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, NoReturn, Optional, Protocol, cast
+
+if TYPE_CHECKING:
+    from interference_engine import InterferenceContribution
 
 # Reuse all DB / S3 plumbing from the Lambda worker — same env vars,
 # same fall-through (sqlite local, RDS Proxy in prod). Importing it
 # does NOT trigger the Lambda handler.
 import sqs_lambda_worker as _w  # noqa: E402
+
+
+class _UpdateJobStatusFn(Protocol):
+    def __call__(self, job_id: str, status: str, **kwargs: Any) -> None: ...
+
+
+class _FetchJobFn(Protocol):
+    def __call__(self, job_id: str) -> Optional[Dict[str, Any]]: ...
+
+
+class _PutObjectClient(Protocol):
+    def put_object(self, **kwargs: Any) -> Any: ...
+
+
+_UPDATE_JOB_STATUS = cast(_UpdateJobStatusFn, getattr(_w, "_update_job_status"))
+_FETCH_JOB = cast(_FetchJobFn, getattr(_w, "_fetch_job"))
+_GET_S3 = cast(Callable[[], _PutObjectClient], getattr(_w, "_get_s3"))
 
 logger = logging.getLogger("batch_gpu_interference_worker")
 logging.basicConfig(
@@ -87,12 +107,12 @@ def _resolve_job_id_and_tier(argv: List[str]) -> tuple[str, str]:
     return job_id, tier
 
 
-def _fail(job_id: str, message: str, *, exc_info: bool = False) -> "None":
+def _fail(job_id: str, message: str, *, exc_info: bool = False) -> NoReturn:
     """Mark job failed and exit non-zero so Batch records the failure."""
     logger.error("Interference job %s failed: %s", job_id,
                  message, exc_info=exc_info)
     try:
-        _w._update_job_status(job_id, "failed", error=message[:512])
+        _UPDATE_JOB_STATUS(job_id, "failed", error=message[:512])
     except Exception:  # pragma: no cover — DB outage shouldn't mask the real error
         logger.exception(
             "Could not mark job %s as failed in DB", job_id)
@@ -101,9 +121,9 @@ def _fail(job_id: str, message: str, *, exc_info: bool = False) -> "None":
 
 def _build_response(
     *,
-    victim: Dict[str, Any],
-    request_body: Dict[str, Any],
-    contributions: list,
+    victim: Mapping[str, Any],
+    request_body: Mapping[str, Any],
+    contributions: List["InterferenceContribution"],
     operator_by_id: Dict[str, str],
     n_candidates: int,
     n_in_radius: int,
@@ -119,7 +139,6 @@ def _build_response(
     raw contributions + an extra failure counter.
     """
     from interference_engine import (
-        aggregate_by_key,
         aggregate_interference_dbm,
         i_over_n_db as _i_over_n,
         sinr_db as _sinr,
@@ -165,11 +184,29 @@ def _build_response(
     n_contrib = sum(1 for c in contributions if math.isfinite(c.rx_power_dbm))
 
     # T20 — MOCN aggregation maps.
-    agg_by_op = aggregate_by_key(
-        contributions, lambda c: operator_by_id.get(c.aggressor_id, "unknown")
+    def _aggregate_by_label(
+        values: List[InterferenceContribution],
+        label_fn: Callable[[InterferenceContribution], str],
+    ) -> Dict[str, float]:
+        sums_mw: Dict[str, float] = {}
+        for contribution in values:
+            if not math.isfinite(contribution.rx_power_dbm):
+                continue
+            label = label_fn(contribution)
+            sums_mw[label] = sums_mw.get(label, 0.0) + 10 ** (contribution.rx_power_dbm / 10.0)
+        return {
+            label: 10.0 * math.log10(total_mw)
+            for label, total_mw in sums_mw.items()
+            if total_mw > 0.0
+        }
+
+    agg_by_op = _aggregate_by_label(
+        contributions,
+        lambda contribution: operator_by_id.get(contribution.aggressor_id, "unknown"),
     )
-    agg_by_plmn = aggregate_by_key(
-        contributions, lambda c: c.plmn or "unknown"
+    agg_by_plmn = _aggregate_by_label(
+        contributions,
+        lambda contribution: contribution.plmn or "unknown",
     )
 
     return {
@@ -202,32 +239,49 @@ def run(job_id: str, tier: str = "") -> Dict[str, Any]:
     :func:`_fail`.
     """
     from interference_engine import haversine_km
+    from rf_engines import interference_engine as _rt_intf
     from rf_engines.base import EngineUnavailable
-    from rf_engines.interference_engine import (
-        SionnaRTInterferenceHandler,
-        _Aggressor,
-        _Victim,
-    )
 
     logger.info("GPU interference job %s starting (tier=%s)", job_id, tier)
     start = time.monotonic()
-    _w._update_job_status(job_id, "running")
+    _UPDATE_JOB_STATUS(job_id, "running")
 
-    job = _w._fetch_job(job_id)
+    job = _FETCH_JOB(job_id)
     if job is None:
         _fail(job_id, "job not found")
 
+    job_receivers = job.get("receivers")
+    if not isinstance(job_receivers, str):
+        _fail(job_id, "invalid job payload: receivers must be a JSON string")
+
     try:
-        payload = json.loads(job["receivers"])
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        payload_obj: Any = json.loads(job_receivers)
+    except (json.JSONDecodeError, TypeError) as exc:
         _fail(job_id, f"invalid job payload: {exc}")
+    if not isinstance(payload_obj, dict):
+        _fail(job_id, "invalid job payload: expected JSON object")
 
-    request_body = payload.get("request") or {}
-    victim_dict = request_body.get("victim") or {}
-    candidates_raw = payload.get("candidates") or []
+    payload = cast(Dict[str, Any], payload_obj)
+    request_raw = payload.get("request")
+    request_body = cast(Dict[str, Any], request_raw) if isinstance(request_raw, dict) else {}
+    victim_raw = request_body.get("victim")
+    victim_dict = cast(Dict[str, Any], victim_raw) if isinstance(victim_raw, dict) else {}
+    candidates_value = payload.get("candidates")
+    candidates_raw: List[Dict[str, Any]] = []
+    if isinstance(candidates_value, list):
+        for item in cast(List[Any], candidates_value):
+            if isinstance(item, dict):
+                candidates_raw.append(cast(Dict[str, Any], item))
+
+    missing_victim_keys = [
+        key for key in ("lat", "lon", "freq_mhz", "bw_mhz")
+        if key not in victim_dict
+    ]
+    if missing_victim_keys:
+        _fail(job_id, f"invalid victim payload: missing {', '.join(missing_victim_keys)}")
 
     try:
-        handler = SionnaRTInterferenceHandler()
+        handler = _rt_intf.SionnaRTInterferenceHandler()
     except Exception as exc:  # pragma: no cover — defensive
         _fail(job_id, f"sionna-rt handler init failed: {exc}", exc_info=True)
     if not handler.is_available():
@@ -237,31 +291,35 @@ def run(job_id: str, tier: str = "") -> Dict[str, Any]:
             "check SIONNA_RT_DISABLED, SIONNA_RT_SCENE_PATH, mitsuba/sionna_rt imports",
         )
 
-    victim = _Victim(
+    victim_ctor = cast(Callable[..., Any], getattr(_rt_intf, "_Victim"))
+    aggressor_ctor = cast(Callable[..., Any], getattr(_rt_intf, "_Aggressor"))
+
+    victim = victim_ctor(
         lat=float(victim_dict["lat"]),
         lon=float(victim_dict["lon"]),
         height_m=float(victim_dict.get("rx_height_m", 1.5)),
         f_hz=float(victim_dict["freq_mhz"]) * 1e6,
         bw_hz=float(victim_dict["bw_mhz"]) * 1e6,
         rx_gain_dbi=float(victim_dict.get("rx_gain_dbi", 12.0)),
-        plmn=victim_dict.get("plmn"),
+        plmn=cast(Optional[str], victim_dict.get("plmn")),
         n_rx_antennas=int((victim_dict.get("rx_mimo") or 1) or 1),
     )
 
     search_radius_km = float(request_body.get("search_radius_km", 30.0))
-    aggressors: List[_Aggressor] = []
+    aggressors: List[Any] = []
     operator_by_id: Dict[str, str] = {}
     for c in candidates_raw:
         try:
             aid = str(c["aggressor_id"])
-            lat = float(c["lat"]); lon = float(c["lon"])
+            lat = float(c["lat"])
+            lon = float(c["lon"])
         except (KeyError, ValueError, TypeError) as exc:
             _fail(job_id, f"invalid candidate record: {exc}")
         d_km = haversine_km(victim.lat, victim.lon, lat, lon)
         if d_km > search_radius_km or d_km <= 0.001:
             continue
         operator_by_id[aid] = str(c.get("operator", "unknown"))
-        aggressors.append(_Aggressor(
+        aggressors.append(aggressor_ctor(
             aggressor_id=aid,
             lat=lat,
             lon=lon,
@@ -306,14 +364,14 @@ def run(job_id: str, tier: str = "") -> Dict[str, Any]:
 
     tier_segment = f"{tier}/" if tier else ""
     s3_key = f"{_w.S3_PREFIX}{tier_segment}{job_id}/result.json"
-    _w._get_s3().put_object(
+    _GET_S3().put_object(
         Bucket=_w.S3_BUCKET,
         Key=s3_key,
         Body=json.dumps(response).encode("utf-8"),
         ContentType="application/json",
     )
     s3_path = f"s3://{_w.S3_BUCKET}/{s3_key}"
-    _w._update_job_status(job_id, "completed", result_path=s3_path)
+    _UPDATE_JOB_STATUS(job_id, "completed", result_path=s3_path)
 
     elapsed = time.monotonic() - start
     logger.info(
