@@ -25,7 +25,7 @@
 # Sionna 2.x officially supports Python 3.10-3.11 as of writing. Pin to
 # 3.11 for reproducibility; do NOT bump to 3.12+ until upstream ships
 # wheels (Mitsuba 3.6 lacked them on initial release).
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS base
+FROM nvidia/cuda:13.2.1-runtime-ubuntu22.04 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
