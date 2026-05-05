@@ -64,7 +64,8 @@ services:
       - POOL_MODE=transaction
       - DEFAULT_POOL_SIZE=20
       - MAX_CLIENT_CONN=200
-      - AUTH_TYPE=scram-sha-256
+      - AUTH_TYPE=plain
+      - IGNORE_STARTUP_PARAMETERS=extra_float_digits,options,lock_timeout,statement_timeout,idle_in_transaction_session_timeout
     depends_on:
       postgres:
         condition: service_healthy
@@ -156,7 +157,7 @@ services:
   # ── API Server ─────────────────────────────────────────────
   api:
     build: .
-    command: sh -c ". /app/load_secrets.sh && alembic upgrade head && exec uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port 8000"
+    command: sh -c ". /app/load_secrets.sh && for i in $$(seq 1 30); do getent hosts pgbouncer >/dev/null 2>&1 && break; echo \"waiting for pgbouncer DNS ($$i/30)...\"; sleep 2; done && alembic upgrade head && exec uvicorn telecom_tower_power_api:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     environment:
@@ -201,6 +202,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       redis:
         condition: service_healthy
       ollama:
@@ -218,7 +221,7 @@ services:
   # ── Background Worker (DB-polling) ────────────────────────
   worker:
     build: .
-    command: sh -c ". /app/load_secrets.sh && exec python batch_worker.py --poll-interval 2"
+    command: sh -c ". /app/load_secrets.sh && for i in $$(seq 1 30); do getent hosts pgbouncer >/dev/null 2>&1 && break; echo \"waiting for pgbouncer DNS ($$i/30)...\"; sleep 2; done && exec python batch_worker.py --poll-interval 2"
     environment:
       - SRTM_REDIS_URL=redis://redis:6379/1
       - PDF_WORKERS=${PDF_WORKERS:-4}
@@ -237,6 +240,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       redis:
         condition: service_healthy
       ollama:
@@ -248,7 +253,7 @@ services:
   # ── RQ Worker (Redis-backed) ──────────────────────────────
   rq-worker:
     build: .
-    command: sh -c ". /app/load_secrets.sh && exec python worker.py"
+    command: sh -c ". /app/load_secrets.sh && for i in $$(seq 1 30); do getent hosts pgbouncer >/dev/null 2>&1 && break; echo \"waiting for pgbouncer DNS ($$i/30)...\"; sleep 2; done && exec python worker.py"
     environment:
       - REDIS_URL=redis://redis:6379
       - S3_ENDPOINT_URL=http://minio:9000
@@ -326,6 +331,8 @@ services:
       - grafana_admin_password
     volumes:
       - grafana_data:/var/lib/grafana
+      # On-prem: disable shipped alerting provisioning (requires Slack token)
+      - ./grafana/provisioning-onprem-empty/alerting:/etc/grafana/provisioning/alerting:ro
     depends_on:
       - prometheus
     restart: unless-stopped

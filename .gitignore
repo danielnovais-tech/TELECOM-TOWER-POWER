@@ -240,3 +240,7 @@ docs-site/site/
 # GA optimizer run outputs (generated artefacts, not source)
 output/
 
+
+# On-prem local secrets and env (NEVER commit)
+.env.onprem
+secrets-onprem/
