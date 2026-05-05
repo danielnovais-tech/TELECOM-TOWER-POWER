@@ -130,3 +130,75 @@ def test_engine_auto_does_not_hit_sqs(app_client):
     client.post("/coverage/predict", json=body,
                 headers={"X-API-Key": "x"})
     assert len(sqs.sent) == 0
+
+
+# ── T21: auto-promotion tests ──────────────────────────────────────────────
+
+def _make_app_client_for_tier(tier, monkeypatch, fake_sqs):
+    """Return a TestClient whose key resolves to ``tier``."""
+    import telecom_tower_power_api as ttpa
+    from fastapi.testclient import TestClient
+
+    async def _fake_verify(request: Request, api_key: str = ""):
+        request.state.tier = tier.value
+        request.state.owner = "tenant-a"
+        request.state.api_key = "ttp_test_key"
+        request.state.is_admin = False
+        return {"tier": tier, "owner": "tenant-a", "is_admin": False}
+
+    ttpa.app.dependency_overrides[ttpa.verify_api_key] = _fake_verify
+    try:
+        yield TestClient(ttpa.app), fake_sqs
+    finally:
+        ttpa.app.dependency_overrides.pop(ttpa.verify_api_key, None)
+
+
+@pytest.fixture
+def enterprise_client(monkeypatch, fake_sqs):
+    import telecom_tower_power_api as ttpa
+    yield from _make_app_client_for_tier(ttpa.Tier.ENTERPRISE, monkeypatch, fake_sqs)
+
+
+@pytest.fixture
+def ultra_client(monkeypatch, fake_sqs):
+    import telecom_tower_power_api as ttpa
+    yield from _make_app_client_for_tier(ttpa.Tier.ULTRA, monkeypatch, fake_sqs)
+
+
+def test_auto_promotes_to_sionna_rt_for_enterprise(enterprise_client):
+    """engine='auto' + bbox + scene_s3_uri → 202 queued for ENTERPRISE."""
+    client, sqs = enterprise_client
+    body = _payload(engine="auto")
+    r = client.post("/coverage/predict", json=body, headers={"X-API-Key": "x"})
+    assert r.status_code == 202, r.text
+    assert r.json()["status"] == "queued"
+    assert len(sqs.sent) == 1
+
+
+def test_auto_promotes_to_sionna_rt_for_ultra(ultra_client):
+    """engine='auto' + bbox + scene_s3_uri → 202 queued for ULTRA."""
+    client, sqs = ultra_client
+    body = _payload(engine="auto")
+    r = client.post("/coverage/predict", json=body, headers={"X-API-Key": "x"})
+    assert r.status_code == 202, r.text
+    assert r.json()["status"] == "queued"
+    assert len(sqs.sent) == 1
+
+
+def test_auto_without_scene_uri_does_not_promote(app_client):
+    """engine='auto' without scene_s3_uri falls through to ML path even for BUSINESS."""
+    client, sqs = app_client
+    body = _payload(engine="auto")
+    body.pop("scene_s3_uri", None)
+    # ML path will error (no valid model) but SQS must NOT be hit.
+    client.post("/coverage/predict", json=body, headers={"X-API-Key": "x"})
+    assert len(sqs.sent) == 0
+
+
+def test_hyphen_alias_sionna_rt_enqueues(app_client):
+    """engine='sionna-rt' (hyphen) is accepted as an alias."""
+    client, sqs = app_client
+    body = _payload(engine="sionna-rt")
+    r = client.post("/coverage/predict", json=body, headers={"X-API-Key": "x"})
+    assert r.status_code == 202, r.text
+    assert len(sqs.sent) == 1

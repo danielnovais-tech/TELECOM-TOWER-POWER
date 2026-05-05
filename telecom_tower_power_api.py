@@ -1800,16 +1800,21 @@ class CoveragePredictRequest(BaseModel):
     # predictors required.
     model: Literal["auto", "ml", "itu", "hybrid"] = "auto"
 
-    # Engine selector. "auto" (default) runs the synchronous ML/physics
-    # path. "sionna_rt" enqueues an asynchronous GPU ray-tracing job on
-    # AWS Batch and returns 202 + job_id; the client polls the
-    # ``poll_url`` for completion. Requires bbox (grid mode) and
-    # ``scene_s3_uri`` pointing at a pre-built Mitsuba scene bundle.
-    engine: Literal["auto", "sionna_rt"] = "auto"
+    # Engine selector.
+    # - ``"auto"`` (default) runs the synchronous ML/physics path.
+    #   **Auto-promotion**: on ENTERPRISE / ULTRA tiers, when ``bbox``
+    #   and ``scene_s3_uri`` are both provided, ``"auto"`` is silently
+    #   upgraded to ``"sionna_rt"`` so Tier-1 clients get ray-tracing
+    #   without having to change their request body.
+    # - ``"sionna_rt"`` / ``"sionna-rt"`` (equivalent) enqueue an
+    #   asynchronous GPU ray-tracing job on AWS Batch and return
+    #   HTTP 202 + ``job_id``; the client polls ``poll_url`` for the
+    #   result.  Requires bbox (grid mode) and ``scene_s3_uri``.
+    engine: Literal["auto", "sionna_rt", "sionna-rt"] = "auto"
     scene_s3_uri: Optional[str] = Field(
         default=None,
         description="s3:// URI of the Mitsuba scene bundle. Required "
-                    "when engine='sionna_rt'.",
+                    "when engine='sionna_rt' / 'sionna-rt'.",
     )
 
 
@@ -1830,13 +1835,30 @@ async def coverage_predict(
     Modes:
     - **point** — provide ``rx_lat``/``rx_lon`` for a single prediction.
     - **grid**  — provide ``bbox`` and ``grid_size`` for a coverage map.
+    - **ray-tracing** — set ``engine='sionna_rt'`` (or ``'sionna-rt'``)
+      with ``bbox`` and ``scene_s3_uri``; returns HTTP 202 + job_id.
+      ENTERPRISE / ULTRA tiers are promoted automatically when both
+      ``bbox`` and ``scene_s3_uri`` are supplied with ``engine='auto'``.
 
-    Restricted to Pro / Business / Enterprise tiers.
+    Restricted to Pro / Business / Enterprise / Ultra tiers.
     """
     # Lazy import to keep cold-start cost off endpoints that don't use ML.
     import coverage_predict as _cp
 
-    # ── Resolve transmitter ────────────────────────────────────────
+    # ── Tier + effective engine ────────────────────────────────────
+    caller_tier: Tier = _key["tier"]
+    # Normalise hyphen variant to underscore canonical form.
+    requested_engine = body.engine.replace("-", "_")
+    # Auto-promote: ENTERPRISE / ULTRA with bbox + scene_s3_uri → sionna_rt.
+    if (
+        requested_engine == "auto"
+        and caller_tier in (Tier.ENTERPRISE, Tier.ULTRA)
+        and body.bbox is not None
+        and body.scene_s3_uri
+    ):
+        effective_engine = "sionna_rt"
+    else:
+        effective_engine = requested_engine
     if body.tower_id:
         tower = platform.get_tower(body.tower_id)
         if not tower:
@@ -1867,7 +1889,7 @@ async def coverage_predict(
     # ``SionnaRTRasterRequest`` and call the same handler so tier
     # gating, cell caps, SQS, S3 polling and audit logging stay in
     # exactly one place.
-    if body.engine == "sionna_rt":
+    if effective_engine == "sionna_rt":
         if body.bbox is None:
             raise HTTPException(
                 status_code=422,
@@ -1925,6 +1947,7 @@ async def coverage_predict(
         model = _cp.get_model()
         return {
             "mode": "grid",
+            "engine_used": effective_engine,
             "tx": {"lat": tx_lat, "lon": tx_lon, "height_m": tx_h, "power_dbm": tx_power, "freq_hz": f_hz},
             "grid_size": body.grid_size,
             "bbox": body.bbox,
@@ -1978,6 +2001,7 @@ async def coverage_predict(
 
     response: Dict[str, Any] = {
         "mode": "point",
+        "engine_used": effective_engine,
         "tx": {"lat": tx_lat, "lon": tx_lon, "height_m": tx_h, "power_dbm": tx_power, "freq_hz": f_hz},
         "rx": {"lat": body.rx_lat, "lon": body.rx_lon, "height_m": body.rx_height_m},
         "distance_km": round(d_km, 3),
