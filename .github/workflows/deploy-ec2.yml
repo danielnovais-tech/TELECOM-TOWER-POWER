@@ -257,12 +257,25 @@ jobs:
           docker compose build frontend-react 2>/dev/null || true
 
           echo "==> Rolling restart (all application containers)..."
+          docker compose up -d --no-deps redis           2>/dev/null || true
+          docker compose up -d --no-deps postgres        2>/dev/null || true
           docker compose up -d --no-deps api
           docker compose up -d --no-deps worker          2>/dev/null || true
           docker compose up -d --no-deps rq-worker       2>/dev/null || true
           docker compose up -d --no-deps stripe-webhook  2>/dev/null || true
           docker compose up -d --no-deps frontend        2>/dev/null || true
           docker compose up -d --no-deps frontend-react  2>/dev/null || true
+
+          echo "==> Ensuring Grafana-readable secret perms (UID 472)..."
+          # Grafana entrypoint runs as non-root and reads these via /run/secrets.
+          # If the files are 0600 (default after restore), Grafana fails to start
+          # with "Permission denied" → monitoring.* returns 502.
+          for f in grafana_admin_password ses_smtp_username ses_smtp_password slack_webhook_url; do
+            if [ -f "secrets/$f" ]; then
+              chmod a+r "secrets/$f" || true
+            fi
+          done
+          chmod a+rx secrets || true
 
           echo "==> Rebuilding and restarting monitoring stack..."
           docker compose build grafana prometheus 2>/dev/null || true
