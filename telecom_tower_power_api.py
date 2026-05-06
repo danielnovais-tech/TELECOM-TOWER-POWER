@@ -47,6 +47,7 @@ from tower_db import TowerStore
 from job_store import JobStore, JOB_RESULTS_DIR
 import audit_log as _audit
 import sso_auth as _sso
+from auth import saml_service as _saml
 from offline_mode import OfflineModeError, is_offline
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from pythonjsonlogger import jsonlogger
@@ -5524,6 +5525,128 @@ async def sso_exchange(body: SsoExchangeRequest, request: Request):
         "created": created,
     }
 
+# ─── SAML 2.0 (Okta / Azure AD) ────────────────────────────────────────
+
+@app.get("/auth/saml/config")
+async def saml_config():
+    """Discovery hint for the SPA: which IdPs are wired and the SP URLs."""
+    if not _saml.is_saml_configured():
+        return {"enabled": False}
+    try:
+        return {
+            "enabled": True,
+            "providers": _saml.configured_idps(),
+            "sp_entity_id": _saml.sp_entity_id(),
+            "acs_url": _saml.sp_acs_url(),
+            "login_url": "/auth/saml/login",
+            "metadata_url": "/auth/saml/metadata",
+        }
+    except _saml.SamlError as exc:
+        logger.warning("saml /auth/saml/config misconfigured: %s", exc)
+        raise HTTPException(status_code=503, detail="SAML SP base URL is not configured")
+
+
+@app.get("/auth/saml/metadata")
+async def saml_metadata():
+    """Return the SP SAML metadata XML for IdP onboarding."""
+    if not _saml.is_saml_configured():
+        raise HTTPException(status_code=503, detail="SAML is not configured on this server")
+    try:
+        xml = _saml.sp_metadata_xml()
+    except _saml.SamlError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return Response(content=xml, media_type="application/samlmetadata+xml")
+
+
+@app.get("/auth/saml/login")
+async def saml_login(idp: str = "okta", relay_state: Optional[str] = None):
+    """SP-initiated SAML login.
+
+    Builds an AuthnRequest and 302-redirects the browser to the IdP SSO
+    URL via the HTTP-Redirect binding. ``idp`` is one of the configured
+    providers from ``GET /auth/saml/config``. ``relay_state`` is optional
+    and echoed back by the IdP — the SPA can use it to remember the
+    post-login destination.
+    """
+    cfg = _saml.get_idp(idp)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"SAML IdP '{idp}' is not configured")
+    try:
+        url, _req_id = _saml.build_authn_request(
+            cfg, relay_state=relay_state or _saml.make_relay_state(),
+        )
+    except _saml.SamlError as exc:
+        logger.warning("saml /auth/saml/login failed: %s", exc)
+        raise HTTPException(status_code=503, detail="SAML SP base URL is not configured")
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=url, status_code=302)
+
+
+@app.post("/auth/saml/callback")
+async def saml_callback(request: Request, idp: str = "okta"):
+    """SAML Assertion Consumer Service (ACS).
+
+    The IdP POSTs ``SAMLResponse`` (form-encoded, base64) here after the
+    user authenticates. We verify the signature, audience and timing,
+    extract the email, then issue/return the tenant API key via the
+    same path used by ``POST /auth/sso``.
+    """
+    cfg = _saml.get_idp(idp)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"SAML IdP '{idp}' is not configured")
+    form = await request.form()
+    saml_response = form.get("SAMLResponse")
+    relay_state = form.get("RelayState") or None
+    if not isinstance(saml_response, str) or not saml_response:
+        raise HTTPException(status_code=400, detail="Missing SAMLResponse")
+
+    try:
+        claims = _saml.parse_and_verify_response(saml_response, cfg)
+    except _saml.SamlError as exc:
+        logger.info("saml /auth/saml/callback rejected: %s", exc)
+        raise HTTPException(status_code=401, detail="Invalid SAML response")
+
+    email = claims["email"]
+    name_id = claims.get("name_id") or email
+    try:
+        result = stripe_billing.register_or_get_sso_user(
+            email=email,
+            provider=f"saml:{idp}",
+            subject=name_id,
+            default_tier="free",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("register_or_get_sso_user failed (saml)")
+        raise HTTPException(status_code=500, detail="Could not provision SSO key")
+
+    api_key = result["api_key"]
+    created = bool(result.get("_created"))
+    await _audit.log(
+        api_key,
+        "auth.saml.exchange" if not created else "key.issue.saml",
+        actor_email=email,
+        tier=result.get("tier"),
+        target=f"key:{api_key[:12]}",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        metadata={
+            "idp": idp,
+            "name_id": name_id,
+            "session_index": claims.get("session_index"),
+            "created": created,
+        },
+    )
+    return {
+        "api_key": api_key,
+        "tier": result.get("tier"),
+        "email": email,
+        "sso_enabled": True,
+        "created": created,
+        "relay_state": relay_state,
+        "idp": f"saml:{idp}",
+    }
+
+
 @app.post("/signup/checkout")
 async def signup_checkout(body: CheckoutRequest):
     """
@@ -5997,7 +6120,7 @@ if FRONTEND_DIR.is_dir():
         "/jobs", "/export_report", "/bedrock", "/srtm",
         "/signup", "/stripe", "/health", "/metrics", "/openapi",
         "/docs", "/redoc", "/graphql",
-        "/coverage", "/tenant", "/internal",
+        "/coverage", "/tenant", "/internal", "/auth",
     )
 
     @app.middleware("http")
