@@ -87,6 +87,7 @@ COPY repeater_jobs_store.py .
 COPY hop_cache.py .
 COPY audit_log.py .
 COPY sso_auth.py .
+COPY auth/ auth/
 COPY graphql_schema.py .
 COPY rf_engines_router.py .
 COPY rf_engines/ rf_engines/
