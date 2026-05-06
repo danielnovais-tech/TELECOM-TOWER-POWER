@@ -16,7 +16,7 @@ RUN npx vite build
 # ── Stage 2: Python application ────────────────────────────
 # Pinned to 3.11: tflite-runtime has no 3.13 wheels yet (ai-edge-litert).
 # Revisit once upstream ships 3.13 support.
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV CONDA_DIR=/opt/conda
 ENV PATH=$CONDA_DIR/bin:$PATH
